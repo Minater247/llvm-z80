@@ -33,44 +33,48 @@ Z80MCAsmInfoELF::Z80MCAsmInfoELF(const Triple &T) {
   DollarIsPC = true;
   SeparatorString = nullptr;
   CommentString = ";";
-  PrivateGlobalPrefix = PrivateLabelPrefix = "";
-  Code16Directive = "assume\tadl = 0";
-  Code24Directive = "assume\tadl = 1";
+  //PrivateGlobalPrefix = PrivateLabelPrefix = "";
+  Code16Directive = ".assume\tadl = 0";
+  Code24Directive = ".assume\tadl = 1";
   Code32Directive = Code64Directive = nullptr;
   AssemblerDialect = !Is16Bit;
   SupportsQuotedNames = false;
-  ZeroDirective = AscizDirective = nullptr;
-  BlockSeparator = " dup ";
-  AsciiDirective = ByteListDirective = Data8bitsDirective = "\tdb\t";
+  ZeroDirective = "\tds\t";
+  //ZeroDirective =
+  AscizDirective = nullptr;
+  //BlockSeparator = " dup ";
+  AsciiDirective = nullptr;
+  ByteListDirective = "\tdb\t";
   NumberLiteralSyntax = ANLS_PlainDecimal;
-  CharacterLiteralSyntax = ACLS_SingleQuotes;
+  CharacterLiteralSyntax = ACLS_Unknown; //ACLS_SingleQuotePrefix; //ACLS_SingleQuotes;
   HasPairedDoubleQuoteStringConstants = true;
   HasBackslashEscapesInStringConstants = false;
   StringConstantsEscapeNonPrint = EscapeNonPrint;
   StringConstantsRequiredEscapes = {"\n\r\32", 4}; // include null
+  Data8bitsDirective = "\tdb\t";
   Data16bitsDirective = "\tdw\t";
-  Data24bitsDirective = "\tdl\t";
-  Data32bitsDirective = "\tdd\t";
-  Data64bitsDirective = "\tdq\t";
-  DataULEB128Directive = "\tuleb128\t";
-  DataSLEB128Directive = "\tsleb128\t";
-  SectionDirective = "\tsection\t";
+  Data24bitsDirective = "\td24\t";
+  Data32bitsDirective = "\td32\t";
+  Data64bitsDirective = nullptr;//"\tdq\t";
+  DataULEB128Directive = "\t.uleb128\t";
+  DataSLEB128Directive = "\t.sleb128\t";
+  SectionDirective = "\t.section\t";
   AlwaysChangeSection = true;
-  GlobalDirective = "\tpublic\t";
-  LGloblDirective = "\tprivate\t";
-  SetDirective = "\tlabel\t";
-  SetSeparator = " at ";
-  HasFunctionAlignment = false;
-  HasDotTypeDotSizeDirective = false;
-  IdentDirective = "\tident\t";
-  WeakDirective = "\tweak\t";
+  GlobalDirective = "\t.global\t";
+  LGloblDirective = "\t.local\t";
+  //SetDirective = "\tlabel\t";
+  //SetSeparator = " at ";
+  //HasFunctionAlignment = false;
+  //HasDotTypeDotSizeDirective = false;
+  IdentDirective = "\t.ident\t";
+  WeakDirective = "\t.weak\t";
   UseIntegratedAssembler = false;
   UseLogicalShr = false;
-  HasSingleParameterDotFile = false;
+  //HasSingleParameterDotFile = false;
   SupportsDebugInformation = SupportsCFI = true;
-  ExceptionsType = ExceptionHandling::SjLj;
-  DwarfFileDirective = "\tfile\t";
-  DwarfLocDirective = "\tloc\t";
+  //ExceptionsType = ExceptionHandling::SjLj;
+  DwarfFileDirective = "\t.file\t";
+  DwarfLocDirective = "\t.loc\t";
   DwarfCFIDirectivePrefix = "\tcfi_";
 }
 
@@ -79,7 +83,7 @@ MCSection *Z80MCAsmInfoELF::getNonexecutableStackSection(MCContext &Ctx) const {
 }
 
 bool Z80MCAsmInfoELF::isAcceptableChar(char C) const {
-  return MCAsmInfo::isAcceptableChar(C) || C == '%' || C == '^';
+  return MCAsmInfo::isAcceptableChar(C);// || C == '%' || C == '^';
 }
 
 bool Z80MCAsmInfoELF::shouldOmitSectionDirective(StringRef SectionName) const {
@@ -89,10 +93,10 @@ bool Z80MCAsmInfoELF::shouldOmitSectionDirective(StringRef SectionName) const {
 const char *Z80MCAsmInfoELF::getBlockDirective(int64_t Size) const {
   switch (Size) {
   default: return nullptr;
-  case 1: return "\tdb\t";
-  case 2: return "\tdw\t";
-  case 3: return "\tdl\t";
-  case 4: return "\tdd\t";
+  case 1: return Data8bitsDirective;
+  case 2: return Data16bitsDirective;
+  case 3: return Data24bitsDirective;
+  case 4: return Data32bitsDirective;
   }
 }
 

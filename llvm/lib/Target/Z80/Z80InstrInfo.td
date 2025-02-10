@@ -378,7 +378,7 @@ let isCall = true, isTerminator = true, isReturn = true, isBarrier = true in {
 
 let isBranch = true, isTerminator = true in {
   let isBarrier = true in {
-    def JQ : Pseudo<"jq", "\t$tgt", "", (outs), (ins jmptarget:$tgt),
+    def JQ : Pseudo<"jp", "\t$tgt", "", (outs), (ins jmptarget:$tgt),
                     [(br bb:$tgt)]>;
     def JR   : Io  <  NoPre, 0x18, "jr", "\t$tgt", "",
                     (outs), (ins jmptargetoff:$tgt)>;
@@ -397,7 +397,7 @@ let isBranch = true, isTerminator = true in {
   def DJNZ : Io  <  NoPre, 0x10, "djnz", "\t$tgt", "",
                   (outs), (ins jmptargetoff:$tgt)>;
   let Uses = [F] in {
-    def JQCC : Pseudo<"jq", "\t$cc, $tgt", "",
+    def JQCC : Pseudo<"jp", "\t$cc, $tgt", "",
                       (outs), (ins jmptarget:$tgt, cc:$cc),
                       [(Z80brcond bb:$tgt, imm:$cc, F)]>;
     def JRCC   : Io  <  NoPre, 0x18, "jr", "\t$cc, $tgt", "",
