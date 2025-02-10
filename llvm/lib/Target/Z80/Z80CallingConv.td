@@ -42,9 +42,9 @@ def CC_Z80_Reg : CallingConv<[
 //===----------------------------------------------------------------------===//
 
 def CC_Z80_C : CallingConv<[
-  CCIfByVal<CCPassByVal<2, 1>>,
-  CCIfType<[ i1, i8 ], CCPromoteToType<i16>>,
-  CCIfType<[ i16 ], CCAssignToStack<2, 1>>,
+  CCIfByVal<CCPassByVal<1, 1>>,
+  CCIfType<[ i1, i8 ], CCAssignToReg<[ L, H, E, D, C, B ]>>,
+  CCIfType<[ i16 ], CCAssignToReg<[ HL, DE, BC ]>>,
 ]>;
 def CC_EZ80_C : CallingConv<[
   CCIfByVal<CCPassByVal<3, 1>>,
