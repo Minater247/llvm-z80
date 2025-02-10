@@ -46,6 +46,7 @@ def Z80PreLegalizerCombinerHelper
         undef_combines, unmerge_cst, unmerge_dead_to_trunc, unmerge_merge,
         unmerge_zext_to_zext, width_reduction_combines,
         xor_of_and_with_same_reg,
+        shl_to_add
     ]> {
   let DisableRuleOption = "z80prelegalizercombiner-disable-rule";
 }
