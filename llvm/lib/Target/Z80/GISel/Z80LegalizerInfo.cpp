@@ -545,6 +545,61 @@ Z80LegalizerInfo::legalizeShift(LegalizerHelper &Helper, MachineInstr &MI,
          (Subtarget.is24Bit() && Ty == LLT::scalar(24))))
       return LegalizerHelper::AlreadyLegal;
   }
+
+  if (Opc == G_LSHR) {
+    Register Reg = MI.getOperand(1).getReg();
+    LLT RegTy = MRI.getType(Reg);
+    MachineIRBuilder &Builder = Helper.MIRBuilder;
+    GISelChangeObserver &Observer = Helper.Observer;
+    if (MRI.getType(Reg).getSizeInBits() == 8) {
+      Register RHSReg = MI.getOperand(2).getReg();
+      auto RHSImm = getIConstantVRegValWithLookThrough(RHSReg, MRI);
+      if (!(!RHSImm || !RHSImm->Value || RHSImm->Value.uge(8) || RHSImm->Value.ule(1))) {
+        unsigned ShiftVal = RHSImm->Value.getZExtValue();
+        Builder.setInstrAndDebugLoc(MI);
+        Register OneReg = Builder.buildConstant(RegTy, 1).getReg(0);
+        while (--ShiftVal)
+          Reg = Builder.buildInstr(TargetOpcode::G_LSHR, {RegTy}, {Reg, OneReg}).getReg(0);
+        Observer.changingInstr(MI);
+        MI.getOperand(1).setReg(Reg);
+        MI.getOperand(2).setReg(OneReg);
+        Observer.changedInstr(MI);
+        return LegalizerHelper::Legalized;
+      }
+    }
+    if (RegTy.getSizeInBits() == 16) {
+      if (auto *GZExtDef = getOpcodeDef(TargetOpcode::G_ZEXT, Reg, MRI)) {
+        Register SrcReg = GZExtDef->getOperand(1).getReg();
+        LLT SrcTy = MRI.getType(SrcReg);
+
+        if (SrcTy.getSizeInBits() == 8) {
+          // Extract RHS (shift amount)
+          Register RHSReg = MI.getOperand(2).getReg();
+          auto RHSImm = getIConstantVRegValWithLookThrough(RHSReg, MRI);
+
+          if (!(!RHSImm || !RHSImm->Value || RHSImm->Value.uge(8) || RHSImm->Value.ule(0))) {
+            unsigned ShiftVal = RHSImm->Value.getZExtValue();
+            Builder.setInstrAndDebugLoc(MI);
+
+            // Create shift-by-1 loop at s8 precision
+            Register OneReg = Builder.buildConstant(SrcTy, 1).getReg(0);
+            while (ShiftVal--)
+              SrcReg = Builder.buildInstr(TargetOpcode::G_LSHR, {SrcTy}, {SrcReg, OneReg}).getReg(0);
+
+            Observer.changingInstr(MI);
+            MI.setDesc(Builder.getTII().get(TargetOpcode::G_ZEXT));
+            MI.getOperand(1).setReg(SrcReg);
+            MI.removeOperand(2);
+            Observer.changedInstr(MI);
+
+            return LegalizerHelper::Legalized;
+          }
+        }
+      }
+    }
+  }
+
+
   return Helper.libcall(MI, LocObserver);
 }
 
