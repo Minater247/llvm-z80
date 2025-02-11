@@ -217,11 +217,25 @@ void Z80FrameLowering::emitPrologue(MachineFunction &MF,
                 ScratchReg)
             .addImm(StackSize)
             .setMIFlag(MachineInstr::FrameSetup);
-        BuildMI(MBB, MBBI, DL, TII.get(Is24Bit ? Z80::CALL24 : Z80::CALL16))
-            .addExternalSymbol("_frameset")
-            .addReg(ScratchReg, RegState::ImplicitKill)
-            .addReg(Z80::AF, RegState::ImplicitDefine) // we clobber af inside _frameset
-            .setMIFlag(MachineInstr::FrameSetup);
+        if (!Is24Bit) {
+          BuildMI(MBB, MBBI, DL, TII.get(Z80::PUSH16r), Z80::IX)
+              .setMIFlag(MachineInstr::FrameSetup);
+          BuildMI(MBB, MBBI, DL, TII.get(Z80::LD16ri), Z80::IX)
+              .addImm(0)
+              .setMIFlag(MachineInstr::FrameSetup);
+          BuildMI(MBB, MBBI, DL, TII.get(Z80::ADD16as), Z80::IX)
+              .setMIFlag(MachineInstr::FrameSetup);
+          BuildMI(MBB, MBBI, DL, TII.get(Z80::ADD16as), Z80::IY)
+              .setMIFlag(MachineInstr::FrameSetup);
+          BuildMI(MBB, MBBI, DL, TII.get(Z80::LD16sa), ScratchReg)
+              .setMIFlag(MachineInstr::FrameSetup);
+        } else {
+          BuildMI(MBB, MBBI, DL, TII.get(Is24Bit ? Z80::CALL24 : Z80::CALL16))
+              .addExternalSymbol("_frameset")
+              .addReg(ScratchReg, RegState::ImplicitKill)
+              .addReg(Z80::AF, RegState::ImplicitDefine) // we clobber af inside _frameset
+              .setMIFlag(MachineInstr::FrameSetup);
+        }
       } else
         BuildMI(MBB, MBBI, DL, TII.get(Is24Bit ? Z80::CALL24 : Z80::CALL16))
             .addExternalSymbol("_frameset0")
