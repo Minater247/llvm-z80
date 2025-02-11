@@ -202,7 +202,7 @@ void Z80FrameLowering::emitPrologue(MachineFunction &MF,
 
   MachineFrameInfo &MFI = MF.getFrameInfo();
   int StackSize = -int(MFI.getStackSize());
-  MCRegister ScratchReg = Is24Bit ? Z80::UHL : Z80::HL;
+  MCRegister ScratchReg = Is24Bit ? Z80::UHL : Z80::IY;
 
   // skip callee-saved saves
   while (MBBI != MBB.end() && MBBI->getFlag(MachineInstr::FrameSetup))
@@ -220,7 +220,7 @@ void Z80FrameLowering::emitPrologue(MachineFunction &MF,
         BuildMI(MBB, MBBI, DL, TII.get(Is24Bit ? Z80::CALL24 : Z80::CALL16))
             .addExternalSymbol("_frameset")
             .addReg(ScratchReg, RegState::ImplicitKill)
-            .addRegMask(TRI->getNoPreservedMask())
+            .addReg(Z80::AF, RegState::ImplicitDefine) // we clobber af inside _frameset
             .setMIFlag(MachineInstr::FrameSetup);
       } else
         BuildMI(MBB, MBBI, DL, TII.get(Is24Bit ? Z80::CALL24 : Z80::CALL16))
