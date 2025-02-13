@@ -431,9 +431,43 @@ Z80LegalizerInfo::legalizeBitwise(LegalizerHelper &Helper, MachineInstr &MI,
   assert((MI.getOpcode() == G_AND || MI.getOpcode() == G_OR ||
           MI.getOpcode() == G_XOR || MI.getOpcode() == G_PTRMASK) &&
          "Unexpected opcode");
+  MachineRegisterInfo &MRI = *Helper.MIRBuilder.getMRI();
+  Register LeftReg = MI.getOperand(1).getReg();
+  LLT LeftRegTy = MRI.getType(LeftReg);
+  MachineIRBuilder &Builder = Helper.MIRBuilder;
+  if (LeftRegTy.getSizeInBits() == 16) {
+    Register RightReg = MI.getOperand(2).getReg();
+    auto RHSImm = getIConstantVRegValWithLookThrough(RightReg, MRI);
+
+    LLT s8 {LLT::scalar(8)};
+
+    Register left_low = MRI.createGenericVirtualRegister(s8);
+    Register left_high = MRI.createGenericVirtualRegister(s8);
+
+    Builder.buildInstr(TargetOpcode::G_UNMERGE_VALUES)
+        .addDef(left_low)
+        .addDef(left_high)
+        .addUse(LeftReg);
+
+    Register right_low = MRI.createGenericVirtualRegister(s8);
+    Register right_high = MRI.createGenericVirtualRegister(s8);
+    Builder.buildInstr(TargetOpcode::G_UNMERGE_VALUES)
+        .addDef(right_low)
+        .addDef(right_high)
+        .addUse(RightReg);
+
+    auto res_low = Builder.buildInstr(MI.getOpcode(), {s8}, {left_low, right_low}).getReg(0);
+    auto res_high = Builder.buildInstr(MI.getOpcode(), {s8}, {left_high, right_high}).getReg(0);
+
+    MI.setDesc(Builder.getTII().get(TargetOpcode::G_MERGE_VALUES));
+    MI.getOperand(1).setReg(res_low);
+    MI.getOperand(2).setReg(res_high);
+
+    return LegalizerHelper::Legalized;
+  }
+
   Function &F = Helper.MIRBuilder.getMF().getFunction();
   bool OptSize = F.hasOptSize();
-  MachineRegisterInfo &MRI = *Helper.MIRBuilder.getMRI();
   Register DstReg = MI.getOperand(0).getReg();
   unsigned Size = MRI.getType(DstReg).getSizeInBits();
   if (!OptSize && Size == 16)
