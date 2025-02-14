@@ -1122,6 +1122,7 @@ LegalizerHelper::LegalizeResult Z80LegalizerInfo::legalizeMemIntrinsic(
             MIRBuilder.buildCopy(HL, SrcReg);
             MIRBuilder.buildCopy(BC, LenReg);
             if (ConstLen->Value.ule(6)) {
+              // XXX no need to actually set BC to anything, but how to do it?!?
               unsigned count = ConstLen->Value.getZExtValue();
               while (count--) {
                 MIRBuilder.buildInstr(Is24Bit ? Z80::LDI24 : Z80::LDI16)
@@ -1129,7 +1130,6 @@ LegalizerHelper::LegalizeResult Z80LegalizerInfo::legalizeMemIntrinsic(
               }
             } else {
               unsigned len = ConstLen->Value.getZExtValue();
-              static char call_name2[32][10] = {{"_memcpy32"}};
               static char *call_name[32] = {"_memcpy32", 0};
               int name_index = len % 32;
               if (!call_name[name_index]) {
@@ -1145,7 +1145,7 @@ LegalizerHelper::LegalizeResult Z80LegalizerInfo::legalizeMemIntrinsic(
                 .addReg(HL, RegState::ImplicitDefine)
                 .addReg(BC, RegState::ImplicitKill)
                 .addReg(BC, RegState::ImplicitDefine)
-                .cloneMemRefs(MI);
+                .cloneMemRefs(MI)
               ;
             }
           }
