@@ -1,6 +1,11 @@
 
-AR := /opt/local/ez80-none-elf/bin/z80-none-elf-ar
-AS := /opt/local/ez80-none-elf/bin/z80-none-elf-as
+PREFIX ?= /opt/local/ez80-none-elf
+
+LIBDIR = $(PREFIX)/lib
+BINDIR = $(PREFIX)/bin
+
+AR = $(BINDIR)/z80-none-elf-ar
+AS = $(BINDIR)/z80-none-elf-as
 
 ARCH = z80
 
