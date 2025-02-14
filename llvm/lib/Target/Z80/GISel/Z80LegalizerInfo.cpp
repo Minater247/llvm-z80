@@ -1121,8 +1121,33 @@ LegalizerHelper::LegalizeResult Z80LegalizerInfo::legalizeMemIntrinsic(
             MIRBuilder.buildCopy(DE, DstReg);
             MIRBuilder.buildCopy(HL, SrcReg);
             MIRBuilder.buildCopy(BC, LenReg);
-            MIRBuilder.buildInstr(Is24Bit ? Z80::LDIR24 : Z80::LDIR16)
+            if (ConstLen->Value.ule(6)) {
+              unsigned count = ConstLen->Value.getZExtValue();
+              while (count--) {
+                MIRBuilder.buildInstr(Is24Bit ? Z80::LDI24 : Z80::LDI16)
+                    .cloneMemRefs(MI);
+              }
+            } else {
+              unsigned len = ConstLen->Value.getZExtValue();
+              static char call_name2[32][10] = {{"_memcpy32"}};
+              static char *call_name[32] = {"_memcpy32", 0};
+              int name_index = len % 32;
+              if (!call_name[name_index]) {
+                  char buf[16];
+                  snprintf(buf, sizeof(buf), "_memcpy%02d", name_index);
+                  call_name[name_index] = strdup(buf);
+              }
+              MIRBuilder.buildInstr(Is24Bit ? Z80::CALL24 : Z80::CALL16)
+                .addExternalSymbol(call_name[name_index])
+                .addReg(DE, RegState::ImplicitKill)
+                .addReg(DE, RegState::ImplicitDefine)
+                .addReg(HL, RegState::ImplicitKill)
+                .addReg(HL, RegState::ImplicitDefine)
+                .addReg(BC, RegState::ImplicitKill)
+                .addReg(BC, RegState::ImplicitDefine)
                 .cloneMemRefs(MI);
+              ;
+            }
           }
         } else {
           auto LenMinusOne =
