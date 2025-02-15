@@ -1103,8 +1103,8 @@ LegalizerHelper::LegalizeResult Z80LegalizerInfo::legalizeMemIntrinsic(
                    (ConstAddr && (ConstDst->Value.ule(ConstSrc->Value) ||
                                   (ConstDst->Value - ConstSrc->Value)
                                       .uge(ConstLen->Value)))) {
-          // Use loads/stores if 4 bytes or less
-          if (ConstLen->Value.ule(4)) {
+          // Use loads/stores if 1 bytes or less
+          if (ConstLen->Value.ule(1)) {
             for (unsigned int Offset = 0; ConstLen->Value.ugt(Offset);
                  ++Offset) {
               auto OffConst = MIRBuilder.buildConstant(LenTy, Offset);
@@ -1122,15 +1122,21 @@ LegalizerHelper::LegalizeResult Z80LegalizerInfo::legalizeMemIntrinsic(
             MIRBuilder.buildCopy(HL, SrcReg);
             MIRBuilder.buildCopy(BC, LenReg);
             if (ConstLen->Value.ule(6)) {
-              // XXX no need to actually set BC to anything, but how to do it?!?
               unsigned count = ConstLen->Value.getZExtValue();
               while (count--) {
-                MIRBuilder.buildInstr(Is24Bit ? Z80::LDI24 : Z80::LDI16)
+                auto LDI = MIRBuilder.buildInstr(Is24Bit ? Z80::LDI24 : Z80::LDI16)
                     .cloneMemRefs(MI);
+                // we don't care about the input value of BC
+                for (int i = LDI->getNumOperands() - 1; i >= 0; --i) {
+                    MachineOperand &Op = LDI->getOperand(i);
+                    if (Op.isReg() && Op.getReg() == Z80::BC && Op.isImplicit() && !Op.isDef()) {
+                        LDI->removeOperand(i);
+                    }
+                }
               }
             } else {
               unsigned len = ConstLen->Value.getZExtValue();
-              static char *call_name[32] = {"_memcpy32", 0};
+              static const char *call_name[32] = {"_memcpy32", 0};
               int name_index = len % 32;
               if (!call_name[name_index]) {
                   char buf[16];
