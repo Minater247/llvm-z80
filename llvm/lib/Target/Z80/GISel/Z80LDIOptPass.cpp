@@ -28,6 +28,21 @@ public:
 
   bool runOnMachineFunction(MachineFunction &MF) override;
 };
+
+bool isMemcpy(llvm::MachineOperand op) {
+  if (!op.isSymbol())
+      return false;
+  StringRef FuncName = op.getSymbolName();
+  if (!FuncName.startswith("_memcpy"))
+      return false;
+
+  // Check if the remaining part is a valid number
+  StringRef Suffix = FuncName.drop_front(7); // Drop "_memcpy"
+  if (Suffix.empty())
+      return true;
+
+  return Suffix.size() == 2 && Suffix.find_first_not_of("0123456789") == StringRef::npos;
+}
 } // end anonymous namespace
 
 
@@ -121,6 +136,23 @@ bool Z80LDIOptPass::runOnMachineFunction(MachineFunction &MF)
         --de_base_offset;
         LastLDI = &MI;
         continue;
+      }
+      if (MI.getOpcode() == Z80::CALL16 && isMemcpy(MI.getOperand(0))) { // load decrement
+        auto it = MI.getIterator();
+        // check if previous call is $BC=COPY
+        if (it != MI.getParent()->begin()) {
+          --it;
+          if (it->getOpcode() == TargetOpcode::COPY && it->getOperand(0).getReg() == Z80::BC) {
+            // make sure that bc value is an immediate, use it as offset
+            if (auto Imm = getIConstantVRegValWithLookThrough(it->getOperand(1).getReg(), MRI)) {
+              int64_t len = Imm->Value.getZExtValue();
+              hl_base_offset += len;
+              de_base_offset += len;
+              LastLDI = &MI;
+              continue;
+            }
+          }
+        }
       }
 
       // if the instruction overwrites HL or DE, we give up -- the value is no longer directly available
