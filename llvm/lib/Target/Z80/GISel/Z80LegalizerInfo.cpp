@@ -1120,21 +1120,22 @@ LegalizerHelper::LegalizeResult Z80LegalizerInfo::legalizeMemIntrinsic(
           } else {
             MIRBuilder.buildCopy(DE, DstReg);
             MIRBuilder.buildCopy(HL, SrcReg);
-            MIRBuilder.buildCopy(BC, LenReg);
             if (ConstLen->Value.ule(6)) {
               unsigned count = ConstLen->Value.getZExtValue();
               while (count--) {
-                auto LDI = MIRBuilder.buildInstr(Is24Bit ? Z80::LDI24 : Z80::LDI16)
-                    .cloneMemRefs(MI);
+                auto LDI = MIRBuilder.buildInstr(Is24Bit ? Z80::LDI24 : Z80::LDI16);
                 // we don't care about the input value of BC
                 for (int i = LDI->getNumOperands() - 1; i >= 0; --i) {
                     MachineOperand &Op = LDI->getOperand(i);
-                    if (Op.isReg() && Op.getReg() == Z80::BC && Op.isImplicit() && !Op.isDef()) {
+                    if (Op.isReg() && Op.getReg() == Z80::BC) {
                         LDI->removeOperand(i);
+                        continue;
                     }
                 }
+                LDI.addReg(BC, RegState::ImplicitDefine);
               }
             } else {
+              MIRBuilder.buildCopy(BC, LenReg);
               unsigned len = ConstLen->Value.getZExtValue();
               static const char *call_name[32] = {"_memcpy32", 0};
               int name_index = len % 32;
