@@ -21,8 +21,10 @@ set(sources
   GISel/Z80CallLowering.cpp
   GISel/Z80InlineAsmLowering.cpp
   GISel/Z80InstructionSelector.cpp
+  GISel/Z80LDIOptPass.cpp
   GISel/Z80LegalizerInfo.cpp
   GISel/Z80PostLegalizerCombiner.cpp
+  GISel/Z80PostRewritePass.cpp
   GISel/Z80PreLegalizerCombiner.cpp
   GISel/Z80RegisterBankInfo.cpp
   Z80AsmPrinter.cpp

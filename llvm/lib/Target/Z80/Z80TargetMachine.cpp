@@ -155,6 +155,7 @@ public:
   bool addRegAssignAndRewriteOptimized() override;
   void addMachineLateOptimization() override;
   void addPreEmitPass2() override;
+  void addPostRewrite() override;
 
   std::unique_ptr<CSEConfigBase> getCSEConfig() const override;
 };
@@ -183,8 +184,10 @@ void Z80PassConfig::addPreRegBankSelect() {
   // For now we don't add this to the pipeline for -O0. We could do in future
   // if we split the combines into separate O0/opt groupings.
   bool IsOptNone = getOptLevel() == CodeGenOpt::None;
-  if (!IsOptNone)
+  if (!IsOptNone) {
+    addPass(createZ80LDIOptPass());
     addPass(createZ80PostLegalizeCombiner(IsOptNone));
+  }
 }
 
 bool Z80PassConfig::addRegBankSelect() {
@@ -224,6 +227,11 @@ void Z80PassConfig::addMachineLateOptimization() {
 void Z80PassConfig::addPreEmitPass2() {
   TargetPassConfig::addPreEmitPass2();
   addPass(createZ80BranchSelectorPass());
+}
+
+void Z80PassConfig::addPostRewrite() {
+  TargetPassConfig::addPostRewrite();
+  addPass(createZ80PostRewritePass());
 }
 
 std::unique_ptr<CSEConfigBase> Z80PassConfig::getCSEConfig() const {
