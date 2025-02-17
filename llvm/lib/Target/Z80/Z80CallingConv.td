@@ -52,6 +52,11 @@ def CC_EZ80_C : CallingConv<[
   CCIfType<[ i24 ], CCAssignToStack<3, 1>>,
 ]>;
 
+def CC_Z80_BC_A_ret_BC : CallingConv<[
+  CCIfType<[ i16 ], CCAssignToReg<[ BC ]>>,
+  CCIfType<[ i8 ], CCAssignToReg<[ A ]>>,
+]>;
+
 def CC_Z80_LC : CallingConv<[
   CCDelegateTo<CC_Z80_Reg>,
   CCIfType<[ i8  ], CCAssignToReg<[ L, C ]>>
@@ -90,6 +95,7 @@ def CC_Z80 : CallingConv<[
   CCIfCC<"CallingConv::Z80_LibCall_L", CCDelegateTo<CC_Z80_LC_L>>,
   CCIfCC<"CallingConv::Z80_LibCall_F", CCDelegateTo<CC_Z80_LC_F>>,
   CCIfCC<"CallingConv::Z80_LibCall_16", CCDelegateTo<CC_Z80_LC>>,
+  CCIfCC<"CallingConv::Z80_LibCall_BC_A_ret_BC", CCDelegateTo<CC_Z80_BC_A_ret_BC>>,
   CCIfSubtarget<"is16Bit()", CCDelegateTo<CC_Z80_C>>,
   CCIfSubtarget<"is24Bit()", CCDelegateTo<CC_EZ80_C>>
 ]>;
@@ -111,6 +117,7 @@ let Entry = 1 in
 def RetCC_Z80 : CallingConv<[
   CCIfType<[ i1 ], CCPromoteToType<i8>>,
   CCIfCC<"CallingConv::Z80_LibCall_F", CCIfType<[ i8 ], CCAssignToReg<[ F ]>>>,
+  CCIfCC<"CallingConv::Z80_LibCall_BC_A_ret_BC", CCIfType<[ i16 ], CCAssignToReg<[ BC ]>>>,
   CCIfSubtarget<"is16Bit()", CCDelegateTo<RetCC_Z80_C>>,
   CCIfCC<"CallingConv::Z80_LibCall_L", CCDelegateTo<CC_Z80_LC_L>>,
   CCIfSubtarget<"is24Bit()", CCDelegateTo<RetCC_EZ80_C>>

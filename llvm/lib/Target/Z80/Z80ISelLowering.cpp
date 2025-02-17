@@ -86,7 +86,7 @@ Z80TargetLowering::Z80TargetLowering(const Z80TargetMachine &TM,
   setLibcall(RTLIB::SRA_I32,          "_lshrs",      CallingConv::Z80_LibCall_L );
   setLibcall(RTLIB::SRA_I64,          "_llshrs",     CallingConv::Z80_LibCall   );
   setLibcall(RTLIB::SRL_I8,           "_bshru",      CallingConv::Z80_LibCall_AB);
-  setLibcall(RTLIB::SRL_I16,          "_sshru",      CallingConv::Z80_LibCall   );
+  setLibcall(RTLIB::SRL_I16,          "_sshru",      CallingConv::Z80_LibCall_BC_A_ret_BC);
   setLibcall(RTLIB::SRL_I16_I8,       "_sshru_b",    CallingConv::Z80_LibCall_AC);
   setLibcall(RTLIB::SRL_I24,          "_ishru",      CallingConv::Z80_LibCall   );
   setLibcall(RTLIB::SRL_I24_I8,       "_ishru_b",    CallingConv::Z80_LibCall_AC);

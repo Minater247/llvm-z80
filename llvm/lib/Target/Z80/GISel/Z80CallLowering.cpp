@@ -292,6 +292,7 @@ static bool mayTailCallThisCC(CallingConv::ID CC) {
   case CallingConv::Z80_LibCall_L:
   case CallingConv::Z80_LibCall_F:
   case CallingConv::Z80_LibCall_16:
+  case CallingConv::Z80_LibCall_BC_A_ret_BC:
   case CallingConv::Z80_TIFlags:
     return true;
   default:
