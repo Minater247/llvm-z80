@@ -70,15 +70,10 @@ bool Z80LDIOptPass::runOnMachineFunction(MachineFunction &MF)
   //      %4:_(p0) = COPY %7:_(p0)
   // In case the G_PTR_ADD offset is not an exact match, change G_PTR_ADD to use the HL(DE) and calculate a new offset from HL(DE) instead.
 
-  // XXX should also do the same for "CALL _memcpyNN"
-
   bool changed = false;
 
   MachineRegisterInfo &MRI = MF.getRegInfo();
   const TargetInstrInfo *TII = MF.getSubtarget().getInstrInfo();
-
-  MachineIRBuilder MIB;
-  MIB.setMF(MF);
 
   for (auto &MBB : MF) {
     Register hl_base_reg, de_base_reg;
