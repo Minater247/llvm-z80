@@ -11,7 +11,7 @@ ARCH = z80
 
 ASFLAGS += -march=$(ARCH)+full -sdcc
 
-SRC = frameset.s memcpy.s sshru.s
+SRC = frameset.s memcpy.s sshru.s sshl.s
 OBJS = $(SRC:.s=.o)
 LIB = librtlib.a
 
