@@ -70,7 +70,7 @@ Z80TargetLowering::Z80TargetLowering(const Z80TargetMachine &TM,
   setLibcall(RTLIB::XOR_I48,          "_i48xor",     CallingConv::Z80_LibCall   );
   setLibcall(RTLIB::XOR_I64,          "_llxor",      CallingConv::Z80_LibCall   );
   setLibcall(RTLIB::SHL_I8,           "_bshl",       CallingConv::Z80_LibCall_AB);
-  setLibcall(RTLIB::SHL_I16,          "_sshl",       CallingConv::Z80_LibCall   );
+  setLibcall(RTLIB::SHL_I16,          "_sshl",       CallingConv::Z80_LibCall_HL_A_ret_HL);
   setLibcall(RTLIB::SHL_I16_I8,       "_sshl_b",     CallingConv::Z80_LibCall_AC);
   setLibcall(RTLIB::SHL_I24,          "_ishl",       CallingConv::Z80_LibCall   );
   setLibcall(RTLIB::SHL_I24_I8,       "_ishl_b",     CallingConv::Z80_LibCall_AC);

@@ -265,7 +265,8 @@ namespace CallingConv {
     Z80_LibCall_F = 108,
     Z80_LibCall_16 = 189,
     Z80_LibCall_BC_A_ret_BC = 190,
-    Z80_LibCall_End = Z80_LibCall_BC_A_ret_BC,
+    Z80_LibCall_HL_A_ret_HL = 191,
+    Z80_LibCall_End,
 
     /// The highest possible calling convention ID. Must be some 2^k - 1.
     MaxID = 1023
