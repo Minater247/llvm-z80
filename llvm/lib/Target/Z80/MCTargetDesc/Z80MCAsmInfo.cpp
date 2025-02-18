@@ -51,6 +51,7 @@ Z80MCAsmInfoELF::Z80MCAsmInfoELF(const Triple &T) {
   HasBackslashEscapesInStringConstants = false;
   StringConstantsEscapeNonPrint = EscapeNonPrint;
   StringConstantsRequiredEscapes = {"\n\r\32", 4}; // include null
+  PlainStringDirective = "\t.string\t";
   Data8bitsDirective = "\tdb\t";
   Data16bitsDirective = "\tdw\t";
   Data24bitsDirective = "\td24\t";
