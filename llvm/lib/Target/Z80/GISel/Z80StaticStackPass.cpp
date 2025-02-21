@@ -41,6 +41,12 @@ bool Z80StaticStackPass::runOnMachineFunction(MachineFunction &MF)
 {
   MachineFrameInfo &MFI = MF.getFrameInfo();
 
+  auto& F = MF.getFunction();
+  if (F.hasFnAttribute("reentrant")) {
+    LLVM_DEBUG(dbgs() << F.getName().str() << " is marked reentrant, skipping\n");
+    return false;
+  }
+
   // Idea is that instead of using stack for local variables that spill,
   // we use a global variable for spilled local variables.
   // This is a lot faster as 16 bit load from global is 20 t-states,
@@ -54,7 +60,6 @@ bool Z80StaticStackPass::runOnMachineFunction(MachineFunction &MF)
   // This hack means that recursion is not possible and functions take
   // more memory.
   //
-  // XXX add an attribute "reentrant" that disables this pass.
   // XXX set up IX in function prologue pointing to the global variables
 
   std::map<int, size_t> addresses;
@@ -102,7 +107,6 @@ bool Z80StaticStackPass::runOnMachineFunction(MachineFunction &MF)
   // If we made here then we can replace everything
   LLVM_DEBUG(dbgs() << "Found " << addresses.size() << " stack objects of total " << totalSize << " bytes, turning them into a global variable.\n");
 
-  Function &F = MF.getFunction();
   Module &M   = *F.getParent();
   LLVMContext &Ctx = M.getContext();
 

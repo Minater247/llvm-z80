@@ -1796,6 +1796,13 @@ def Convergent : InheritableAttr {
   let SimpleHandler = 1;
 }
 
+def Reentrant : InheritableAttr {
+  let Spellings = [Clang<"reentrant">];
+  let Subjects = SubjectList<[Function]>;
+  let Documentation = [ReentrantDocs];
+  let SimpleHandler = 1;
+}
+
 def NoInline : DeclOrStmtAttr {
   let Spellings = [Keyword<"__noinline__">, GCC<"noinline">,
                    CXX11<"clang", "noinline">, C2x<"clang", "noinline">,

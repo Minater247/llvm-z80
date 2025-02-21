@@ -2052,6 +2052,10 @@ void CodeGenModule::SetLLVMFunctionAttributesForDefinition(const Decl *D,
       F->addTypeMetadata(0, Id);
     }
   }
+
+  if (D->hasAttr<ReentrantAttr>()) {
+    F->addFnAttr("reentrant");
+  }
 }
 
 void CodeGenModule::setLLVMFunctionFEnvAttributes(const FunctionDecl *D,

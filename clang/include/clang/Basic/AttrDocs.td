@@ -527,6 +527,14 @@ calls.
   }];
 }
 
+def ReentrantDocs : Documentation {
+  let Category = DocCatFunction;
+  let Content = [{
+This marks the function as reentrant, meaning it supports recursion.
+This disables optimisations that would break recursion.
+  }];
+}
+
 def NoInlineDocs : Documentation {
   let Category = DocCatFunction;
   let Content = [{
