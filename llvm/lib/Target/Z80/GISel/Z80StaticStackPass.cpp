@@ -59,8 +59,6 @@ bool Z80StaticStackPass::runOnMachineFunction(MachineFunction &MF)
   //
   // This hack means that recursion is not possible and functions take
   // more memory.
-  //
-  // XXX set up IX in function prologue pointing to the global variables
 
   std::map<int, size_t> addresses;
   size_t totalSize = 0;
@@ -133,6 +131,8 @@ bool Z80StaticStackPass::runOnMachineFunction(MachineFunction &MF)
 
   const TargetInstrInfo *TII = MF.getSubtarget().getInstrInfo();
 
+  bool need_IX = false;
+
   for (auto &MBB : MF) {
     for (auto MII = MBB.begin(), E = MBB.end(); MII != E; ) {
       MachineInstr &MI = *MII++;
@@ -176,19 +176,12 @@ bool Z80StaticStackPass::runOnMachineFunction(MachineFunction &MF)
         LLVM_DEBUG(dbgs() << "TargetOpcode::LD8ro: " << frame_index << ": staticStack+" << address << "+" << offset << "\n");
         if(MI.getOperand(0).getReg() != Z80::A) {
           LLVM_DEBUG(dbgs() << "MI.getOperand(0).getReg() != Z80::A\n");
-          // XXX move setting up IX to the prologue of the function
-          BuildMI(MBB, MI, MI.getDebugLoc(), TII->get(Z80::PUSH16r))
-            .addReg(Z80::IX);
-          BuildMI(MBB, MI, MI.getDebugLoc(), TII->get(Z80::LD16ri))
-            .addReg(Z80::IX)
-            .addGlobalAddress(GV);
           BuildMI(MBB, MI, MI.getDebugLoc(), TII->get(Z80::LD8ro))
             .addReg(MI.getOperand(0).getReg(), MI.getOperand(0).getTargetFlags())
             .addReg(Z80::IX)
             .addImm(address + offset);
-          BuildMI(MBB, MI, MI.getDebugLoc(), TII->get(Z80::POP16r))
-            .addReg(Z80::IX);
           MI.eraseFromParent();
+          need_IX = true;
           continue;
         }
 
@@ -207,30 +200,12 @@ bool Z80StaticStackPass::runOnMachineFunction(MachineFunction &MF)
         LLVM_DEBUG(dbgs() << "TargetOpcode::LD8or: " << frame_index << ": staticStack+" << address << "+" << offset << "\n");
         if(MI.getOperand(2).getReg() != Z80::A) {
           LLVM_DEBUG(dbgs() << "MI.getOperand(2).getReg() != Z80::A\n");
-#if 0
-          // AF push based, quite slow
-          BuildMI(MBB, MI, MI.getDebugLoc(), TII->get(Z80::PUSH16AF));
-          auto MBI = BuildMI(MBB, MI, MI.getDebugLoc(), TII->get(Z80::LD8gg))
-            .addReg(Z80::A)
-            .addReg(MI.getOperand(2).getReg(), MI.getOperand(2).getTargetFlags());
-          BuildMI(MBB, MI, MI.getDebugLoc(), TII->get(Z80::LD8ma))
-            .addGlobalAddress(GV, address + offset);
-          BuildMI(MBB, MI, MI.getDebugLoc(), TII->get(Z80::POP16AF));
-#else
           // IX based
-          // XXX move setting up IX to the prologue of the function
-          BuildMI(MBB, MI, MI.getDebugLoc(), TII->get(Z80::PUSH16r))
-            .addReg(Z80::IX);
-          BuildMI(MBB, MI, MI.getDebugLoc(), TII->get(Z80::LD16ri))
-            .addReg(Z80::IX)
-            .addGlobalAddress(GV);
           BuildMI(MBB, MI, MI.getDebugLoc(), TII->get(Z80::LD8or))
             .addReg(Z80::IX)
             .addImm(address + offset)
             .addReg(MI.getOperand(2).getReg(), MI.getOperand(2).getTargetFlags());
-          BuildMI(MBB, MI, MI.getDebugLoc(), TII->get(Z80::POP16r))
-            .addReg(Z80::IX);
-#endif
+          need_IX = true;
           MI.eraseFromParent();
           continue;
         }
@@ -240,6 +215,11 @@ bool Z80StaticStackPass::runOnMachineFunction(MachineFunction &MF)
         continue;
       }
     }
+  }
+
+  if (need_IX) {
+    F.addFnAttr("static_stack_needs_ix");
+    LLVM_DEBUG(dbgs() << "Setting static_stack_needs_ix attribute on the function\n");
   }
 
   return true;

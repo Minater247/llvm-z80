@@ -37,8 +37,12 @@ Z80FrameLowering::Z80FrameLowering(const Z80Subtarget &STI)
 /// pointer register.  This is true if the function has variable sized allocas
 /// or if frame pointer elimination is disabled.
 bool Z80FrameLowering::hasFP(const MachineFunction &MF) const {
-  return MF.getTarget().Options.DisableFramePointerElim(MF) ||
-         MF.getFrameInfo().hasStackObjects();
+  const MachineFrameInfo &MFI = MF.getFrameInfo();
+  for (int i = MFI.getObjectIndexBegin(); i < MFI.getObjectIndexEnd(); ++i) {
+    if (!MFI.isDeadObjectIndex(i))
+      return true;
+  }
+  return MF.getTarget().Options.DisableFramePointerElim(MF);
 }
 bool Z80FrameLowering::isFPSaved(const MachineFunction &MF) const {
   return hasFP(MF) && MF.getInfo<Z80MachineFunctionInfo>()->getUsesAltFP() ==
@@ -208,6 +212,23 @@ void Z80FrameLowering::emitPrologue(MachineFunction &MF,
   while (MBBI != MBB.end() && MBBI->getFlag(MachineInstr::FrameSetup))
     ++MBBI;
 
+  auto& F = MF.getFunction();
+  if (F.hasFnAttribute("static_stack_needs_ix")) {
+    assert(!hasFP(MF));
+    assert(StackSize == 0);
+    LLVM_DEBUG(dbgs() << "Z80FrameLowering::emitPrologue: setting up IX for static stack\n");
+    std::string GlobalName = F.getName().str() + "__variables";
+    Module &M = *F.getParent();
+    GlobalVariable *GV = M.getGlobalVariable(GlobalName);
+    assert(GV != nullptr);
+    BuildMI(MBB, MBBI, DL, TII.get(Z80::PUSH16r), Z80::IX)
+        .setMIFlag(MachineInstr::FrameSetup);
+    BuildMI(MBB, MBBI, DL, TII.get(Z80::LD16ri), Z80::IX)
+        .addGlobalAddress(GV)
+        .setMIFlag(MachineInstr::FrameSetup);
+    return;
+  }
+
   int FPOffset = -1;
   if (hasFP(MF)) {
     Register FrameReg = TRI->getFrameRegister(MF);
@@ -353,6 +374,20 @@ void Z80FrameLowering::emitEpilogue(MachineFunction &MF,
     } else
       break;
     PI->removeFromParent();
+  }
+
+  auto& F = MF.getFunction();
+  if (F.hasFnAttribute("static_stack_needs_ix")) {
+    assert(!hasFP(MF));
+    assert(StackSize == 0);
+    LLVM_DEBUG(dbgs() << "Z80FrameLowering::emitEpilogue: popping IX for static stack\n");
+    std::string GlobalName = F.getName().str() + "__variables";
+    Module &M = *F.getParent();
+    GlobalVariable *GV = M.getGlobalVariable(GlobalName);
+    assert(GV != nullptr);
+    BuildMI(MBB, MBBI, DL, TII.get(Z80::POP16r), Z80::IX)
+        .setMIFlag(MachineInstr::FrameDestroy);
+    return;
   }
 
   BuildStackAdjustment(MF, MBB, MBBI, DL, *ScratchReg, StackSize,
