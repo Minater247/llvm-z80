@@ -27,6 +27,7 @@ class Z80TargetMachine;
 FunctionPass *createZ80PreLegalizeCombiner(bool IsOptNone);
 FunctionPass *createZ80PostLegalizeCombiner(bool IsOptNone);
 FunctionPass *createZ80LDIOptPass();
+FunctionPass *createZ80StaticStackPass();
 InstructionSelector *createZ80InstructionSelector(const Z80TargetMachine &TM,
                                                   Z80Subtarget &,
                                                   Z80RegisterBankInfo &);

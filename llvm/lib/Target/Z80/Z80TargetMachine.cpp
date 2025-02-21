@@ -232,6 +232,7 @@ void Z80PassConfig::addPreEmitPass2() {
 void Z80PassConfig::addPostRewrite() {
   TargetPassConfig::addPostRewrite();
   addPass(createZ80PostRewritePass());
+  addPass(createZ80StaticStackPass());
 }
 
 std::unique_ptr<CSEConfigBase> Z80PassConfig::getCSEConfig() const {
