@@ -315,6 +315,22 @@ bool Z80StaticStackPass::runOnMachineFunction(MachineFunction &MF)
     MF.getInfo<Z80MachineFunctionInfo>()->setHasIllegalLEA(false);
   }
 
+  for (auto &MBB : MF) {
+    for (auto& MI : MBB) {
+      for (unsigned i = 0, e = MI.getNumOperands(); i != e; ++i) {
+        const MachineOperand &MO = MI.getOperand(i);
+        if (MO.isFI()) {
+          int FrameIndex = MO.getIndex();
+          if (addresses.count(FrameIndex) != 0) {
+            llvm::errs() << "Offending instruction:\n";
+            MI.dump();
+            llvm_unreachable("Z80StaticStackPass: Eliminated FrameIndex is still being used, unhandled instruction!");
+          }
+        }
+      }
+    }
+  }
+
   return true;
 }
 
