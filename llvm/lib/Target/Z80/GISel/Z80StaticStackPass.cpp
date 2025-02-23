@@ -304,6 +304,23 @@ bool Z80StaticStackPass::runOnMachineFunction(MachineFunction &MF)
         MI.eraseFromParent();
         continue;
       }
+
+      if ((MI.getOpcode() == Z80::ADD8ao || MI.getOpcode() == Z80::SUB8ao) && MI.getOperand(0).isFI() && MI.getOperand(1).isImm()) {
+        int frame_index = MI.getOperand(0).getIndex();
+        int64_t offset = MI.getOperand(1).getImm();
+        auto fit = addresses.find(frame_index);
+        if (fit == addresses.end())
+          continue;
+        size_t address = fit->second;
+        LLVM_DEBUG(dbgs() << "Z80StaticStackPass: TargetOpcode::ADD8ao/SUB8ao: " << frame_index << ": staticStack+" << address << "+" << offset << "\n");
+        assert(canTransformEverything);
+        need_IX = true;
+        BuildMI(MBB, MI, MI.getDebugLoc(), TII->get(MI.getOpcode()))
+          .addReg(Z80::IX)
+          .addImm(address + offset);
+        MI.eraseFromParent();
+        continue;
+      }
     }
   }
 
