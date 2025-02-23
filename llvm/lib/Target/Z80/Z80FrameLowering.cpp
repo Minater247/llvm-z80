@@ -39,9 +39,13 @@ Z80FrameLowering::Z80FrameLowering(const Z80Subtarget &STI)
 bool Z80FrameLowering::hasFP(const MachineFunction &MF) const {
   const MachineFrameInfo &MFI = MF.getFrameInfo();
   for (int i = MFI.getObjectIndexBegin(); i < MFI.getObjectIndexEnd(); ++i) {
+    //LLVM_DEBUG(dbgs() << "Z80FrameLowering: hasFP: " << i << ": isDead=" << (MFI.isDeadObjectIndex(i) ? 1 : 0) << "\n");
     if (!MFI.isDeadObjectIndex(i))
       return true;
   }
+  auto& F = MF.getFunction();
+  if (F.hasFnAttribute("static_stack_needs_ix"))
+      return false;
   return MF.getTarget().Options.DisableFramePointerElim(MF);
 }
 bool Z80FrameLowering::isFPSaved(const MachineFunction &MF) const {
@@ -449,10 +453,11 @@ void Z80FrameLowering::shadowCalleeSavedRegisters(
 static Z80MachineFunctionInfo::AltFPMode
 shouldUseAltFP(MachineFunction &MF, MCRegister AltFPReg,
                const TargetRegisterInfo *TRI) {
-  if (MF.getFunction().hasOptSize() || MF.getFrameInfo().hasVarSizedObjects() ||
+  MachineFrameInfo& MFI = MF.getFrameInfo();
+  if (MF.getFunction().hasOptSize() || MFI.hasVarSizedObjects() ||
       MF.getTarget().Options.DisableFramePointerElim(MF))
     return Z80MachineFunctionInfo::AFPM_None;
-  if (!MF.getRegInfo().isPhysRegUsed(Z80::UIY))
+  if (!MF.getRegInfo().isPhysRegUsed(AltFPReg))
     return Z80MachineFunctionInfo::AFPM_Full;
   MachineBasicBlock::iterator LastFrameIdx;
   bool AltFPModified = false;
