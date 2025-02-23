@@ -44,7 +44,7 @@ def CC_Z80_Reg : CallingConv<[
 def CC_Z80_C : CallingConv<[
   CCIfByVal<CCPassByVal<1, 1>>,
   CCIfType<[ i1, i8 ], CCAssignToReg<[ L, H, E, D, C, B ]>>,
-  CCIfType<[ i16 ], CCAssignToReg<[ HL, DE, BC, IY ]>>,
+  CCIfType<[ i16 ], CCAssignToReg<[ HL, DE, BC ]>>,
   CCIfType<[ i16 ], CCAssignToStack<2, 1>>,
   CCIfType<[ i8 ], CCAssignToStack<1, 1>>
 ]>;
