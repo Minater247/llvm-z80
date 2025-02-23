@@ -1,5 +1,5 @@
 
-PREFIX ?= /opt/local/ez80-none-elf
+PREFIX ?= /opt/local/z80-none-elf
 
 LIBDIR = $(PREFIX)/lib
 BINDIR = $(PREFIX)/bin
