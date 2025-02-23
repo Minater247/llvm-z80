@@ -15,7 +15,7 @@ $ bash install.sh
 
 This will download and install binutils and compile clang. The default installation directory is `/opt/local/z80-none-elf`.
 
-There are some samples under z80/samples. Here's how you'd compile and run one under the fuse-gtk emulator:
+There are some samples under z80/samples. Here's how you'd compile and run one under the `fuse-gtk` emulator:
 
 ```bash
 $ cd z80/samples/hello_world/
@@ -28,4 +28,6 @@ python3 ../../utils/hex2tap.py main.hex --include-loader
 $ fuse-gtk main.tap
 ```
 
-This is all the help you'll get for me with this. Have fun.
+The compiler is not really that stable. It breaks and crashes on lots of various code. But for some it works.
+
+This is all the help you'll get from me with this. Have fun.
