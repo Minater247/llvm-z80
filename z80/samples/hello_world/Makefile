@@ -1,5 +1,5 @@
 
-PREFIX=/opt/local/z80-none-elf
+PREFIX ?= /opt/local/z80-none-elf
 
 CXX=$(PREFIX)/bin/clang++
 LD=$(PREFIX)/bin/z80-none-elf-ld

@@ -9,16 +9,16 @@ namespace ZX {
     struct Console {
         static void putchar(char c) {
             uint16_t iy = 23610;
-            __asm__ ("rst $10" : "=a"(c), "=iy"(iy) : "a"(c), "iy"(iy) : "h", "l", "d", "e", "b", "c", "cc", "memory");
+            __asm__ ("rst $10" : "=a"(c) : "a"(c), "iy"(iy) : "h", "l", "d", "e", "b", "c", "cc", "memory");
         }
 
-        static void at(uint8_t x, uint8_t y) {
+        static void at(uint8_t x, uint8_t y) __attribute__((noinline)) {
             putchar(22);
             putchar(y);
             putchar(x);
         }
 
-        static void print(const char *str) {
+        static void print(const char *str) __attribute__((noinline)) {
             while (*str)
                 putchar(*str++);
         }
