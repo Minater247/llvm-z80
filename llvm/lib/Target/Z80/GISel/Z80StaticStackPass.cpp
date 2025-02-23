@@ -312,6 +312,9 @@ bool Z80StaticStackPass::runOnMachineFunction(MachineFunction &MF)
     F.addFnAttr("static_stack_needs_ix");
     // XXX move this into Z80MachineFunctionInfo instead of being an attribute
     LLVM_DEBUG(dbgs() << "Z80StaticStackPass: Setting static_stack_needs_ix attribute on the function\n");
+  }
+
+  if (canTransformEverything) {
     MF.getInfo<Z80MachineFunctionInfo>()->setHasIllegalLEA(false);
   }
 
