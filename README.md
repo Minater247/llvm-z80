@@ -6,6 +6,16 @@ I've been hacking it for use with the ZX Spectrum. Most changes have been done w
 
 Aim is to use C++ to program toy games or demos for the ZX Spectrum. I treat Z80 as a "microcontroller with more memory than usual", so use of heap, standard library, exceptions or even stack/`alloca` is not really something I plan to support.
 
+Main changes:
+* function arguments are passed using registers instead of stack
+* inlining of various bit operations
+* spilled variables are placed into a static global variable instead of stack
+* functions that want to use recursion must have `__attribute__((reentrant))`
+* small memcopies are inlined a lot more
+* memcopies with known length are optimized to a `CALL` to `__memcpyNN` where `NN` is modulo 32 of the length
+* sequential batches of LDI statements are optimized to speed up sprite blitting
+* frame pointer setup is inlined (for reentrant functions)
+
 How to build:
 
 ```
@@ -68,4 +78,34 @@ int main()
 ```
 
 <img width="323" alt="zx_hello_world" src="https://github.com/user-attachments/assets/6933252b-8e54-4606-98e1-158c67ca30f1" /><img width="322" alt="zx_hello_graphics" src="https://github.com/user-attachments/assets/20bdc17b-3fc0-40f8-a041-e7098a3fa28b" />
+
+The assembly produced for the `ZX::Console::print(const char*)` function:
+```gas
+__ZN2ZX7Console5printEPKc:
+        ld      e, l
+        ld      d, h
+        ld      c, (hl)
+        ld      a, c
+        or      a, a
+        jr      z, .LBB2_3
+        ld      iy, 23610
+        inc     de
+        ld      (__ZN2ZX7Console5printEPKc__variables), de
+        .local  .LBB2_2
+.LBB2_2:
+        ld      a, c
+        ;APP
+        rst $10
+        ;NO_APP
+        ld      hl, (__ZN2ZX7Console5printEPKc__variables)
+        ld      c, (hl)
+        inc     hl
+        ld      (__ZN2ZX7Console5printEPKc__variables), hl
+        ld      a, c
+        or      a, a
+        jr      nz, .LBB2_2
+        .local  .LBB2_3
+.LBB2_3:
+        ret
+```
 
