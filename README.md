@@ -77,7 +77,7 @@ int main()
 }
 ```
 
-<img width="323" alt="zx_hello_world" src="https://github.com/user-attachments/assets/6933252b-8e54-4606-98e1-158c67ca30f1" /><img width="322" alt="zx_hello_graphics" src="https://github.com/user-attachments/assets/20bdc17b-3fc0-40f8-a041-e7098a3fa28b" />
+<img width="323" alt="zx_hello_world" src="https://github.com/user-attachments/assets/6933252b-8e54-4606-98e1-158c67ca30f1" /><img width="322" alt="zx_hello_graphics" src="https://github.com/user-attachments/assets/20bdc17b-3fc0-40f8-a041-e7098a3fa28b" /><img width="323" alt="zx3" src="https://github.com/user-attachments/assets/fc9bd2ae-b9dd-402e-9939-d9a5028b0a59" />
 
 Assembly produced for the `int main()` function:
 ```gas
