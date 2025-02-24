@@ -31,3 +31,6 @@ $ fuse-gtk main.tap
 The compiler is not really that stable. It breaks and crashes on lots of various code. But for some it works.
 
 This is all the help you'll get from me with this. Have fun.
+
+<img width="323" alt="zx_hello_world" src="https://github.com/user-attachments/assets/6933252b-8e54-4606-98e1-158c67ca30f1" /><img width="322" alt="zx_hello_graphics" src="https://github.com/user-attachments/assets/20bdc17b-3fc0-40f8-a041-e7098a3fa28b" />
+
