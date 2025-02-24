@@ -21,14 +21,24 @@ int main()
   ZX::Console::at(2, 18);
   ZX::Console::print("Use arrow keys or OPQA.");
   ZX::Console::at(2, 19);
-  ZX::Console::print("Or use the Kempston joystick.");
+  ZX::Console::print("Press K for Kempston joystick.");
   ZX::Console::at(2, 20);
   ZX::Console::print("Space or FIRE to clear.");
   ZX::Console::at(2, 21);
   ZX::Console::print("Press S to START!");
 
-  while (!ZX::Keyboard::KEY_S.is_pressed())
+  bool kempston_enabled = false;
+
+  while (!ZX::Keyboard::KEY_S.is_pressed()) {
       __asm__ volatile("nop");
+      if (!kempston_enabled && ZX::Keyboard::KEY_K.is_pressed()) {
+          kempston_enabled = true;
+          ZX::Console::at(2, 19);
+          ZX::Console::print("Kempston Joystick is enabled! ");
+      }
+      if (kempston_enabled && (ZX::Kempston::read() & (1 << 4)))
+          break;
+  }
 
   uint8_t x = 128;
   uint8_t y = 96;
@@ -37,7 +47,10 @@ int main()
       uint8_t mask = 0;
       for (int i = 0 ; i < 50; ++i) {
           mask |= read_keypress_mask();
-          mask |= ZX::Kempston::read();
+          if (kempston_enabled)
+              mask |= ZX::Kempston::read();
+          else if (ZX::Keyboard::KEY_K.is_pressed())
+              kempston_enabled = true;
       }
 
       if (mask & (1 << 0))

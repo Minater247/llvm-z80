@@ -104,6 +104,7 @@ namespace ZX {
         static Key<'q', 0xfb, 0> KEY_Q;
         static Key<'a', 0xfd, 0> KEY_A;
         static Key<'s', 0xfd, 1> KEY_S;
+        static Key<'k', 0xbf, 2> KEY_K;
         static Key<' ', 0x7f, 0> KEY_SPACE;
         static Key<'5', 0xf7, 4> KEY_5;
         static Key<'6', 0xef, 4> KEY_6;
