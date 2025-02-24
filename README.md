@@ -79,7 +79,19 @@ int main()
 
 <img width="323" alt="zx_hello_world" src="https://github.com/user-attachments/assets/6933252b-8e54-4606-98e1-158c67ca30f1" /><img width="322" alt="zx_hello_graphics" src="https://github.com/user-attachments/assets/20bdc17b-3fc0-40f8-a041-e7098a3fa28b" />
 
-The assembly produced for the `ZX::Console::print(const char*)` function:
+Assembly produced for the `int main()` function:
+```gas
+_main:
+        ld      l, 10
+        ld      h, 12
+        call    __ZN2ZX7Console2atEhh
+        ld      hl, _.str
+        call    __ZN2ZX7Console5printEPKc
+        ld      hl, 0
+        ret
+```
+
+Assembly produced for the `ZX::Console::print(const char*)` function:
 ```gas
 __ZN2ZX7Console5printEPKc:
         ld      e, l
