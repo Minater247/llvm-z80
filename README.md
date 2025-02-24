@@ -32,5 +32,40 @@ The compiler is not really that stable. It breaks and crashes on lots of various
 
 This is all the help you'll get from me with this. Have fun.
 
+Example application:
+```c++
+namespace ZX {
+    using int8_t = char;
+    using uint8_t = unsigned char;
+    using int16_t = int;
+    using uint16_t = unsigned int;
+
+    struct Console {
+        static void putchar(char c) {
+            uint16_t iy = 23610;
+            __asm__ ("rst $10" : "=a"(c) : "a"(c), "iy"(iy) : "h", "l", "d", "e", "b", "c", "cc", "memory");
+        }
+
+        static void at(uint8_t x, uint8_t y) __attribute__((noinline)) {
+            putchar(22);
+            putchar(y);
+            putchar(x);
+        }
+
+        static void print(const char *str) __attribute__((noinline)) {
+            while (*str)
+                putchar(*str++);
+        }
+    };
+};
+
+int main()
+{
+  ZX::Console::at(10, 12);
+  ZX::Console::print("Hello, world!");
+  return 0;
+}
+```
+
 <img width="323" alt="zx_hello_world" src="https://github.com/user-attachments/assets/6933252b-8e54-4606-98e1-158c67ca30f1" /><img width="322" alt="zx_hello_graphics" src="https://github.com/user-attachments/assets/20bdc17b-3fc0-40f8-a041-e7098a3fa28b" />
 
