@@ -268,58 +268,47 @@ bool Z80StaticStackPass::runOnMachineFunction(MachineFunction &MF)
         MI.eraseFromParent();
         continue;
       }
-      // LD8oi %stack.1.buf, 0, 0 :: (store (s8) into %ir.buf)
-
-      if (MI.getOpcode() == Z80::LD8oi && MI.getOperand(0).isFI() && MI.getOperand(1).isImm()) {
-        int frame_index = MI.getOperand(0).getIndex();
-        int64_t offset = MI.getOperand(1).getImm();
-        auto fit = addresses.find(frame_index);
-        if (fit == addresses.end())
-          continue;
-        size_t address = fit->second;
-        LLVM_DEBUG(dbgs() << "Z80StaticStackPass: TargetOpcode::LD8oi: " << frame_index << ": staticStack+" << address << "+" << offset << "\n");
-        assert(canTransformEverything);
-        need_IX = true;
-        BuildMI(MBB, MI, MI.getDebugLoc(), TII->get(Z80::LD8oi))
-          .addReg(Z80::IX)
-          .addImm(address + offset)
-          .addImm(MI.getOperand(2).getImm());
-        MI.eraseFromParent();
-        continue;
-      }
-
-      if ((MI.getOpcode() == Z80::INC8o || MI.getOpcode() == Z80::DEC8o) && MI.getOperand(0).isFI() && MI.getOperand(1).isImm()) {
-        int frame_index = MI.getOperand(0).getIndex();
-        int64_t offset = MI.getOperand(1).getImm();
-        auto fit = addresses.find(frame_index);
-        if (fit == addresses.end())
-          continue;
-        size_t address = fit->second;
-        LLVM_DEBUG(dbgs() << "Z80StaticStackPass: TargetOpcode::INC8o/DEC8o: " << frame_index << ": staticStack+" << address << "+" << offset << "\n");
-        assert(canTransformEverything);
-        need_IX = true;
-        BuildMI(MBB, MI, MI.getDebugLoc(), TII->get(MI.getOpcode()))
-          .addReg(Z80::IX)
-          .addImm(address + offset);
-        MI.eraseFromParent();
-        continue;
-      }
-
-      if ((MI.getOpcode() == Z80::ADD8ao || MI.getOpcode() == Z80::SUB8ao) && MI.getOperand(0).isFI() && MI.getOperand(1).isImm()) {
-        int frame_index = MI.getOperand(0).getIndex();
-        int64_t offset = MI.getOperand(1).getImm();
-        auto fit = addresses.find(frame_index);
-        if (fit == addresses.end())
-          continue;
-        size_t address = fit->second;
-        LLVM_DEBUG(dbgs() << "Z80StaticStackPass: TargetOpcode::ADD8ao/SUB8ao: " << frame_index << ": staticStack+" << address << "+" << offset << "\n");
-        assert(canTransformEverything);
-        need_IX = true;
-        BuildMI(MBB, MI, MI.getDebugLoc(), TII->get(MI.getOpcode()))
-          .addReg(Z80::IX)
-          .addImm(address + offset);
-        MI.eraseFromParent();
-        continue;
+      switch (MI.getOpcode()) {
+          case Z80::BIT8ob:
+          case Z80::LD8oi: {
+              int frame_index = MI.getOperand(0).getIndex();
+              int64_t offset = MI.getOperand(1).getImm();
+              auto fit = addresses.find(frame_index);
+              if (fit == addresses.end())
+                continue;
+              size_t address = fit->second;
+              LLVM_DEBUG(dbgs() << "Z80StaticStackPass: TargetOpcode::" << MI.getOpcode() << ": " << frame_index << ": staticStack+" << address << "+" << offset << "\n");
+              assert(canTransformEverything);
+              need_IX = true;
+              BuildMI(MBB, MI, MI.getDebugLoc(), TII->get(MI.getOpcode()))
+                .addReg(Z80::IX)
+                .addImm(address + offset)
+                .addImm(MI.getOperand(2).getImm());
+              MI.eraseFromParent();
+              continue;
+          }
+          case Z80::INC8o:
+          case Z80::DEC8o:
+          case Z80::ADD8ao:
+          case Z80::SUB8ao:
+          case Z80::OR8ao:
+          case Z80::AND8ao: {
+              int frame_index = MI.getOperand(0).getIndex();
+              int64_t offset = MI.getOperand(1).getImm();
+              auto fit = addresses.find(frame_index);
+              if (fit == addresses.end())
+                continue;
+              size_t address = fit->second;
+              LLVM_DEBUG(dbgs() << "Z80StaticStackPass: TargetOpcode::" << MI.getOpcode() << ": " << frame_index << ": staticStack+" << address << "+" << offset << "\n");
+              assert(canTransformEverything);
+              need_IX = true;
+              BuildMI(MBB, MI, MI.getDebugLoc(), TII->get(MI.getOpcode()))
+                .addReg(Z80::IX)
+                .addImm(address + offset);
+              MI.eraseFromParent();
+              continue;
+          }
+          default: break;
       }
     }
   }
