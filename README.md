@@ -1,6 +1,6 @@
 # LLVM/Clang targetting Z80 / ZX Spectrum
 
-This is a branch I cloned from https://github.com/jacobly0/llvm-project
+This is a fork from https://github.com/jacobly0/llvm-project
 
 I've been hacking it for use with the ZX Spectrum. Most changes have been done with speed in mind but I'm in no way an expert on compilers or llvm. This is just for fun.
 
