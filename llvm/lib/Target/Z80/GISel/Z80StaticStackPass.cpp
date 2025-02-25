@@ -182,7 +182,6 @@ bool Z80StaticStackPass::runOnMachineFunction(MachineFunction &MF)
           continue;
         size_t address = fit->second;
         LLVM_DEBUG(dbgs() << "Z80StaticStackPass: TargetOpcode::LD88ro: " << frame_index << ": staticStack+" << address << "+" << offset << "\n");
-
         BuildMI(MBB, MI, MI.getDebugLoc(), TII->get(Z80::LD16rm))
           .addReg(DestOp.getReg(), RegState::Define)    // Destination register
           .addGlobalAddress(GV, address + offset);
@@ -271,20 +270,22 @@ bool Z80StaticStackPass::runOnMachineFunction(MachineFunction &MF)
       switch (MI.getOpcode()) {
           case Z80::BIT8ob:
           case Z80::LD8oi: {
-              int frame_index = MI.getOperand(0).getIndex();
-              int64_t offset = MI.getOperand(1).getImm();
-              auto fit = addresses.find(frame_index);
-              if (fit == addresses.end())
-                continue;
-              size_t address = fit->second;
-              LLVM_DEBUG(dbgs() << "Z80StaticStackPass: TargetOpcode::" << MI.getOpcode() << ": " << frame_index << ": staticStack+" << address << "+" << offset << "\n");
-              assert(canTransformEverything);
-              need_IX = true;
-              BuildMI(MBB, MI, MI.getDebugLoc(), TII->get(MI.getOpcode()))
-                .addReg(Z80::IX)
-                .addImm(address + offset)
-                .addImm(MI.getOperand(2).getImm());
-              MI.eraseFromParent();
+              if (MI.getOperand(0).isFI() && MI.getOperand(1).isImm()) {
+                int frame_index = MI.getOperand(0).getIndex();
+                int64_t offset = MI.getOperand(1).getImm();
+                auto fit = addresses.find(frame_index);
+                if (fit == addresses.end())
+                  continue;
+                size_t address = fit->second;
+                LLVM_DEBUG(dbgs() << "Z80StaticStackPass: TargetOpcode::" << MI.getOpcode() << ": " << frame_index << ": staticStack+" << address << "+" << offset << "\n");
+                assert(canTransformEverything);
+                need_IX = true;
+                BuildMI(MBB, MI, MI.getDebugLoc(), TII->get(MI.getOpcode()))
+                  .addReg(Z80::IX)
+                  .addImm(address + offset)
+                  .addImm(MI.getOperand(2).getImm());
+                MI.eraseFromParent();
+              }
               continue;
           }
           case Z80::INC8o:
@@ -293,19 +294,21 @@ bool Z80StaticStackPass::runOnMachineFunction(MachineFunction &MF)
           case Z80::SUB8ao:
           case Z80::OR8ao:
           case Z80::AND8ao: {
-              int frame_index = MI.getOperand(0).getIndex();
-              int64_t offset = MI.getOperand(1).getImm();
-              auto fit = addresses.find(frame_index);
-              if (fit == addresses.end())
-                continue;
-              size_t address = fit->second;
-              LLVM_DEBUG(dbgs() << "Z80StaticStackPass: TargetOpcode::" << MI.getOpcode() << ": " << frame_index << ": staticStack+" << address << "+" << offset << "\n");
-              assert(canTransformEverything);
-              need_IX = true;
-              BuildMI(MBB, MI, MI.getDebugLoc(), TII->get(MI.getOpcode()))
-                .addReg(Z80::IX)
-                .addImm(address + offset);
-              MI.eraseFromParent();
+              if (MI.getOperand(0).isFI() && MI.getOperand(1).isImm()) {
+                int frame_index = MI.getOperand(0).getIndex();
+                int64_t offset = MI.getOperand(1).getImm();
+                auto fit = addresses.find(frame_index);
+                if (fit == addresses.end())
+                  continue;
+                size_t address = fit->second;
+                LLVM_DEBUG(dbgs() << "Z80StaticStackPass: TargetOpcode::" << MI.getOpcode() << ": " << frame_index << ": staticStack+" << address << "+" << offset << "\n");
+                assert(canTransformEverything);
+                need_IX = true;
+                BuildMI(MBB, MI, MI.getDebugLoc(), TII->get(MI.getOpcode()))
+                  .addReg(Z80::IX)
+                  .addImm(address + offset);
+                MI.eraseFromParent();
+              }
               continue;
           }
           default: break;
