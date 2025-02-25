@@ -25,16 +25,16 @@ CXXFLAGS += -std=c++20
 
 ASFLAGS += -march=$(ARCH)+full -sdcc
 
-all: main.tap
+all: hello_world.tap
 
-main.tap: main.hex
-	python3 ../../utils/hex2tap.py main.hex --include-loader
+hello_world.tap: hello_world.hex
+	python3 ../../utils/hex2tap.py hello_world.hex --include-loader
 
-main.hex: memory.ld main.o
-	$(LD) -T memory.ld -Map=main.map --oformat ihex main.o -o main.hex
+hello_world.hex: memory.ld main.o
+	$(LD) -T memory.ld -Map=hello_world.map --oformat ihex main.o -o hello_world.hex
 
 clean:
-	rm -f *.o main main.hex main.tap main.map
+	rm -f *.o hello_world hello_world.hex hello_world.tap hello_world.map
 
 distclean: clean
 	rm -f .depend
