@@ -28,6 +28,7 @@ FunctionPass *createZ80PreLegalizeCombiner(bool IsOptNone);
 FunctionPass *createZ80PostLegalizeCombiner(bool IsOptNone);
 FunctionPass *createZ80LDIOptPass();
 FunctionPass *createZ80StaticStackPass();
+FunctionPass *createZ80SelfOrAndOptPass();
 InstructionSelector *createZ80InstructionSelector(const Z80TargetMachine &TM,
                                                   Z80Subtarget &,
                                                   Z80RegisterBankInfo &);

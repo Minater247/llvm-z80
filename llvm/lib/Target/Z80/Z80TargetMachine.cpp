@@ -197,6 +197,7 @@ bool Z80PassConfig::addRegBankSelect() {
 
 bool Z80PassConfig::addGlobalInstructionSelect() {
   addPass(new InstructionSelect);
+  addPass(createZ80SelfOrAndOptPass());
   return false;
 }
 

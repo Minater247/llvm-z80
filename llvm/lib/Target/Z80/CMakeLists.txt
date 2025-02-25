@@ -28,6 +28,7 @@ set(sources
   GISel/Z80PostRewritePass.cpp
   GISel/Z80PreLegalizerCombiner.cpp
   GISel/Z80RegisterBankInfo.cpp
+  GISel/Z80SelfOrAndOptPass.cpp
   Z80AsmPrinter.cpp
   Z80BranchSelector.cpp
   Z80CallingConv.cpp
