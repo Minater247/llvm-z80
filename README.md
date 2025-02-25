@@ -25,22 +25,26 @@ $ bash install.sh
 
 This will download and install binutils and compile clang. The default installation directory is `/opt/local/z80-none-elf`.
 
-There are some samples under z80/samples. Here's how you'd compile and run one under the `fuse-gtk` emulator:
+There are some samples under [z80/samples](z80/samples). Here's how you'd compile and run one under the `fuse-gtk` emulator:
 
 ```bash
 $ cd z80/samples/hello_world/
 $ make
 /opt/local/z80-none-elf/bin/clang++ -target z80-none-elf -Wa,-march=z80+full -Wa,-sdcc -nostdinc -fno-rtti -fno-exceptions -ffunction-sections -fdata-sections -O3 -Wall -std=c++20   -c -o main.o main.cpp
-/tmp/main-76f055.s: Assembler messages:
-/tmp/main-76f055.s:98: Warning: unrecognized section type
-/opt/local/z80-none-elf/bin/z80-none-elf-ld -T memory.ld -Map=main.map --oformat ihex main.o -o main.hex
-python3 ../../utils/hex2tap.py main.hex --include-loader
-$ fuse-gtk main.tap
+/tmp/main-72edfc.s: Assembler messages:
+/tmp/main-72edfc.s:92: Warning: unrecognized section type
+/opt/local/z80-none-elf/bin/z80-none-elf-ld -T memory.ld -Map=hello_world.map --oformat ihex main.o -o hello_world.hex
+python3 ../../utils/hex2tap.py hello_world.hex --include-loader
+$ fuse-gtk hello_world.tap
 ```
 
 The compiler is not really that stable. It breaks and crashes on lots of various code. But for some it works.
 
 This is all the help you'll get from me with this. Have fun.
+
+Some screenshots:
+
+<img width="323" alt="zx_hello_world" src="https://github.com/user-attachments/assets/6933252b-8e54-4606-98e1-158c67ca30f1" /><img width="322" alt="zx_hello_graphics" src="https://github.com/user-attachments/assets/20bdc17b-3fc0-40f8-a041-e7098a3fa28b" /><img width="323" alt="zx3" src="https://github.com/user-attachments/assets/fc9bd2ae-b9dd-402e-9939-d9a5028b0a59" /><img width="323" alt="zx4" src="https://github.com/user-attachments/assets/6b8d7993-52df-4940-9839-60b9e64c82e0" />
 
 Example application:
 ```c++
@@ -77,8 +81,6 @@ int main()
 }
 ```
 
-<img width="323" alt="zx_hello_world" src="https://github.com/user-attachments/assets/6933252b-8e54-4606-98e1-158c67ca30f1" /><img width="322" alt="zx_hello_graphics" src="https://github.com/user-attachments/assets/20bdc17b-3fc0-40f8-a041-e7098a3fa28b" /><img width="323" alt="zx3" src="https://github.com/user-attachments/assets/fc9bd2ae-b9dd-402e-9939-d9a5028b0a59" />
-
 Assembly produced for the `int main()` function:
 ```gas
 _main:
@@ -94,26 +96,20 @@ _main:
 Assembly produced for the `ZX::Console::print(const char*)` function:
 ```gas
 __ZN2ZX7Console5printEPKc:
-        ld      e, l
-        ld      d, h
-        ld      c, (hl)
-        ld      a, c
+        ld      a, (hl)
         or      a, a
         jr      z, .LBB2_3
         ld      iy, 23610
-        inc     de
-        ld      (__ZN2ZX7Console5printEPKc__variables), de
+        inc     hl
         .local  .LBB2_2
 .LBB2_2:
-        ld      a, c
+        ld      (__ZN2ZX7Console5printEPKc__variables), hl
         ;APP
         rst $10
         ;NO_APP
         ld      hl, (__ZN2ZX7Console5printEPKc__variables)
-        ld      c, (hl)
+        ld      a, (hl)
         inc     hl
-        ld      (__ZN2ZX7Console5printEPKc__variables), hl
-        ld      a, c
         or      a, a
         jr      nz, .LBB2_2
         .local  .LBB2_3
