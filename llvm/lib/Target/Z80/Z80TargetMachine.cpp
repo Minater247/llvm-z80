@@ -223,6 +223,7 @@ bool Z80PassConfig::addRegAssignAndRewriteOptimized() {
 void Z80PassConfig::addMachineLateOptimization() {
   TargetPassConfig::addMachineLateOptimization();
   addPass(createZ80MachineLateOptimizationPass());
+  addPass(createZ80DanglingRegPass());
 }
 
 void Z80PassConfig::addPreEmitPass2() {

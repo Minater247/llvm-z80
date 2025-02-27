@@ -38,6 +38,7 @@ FunctionPass *createZ80MachinePreRAOptimizationPass();
 FunctionPass *createZ80MachineLateOptimizationPass();
 FunctionPass *createZ80BranchSelectorPass();
 FunctionPass *createZ80PostRewritePass();
+FunctionPass *createZ80DanglingRegPass();
 
 void initializeZ80PreLegalizerCombinerPass(PassRegistry &);
 void initializeZ80PostLegalizerCombinerPass(PassRegistry &);
