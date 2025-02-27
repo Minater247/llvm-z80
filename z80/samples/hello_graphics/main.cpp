@@ -2,6 +2,7 @@
 #include "zx.h"
 
 int main() {
+    ZX::ScopedDisableInterrupts DI;
     uint8_t x = 27;
     uint8_t y = 0;
     int8_t dx = 1;
