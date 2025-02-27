@@ -224,6 +224,7 @@ void Z80PassConfig::addMachineLateOptimization() {
   TargetPassConfig::addMachineLateOptimization();
   addPass(createZ80MachineLateOptimizationPass());
   addPass(createZ80DanglingRegPass());
+  addPass(createZ80IncrementalLoadingPass());
 }
 
 void Z80PassConfig::addPreEmitPass2() {

@@ -20,6 +20,7 @@ add_public_tablegen_target(Z80CommonTableGen)
 set(sources
   GISel/Z80CallLowering.cpp
   GISel/Z80DanglingRegPass.cpp
+  GISel/Z80IncrementalLoadingPass.cpp
   GISel/Z80InlineAsmLowering.cpp
   GISel/Z80InstructionSelector.cpp
   GISel/Z80LDIOptPass.cpp
