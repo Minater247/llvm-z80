@@ -40,6 +40,12 @@ $ fuse-gtk hello_world.tap
 
 The compiler is not really that stable. It breaks and crashes on lots of various code. But for some it works.
 
+Some TAP files:
+ * [hello_world.tap](z80/samples/hello_world/hello_world.tap)
+ * [hello_graphics.tap](z80/samples/hello_graphics/hello_graphics.tap)
+ * [hello_keyboard.tap](z80/samples/hello_keyboard/hello_keyboard.tap)
+ * [hello_blit.tap](z80/samples/hello_blit/hello_blit.tap)
+
 This is all the help you'll get from me with this. Have fun.
 
 Some screenshots:
