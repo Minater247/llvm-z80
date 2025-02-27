@@ -225,7 +225,8 @@ void Z80FrameLowering::emitPrologue(MachineFunction &MF,
     Module &M = *F.getParent();
     GlobalVariable *GV = M.getGlobalVariable(GlobalName);
     assert(GV != nullptr);
-    BuildMI(MBB, MBBI, DL, TII.get(Z80::PUSH16r), Z80::IX)
+    BuildMI(MBB, MBBI, DL, TII.get(Z80::PUSH16r))
+        .addReg(Z80::IX)
         .setMIFlag(MachineInstr::FrameSetup);
     BuildMI(MBB, MBBI, DL, TII.get(Z80::LD16ri), Z80::IX)
         .addGlobalAddress(GV)
@@ -243,7 +244,8 @@ void Z80FrameLowering::emitPrologue(MachineFunction &MF,
             .addImm(StackSize)
             .setMIFlag(MachineInstr::FrameSetup);
         if (!Is24Bit) {
-          BuildMI(MBB, MBBI, DL, TII.get(Z80::PUSH16r), Z80::IX)
+          BuildMI(MBB, MBBI, DL, TII.get(Z80::PUSH16r))
+              .addReg(Z80::IX)
               .setMIFlag(MachineInstr::FrameSetup);
           BuildMI(MBB, MBBI, DL, TII.get(Z80::LD16ri), Z80::IX)
               .addImm(0)
@@ -263,7 +265,8 @@ void Z80FrameLowering::emitPrologue(MachineFunction &MF,
         }
       } else {
         if (!Is24Bit) {
-          BuildMI(MBB, MBBI, DL, TII.get(Z80::PUSH16r), Z80::IX)
+          BuildMI(MBB, MBBI, DL, TII.get(Z80::PUSH16r))
+              .addReg(Z80::IX)
               .setMIFlag(MachineInstr::FrameSetup);
           BuildMI(MBB, MBBI, DL, TII.get(Z80::LD16ri), Z80::IX)
               .addImm(0)
