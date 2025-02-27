@@ -39,6 +39,15 @@ Z80DanglingRegPass::Z80DanglingRegPass()
 
 bool Z80DanglingRegPass::runOnMachineFunction(MachineFunction &MF)
 {
+  // For some unknown reason we have leftover COPY statements in the code, like
+  //      $bc = COPY $hl
+  //      .. isntructiosn that do not use $bc or $b or $c
+  //      $bc = LD16ri i16 1794
+  // So $bc is defined, not used, then defined again.
+  // This pass gets rid of the first statement.
+  //
+  // The machine-cp pass does not touch dangling copies like this.
+
   bool changes = false;
   const TargetRegisterInfo *TRI = MF.getSubtarget().getRegisterInfo();
   for (auto& MBB : MF) {
@@ -76,15 +85,17 @@ bool Z80DanglingRegPass::runOnMachineFunction(MachineFunction &MF)
       size_t i = 0;
       for (const MachineOperand &MO : MI.operands()) {
         ++i;
-        // ignore the defined register when clobbering
-        if (i == 1 && Defined)
-            continue;
         if (!MO.isReg())
           continue;
         Register Reg = MO.getReg();
         if (!Reg || Reg.isVirtual())
           continue;
         for (auto it = DefinedRegs.begin(); it != DefinedRegs.end(); ) {
+          // if this is defined, ignore direct register
+          if (i == 1 && it->first == Defined) {
+            ++it;
+            continue;
+          }
           if (it->first == Reg || TRI->isSubRegister(it->first, Reg) || TRI->isSubRegister(Reg, it->first)) {
             LLVM_DEBUG(dbgs() << "Z80DanglingRegPass: used register " << TRI->getName(it->first) << ": "; MI.dump());
             it = DefinedRegs.erase(it);
@@ -94,6 +105,7 @@ bool Z80DanglingRegPass::runOnMachineFunction(MachineFunction &MF)
         }
       }
 
+      // Now check if the Defined register has already been defined but has not been used since
       if (Defined) {
         auto fit = DefinedRegs.find(Defined);
         if (fit != DefinedRegs.end()) {
