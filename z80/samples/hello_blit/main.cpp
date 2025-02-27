@@ -147,6 +147,8 @@ public:
 
 
 int main() {
+    ZX::ScopedDisableInterrupts DI;
+
     ZX::Console::at(2, 10);
     ZX::Console::print("Press M for masked blitting.");
     ZX::Console::at(2, 11);

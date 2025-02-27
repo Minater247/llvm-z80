@@ -41,6 +41,22 @@ extern "C" {
 }
 
 namespace ZX {
+    inline void disable_interrupts() { __asm__ volatile("di"); }
+    inline void enable_interrupts() { __asm__ volatile("ei"); }
+
+    struct ScopedDisableInterrupts {
+        ScopedDisableInterrupts() {
+            disable_interrupts();
+        }
+
+        ScopedDisableInterrupts(ScopedDisableInterrupts&) = delete;
+        ScopedDisableInterrupts& operator=(ScopedDisableInterrupts&) = delete;
+
+        ~ScopedDisableInterrupts() {
+            enable_interrupts();
+        }
+    };
+
     struct Console {
         static void putchar(char c) {
             uint16_t iy = 23610;
@@ -169,14 +185,13 @@ namespace ZX {
             template <typename ScreenType>
             void paint(uint8_t x_in, uint8_t y_in) __attribute__((noinline)) {
                 uint8_t y = y_in * 8;
-                #pragma unroll
                 for (uint8_t cy = 0; cy < cfg.height; ) {
                     uint8_t *ptr = ScreenType::row(y + cy) + x_in;
                     #pragma unroll
                     for (uint8_t i = 0; i < 8; ++i) {
                         #pragma unroll
                         for (uint8_t x = 0; x < cfg.width / 8; ++x) {
-                          ptr[x] = (ptr[x] & mask[cy + i][x]) | bitmap[cy + i][x];
+                            ptr[x] = (ptr[x] & mask[cy + i][x]) | bitmap[cy + i][x];
                         }
                         ptr += ScreenType::SCANLINE_SIZE;
                     }
