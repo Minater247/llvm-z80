@@ -18,6 +18,8 @@ uint8_t read_keypress_mask() {
 
 int main()
 {
+  ZX::ScopedDisableInterrupts DI;
+
   ZX::Console::at(2, 18);
   ZX::Console::print("Use arrow keys or OPQA.");
   ZX::Console::at(2, 19);
