@@ -4,6 +4,7 @@
         .global __memcpy24, __memcpy23, __memcpy22, __memcpy21, __memcpy20, __memcpy19, __memcpy18, __memcpy17
         .global __memcpy16, __memcpy15, __memcpy14, __memcpy13, __memcpy12, __memcpy11, __memcpy10, __memcpy09
         .global __memcpy08, __memcpy07, __memcpy06, __memcpy05, __memcpy04, __memcpy03, __memcpy02, __memcpy01
+        .global __memcpy32_jr
 
         ; non-C-standard: this memcpy does not return destination address
         ; argments: dst=DE, src=HL, count=BC XXX not correct: need ex de, hl right now
@@ -24,8 +25,8 @@ __memcpy_nonzero:
         add     a, a                ; ldi is two bytes, so must double the offset
         cpl
         add     a, 0x41
-        ld      (.memcpy_jr + 1), a
-.memcpy_jr:
+        ld      (__memcpy32_jr + 1), a
+__memcpy32_jr:
         jr      __memcpy32
         ; setup is 61 t-states, break even vs just LDIR at ~61/(21-16)=12 bytes.
 
