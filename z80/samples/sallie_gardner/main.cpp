@@ -21,6 +21,9 @@ int main() {
         horse_010,
     };
 
+    ZX::Console::border(7);
+    memset(ZX::Screen::ptr() + 32*192, 0x38, 32*192/8);
+
     // we use double buffering
     static uint8_t buffer[32*192];
 
@@ -30,6 +33,7 @@ int main() {
             // Pure C++ version is quite slow right now
             RLE::decode(frame, buffer);
 #else
+            //rle_decode(frame, ZX::Screen::ptr());
             rle_decode(frame, buffer);
 #endif
 
@@ -37,7 +41,9 @@ int main() {
             __asm__ volatile("halt");
             ZX::disable_interrupts();
 
+#if 1
             memcpy(ZX::Screen::ptr(), buffer, 32*192);
+#endif
         }
     }
 }

@@ -39,7 +39,7 @@ done
 
 for i in *.zx.bin
 do
-  python3 rle.py encode $i $i.rle
+  python3 rle2.py encode $i $i.rle
 done
 
 python3 files2c.py horse_*.rle horse.h

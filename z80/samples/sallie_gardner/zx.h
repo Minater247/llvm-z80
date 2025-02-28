@@ -73,6 +73,15 @@ namespace ZX {
             while (*str)
                 putchar(*str++);
         }
+
+        static void border(uint8_t color) {
+            __asm__ volatile (
+                "out\t(0xfe), a"
+                :
+                : "a"(color)
+                :
+            );
+        }
     };
 
     namespace Keyboard {
