@@ -37,7 +37,11 @@ def run_length_encode(input_file, output_file):
             encoded_data.append(control_byte)
         else:
             start = i
-            while i < len(data) and data[i] not in (0x00, 0xFF) and (i - start) < 12:
+            while i < len(data) and (i - start) < 12:
+                if data[i] in (0x00, 0xFF):
+                  # only break if the new data keeps on going
+                  if i + 1 >= len(data) or data[i + 1] == data[i]:
+                    break
                 i += 1
             count = i - start
             control_byte = 1 + 2 * 24 + 3 + 2 * 24 + 3 + 2 * (12 - count)
