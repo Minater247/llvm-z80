@@ -202,6 +202,35 @@ bool Z80IncrementalLoadingPass::runOnMachineFunction(MachineFunction &MF)
 
         do {
           // We look for
+          //    $r0 = LD16ri 253
+          // And try to optimize the immediate if we already have on in there
+          if (MI0.getOpcode() != Z80::LD16ri)
+            break;
+          Register r0 = MI0.getOperand(0).getReg();
+          auto& r0RE = getReg(r0);
+          if (!r0RE.immediate)
+            break;
+          auto Value = extractImmediate(MI0.getOperand(1));
+          if (!Value)
+            break;
+          // make sure we know where it was last used
+          if (!r0RE.lastUse)
+            break;
+          // if exactly same value
+          if (*Value == *r0RE.immediate) {
+            LLVM_DEBUG(dbgs() << "Z80IncrementalLoadingPass: no change in value of " << TRI->getName(r0) << ", dropping: "; MI0.dump());
+            MI0.removeFromParent();
+            r0RE.clearLastKill();
+            changes = true;
+            applied = true;
+          }
+          // XXX could also optimize increment and decrement
+        } while(false);
+        if (applied)
+          continue;
+
+        do {
+          // We look for
           //    $r0 = COPY $r1
           //    $r0 = ADD16ao killed $r0(tied-def 0), killed $r2, implicit-def dead $f
           //    $r1 = COPY killed $r0
@@ -353,6 +382,7 @@ bool Z80IncrementalLoadingPass::runOnMachineFunction(MachineFunction &MF)
           } else {
             getReg(Dst).def(Src, 0);
           }
+          getReg(Src).use(&MI);
           continue;
         }
       } else if (MI.getOpcode() == Z80::LD16ri) {
@@ -363,10 +393,11 @@ bool Z80IncrementalLoadingPass::runOnMachineFunction(MachineFunction &MF)
         auto& RE = getReg(Dst);
         if (MO1.isImm()) {
           RE.setImm(MO1.getImm());
+          continue;
         } else if (MO1.isCImm()) {
           RE.setImm(MO1.getCImm()->getZExtValue());
+          continue;
         }
-        continue;
       } else if (MI.getOpcode() == Z80::ADD16ao) {
         auto& MO0 = MI.getOperand(0);
         auto& MO1 = MI.getOperand(1);
@@ -390,6 +421,7 @@ bool Z80IncrementalLoadingPass::runOnMachineFunction(MachineFunction &MF)
         } else if (DstRE.immediate) {
           clobber(Dst);
         }
+        getReg(Src).use(&MI);
         continue;
       } else if (MI.getOpcode() == Z80::INC16r) {
         auto& MO0 = MI.getOperand(0);
@@ -440,6 +472,7 @@ bool Z80IncrementalLoadingPass::runOnMachineFunction(MachineFunction &MF)
         } else if (DstRE.immediate) {
           clobber(Dst);
         }
+        getReg(Src).use(&MI);
         continue;
       }
 
