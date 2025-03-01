@@ -54,10 +54,19 @@ bool Z80IncrementalLoadingPass::runOnMachineFunction(MachineFunction &MF)
       return regOff || immediate;
     }
 
+    void reset()
+    {
+      if (isSet()) {
+        LLVM_DEBUG(dbgs() << "Z80IncrementalLoadingPass: clearing " << TRI->getName(reg) << "\n");
+      }
+      immediate.reset();
+      regOff.reset();
+      lastUse = nullptr;
+    }
+
     void def(Register Reg, int64_t offset) {
       if (Reg == reg) {
-        regOff.reset();
-        immediate.reset();
+        reset();
         return;
       }
       LLVM_DEBUG(dbgs() << "Z80IncrementalLoadingPass: " << TRI->getName(reg) << " = " << TRI->getName(Reg) << " + " << offset << "\n");
@@ -88,6 +97,25 @@ bool Z80IncrementalLoadingPass::runOnMachineFunction(MachineFunction &MF)
       } else if (regOff) {
         regOff->second = regOff->second - 1;
         LLVM_DEBUG(dbgs() << "Z80IncrementalLoadingPass: " << TRI->getName(reg) << " = " << TRI->getName(regOff->first) << " + " << regOff->second << "\n");
+      }
+    }
+
+    void ex(RegisterEntry& RE)
+    {
+      RegisterEntry RECopy = RE;
+      if (immediate) {
+        RE.setImm(*immediate);
+      } else if (regOff) {
+        RE.def(regOff->first, regOff->second);
+      } else {
+        RE.reset();
+      }
+      if (RECopy.immediate) {
+        setImm(*RECopy.immediate);
+      } else if (RECopy.regOff) {
+        def(RECopy.regOff->first, RECopy.regOff->second);
+      } else {
+        reset();
       }
     }
 
@@ -387,6 +415,31 @@ bool Z80IncrementalLoadingPass::runOnMachineFunction(MachineFunction &MF)
         hlRE.dec();
         auto& deRE = getReg(Z80::DE);
         deRE.dec();
+        continue;
+      } else if (MI.getOpcode() == Z80::EX16DE) {
+        auto& hlRE = getReg(Z80::HL);
+        auto& deRE = getReg(Z80::DE);
+        hlRE.ex(deRE);
+        continue;
+      } else if (MI.getOpcode() == Z80::ADD16aa) {
+        auto& MO0 = MI.getOperand(0);
+        auto& MO1 = MI.getOperand(1);
+        Register Dst = MO0.getReg();
+        Register Src = MO1.getReg();
+        assert(Dst && !Dst.isVirtual());
+        assert(Src && !Src.isVirtual());
+        auto& DstRE = getReg(Dst);
+        auto& SrcRE = getReg(Src);
+        clobber(Z80::F);
+        if (DstRE.regOff) {
+          if (SrcRE.immediate) {
+            DstRE.def(DstRE.regOff->first, DstRE.regOff->second + *SrcRE.immediate);
+          } else {
+            clobber(Dst);
+          }
+        } else if (DstRE.immediate) {
+          clobber(Dst);
+        }
         continue;
       }
 
