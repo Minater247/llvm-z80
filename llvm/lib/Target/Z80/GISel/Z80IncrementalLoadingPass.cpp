@@ -46,6 +46,7 @@ bool Z80IncrementalLoadingPass::runOnMachineFunction(MachineFunction &MF)
   struct RegisterEntry {
     const TargetRegisterInfo *TRI;
     Register reg;
+    MachineInstr* lastUse = nullptr;
     Optional<std::pair<Register, int64_t>> regOff;
     Optional<int64_t> immediate;
 
@@ -69,6 +70,23 @@ bool Z80IncrementalLoadingPass::runOnMachineFunction(MachineFunction &MF)
         regOff->second = regOff->second + 1;
         LLVM_DEBUG(dbgs() << "Z80IncrementalLoadingPass: " << TRI->getName(reg) << " = " << TRI->getName(regOff->first) << " + " << regOff->second << "\n");
       }
+    }
+
+    void use(MachineInstr *MI) {
+      if (lastUse == MI)
+          return;
+      lastUse = MI;
+      LLVM_DEBUG(dbgs() << "Z80IncrementalLoadingPass: " << TRI->getName(reg) << " used\n");
+    }
+
+    void clearLastKill() {
+      assert(lastUse);
+      for (auto& MO : lastUse->operands()) {
+        if (MO.isReg() && MO.getReg() == reg && MO.isKill()) {
+          MO.setIsKill(false);
+          LLVM_DEBUG(dbgs() << "Z80IncrementalLoadingPass: cleared kill in "; lastUse->dump());
+        }
+    }
     }
   };
 
@@ -164,9 +182,15 @@ bool Z80IncrementalLoadingPass::runOnMachineFunction(MachineFunction &MF)
           // make sure it is $r2 we add
           if (MI2.getOperand(2).getReg() != r2)
             break;
+          // make sure that $r2 is killed
+          if (!MI2.getOperand(2).isKill())
+            break;
           // make sure that $r0 is currently already an offset of $r1
           auto& r0RE = getReg(r0);
           if (!r0RE.regOff || r0RE.regOff->first != r1)
+            break;
+          // make sure we know where it was last used
+          if (!r0RE.lastUse)
             break;
 
           int64_t OldOffset = r0RE.regOff->second;
@@ -186,6 +210,7 @@ bool Z80IncrementalLoadingPass::runOnMachineFunction(MachineFunction &MF)
             changes = true;
             applied = true;
             LLVM_DEBUG(dbgs() << "Z80IncrementalLoadingPass: replaced 3 instruction with "; NewMI->dump());
+            r0RE.clearLastKill();
             break;
           } else {
             --MII;
@@ -197,6 +222,7 @@ bool Z80IncrementalLoadingPass::runOnMachineFunction(MachineFunction &MF)
             changes = true;
             applied = true;
             LLVM_DEBUG(dbgs() << "Z80IncrementalLoadingPass: replaced 2 instruction with "; NewMI->dump());
+            r0RE.clearLastKill();
             break;
           }
         } while(false);
@@ -275,10 +301,17 @@ bool Z80IncrementalLoadingPass::runOnMachineFunction(MachineFunction &MF)
       }
 
       for (const MachineOperand &MO : MI.operands()) {
-        if (!MO.isReg() || !MO.isDef())
+        if (!MO.isReg()) {
           continue;
+        }
+        Register Reg = MO.getReg();
+        assert(Reg && !Reg.isVirtual());
         // Reg gets defined. Clobber anything that uses it.
-        clobber(MO.getReg());
+        if (MO.isDef()) {
+          clobber(MO.getReg());
+        } else if (MO.isUse() && Regs.count(Reg) != 0) {
+            getReg(Reg).use(&MI);
+        }
       }
     }
   }
