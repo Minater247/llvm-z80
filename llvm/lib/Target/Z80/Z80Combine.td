@@ -25,6 +25,12 @@ def flip_setcc_cond : GICombineRule<
          [{ return matchFlipSetCCCond(*${mi}, MRI, ${matchinfo}); }]),
   (apply [{ applyFlipSetCCCond(*${mi}, B, Observer, *${matchinfo}); }])>;
 
+def combine_load_store : GICombineRule<
+  (defs root:$mi),
+  (match (wip_match_opcode G_LOAD):$mi,
+         [{ return matchCombineLoadStore(*${mi}, MRI); }]),
+  (apply [{ applyCombineLoadStore(*${mi}, MRI, B, Observer); }])>;
+
 def Z80PreLegalizerCombinerHelper
     : GICombinerHelper<"Z80GenPreLegalizerCombinerHelper", [
         and_ext, and_or_disjoint_mask, combine_ext_or_trunc, combine_identity,
@@ -46,7 +52,7 @@ def Z80PreLegalizerCombinerHelper
         undef_combines, unmerge_cst, unmerge_dead_to_trunc, unmerge_merge,
         unmerge_zext_to_zext, width_reduction_combines,
         xor_of_and_with_same_reg,
-        shl_to_add
+        shl_to_add, combine_load_store
     ]> {
   let DisableRuleOption = "z80prelegalizercombiner-disable-rule";
 }

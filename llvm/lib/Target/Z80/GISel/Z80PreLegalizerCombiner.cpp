@@ -112,6 +112,45 @@ static void applyFlipSetCCCond(MachineInstr &MI, MachineIRBuilder &Builder,
   MI.eraseFromParent();
 }
 
+static bool matchCombineLoadStore(MachineInstr &LoadMI, MachineRegisterInfo &MRI) {
+  auto& MBB = *LoadMI.getParent();
+  auto It = LoadMI.getIterator();
+  if (It == MBB.end())
+    return false;
+  auto& StoreMI = *std::next(It);
+  // next operation is store
+  if (StoreMI.getOpcode() != TargetOpcode::G_STORE)
+    return false;
+  Register Reg = LoadMI.getOperand(0).getReg();
+  // store acts on the loaded value
+  if (StoreMI.getOperand(0).getReg() != Reg)
+    return false;
+  LLT RegTy = MRI.getType(Reg);
+  // store is >= 2 bytes
+  if (RegTy.getSizeInBytes() < 2)
+    return false;
+  return true;
+}
+
+static void applyCombineLoadStore(MachineInstr &LoadMI, MachineRegisterInfo &MRI,
+                                  MachineIRBuilder &Builder,
+                                  GISelChangeObserver &Observer) {
+  auto& MBB = *LoadMI.getParent();
+  auto It = LoadMI.getIterator();
+  auto& StoreMI = *std::next(It);
+  auto InsertIt = std::next(It, 2);
+  Register Reg = LoadMI.getOperand(0).getReg();
+  MachineMemOperand *DstMMO = *StoreMI.memoperands_begin();
+  MachineMemOperand *SrcMMO = *LoadMI.memoperands_begin();
+  LLT RegTy = MRI.getType(Reg);
+  uint64_t Size = RegTy.getSizeInBytes();
+  Builder.setInstrAndDebugLoc(LoadMI);
+  Register SizeReg = Builder.buildConstant(LLT::scalar(16), Size).getReg(0);
+  Builder.buildMemCpy(StoreMI.getOperand(1), LoadMI.getOperand(1), SizeReg, *DstMMO, *SrcMMO);
+  LoadMI.eraseFromParent();
+  StoreMI.eraseFromParent();
+}
+
 #define Z80PRELEGALIZERCOMBINERHELPER_GENCOMBINERHELPER_CPP
 #include "Z80GenPreLegalizeGICombiner.inc"
 #undef Z80PRELEGALIZERCOMBINERHELPER_GENCOMBINERHELPER_CPP
