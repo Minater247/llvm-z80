@@ -50,7 +50,16 @@ bool Z80IncrementalLoadingPass::runOnMachineFunction(MachineFunction &MF)
     Optional<std::pair<Register, int64_t>> regOff;
     Optional<int64_t> immediate;
 
+    bool isSet() const {
+      return regOff || immediate;
+    }
+
     void def(Register Reg, int64_t offset) {
+      if (Reg == reg) {
+        regOff.reset();
+        immediate.reset();
+        return;
+      }
       LLVM_DEBUG(dbgs() << "Z80IncrementalLoadingPass: " << TRI->getName(reg) << " = " << TRI->getName(Reg) << " + " << offset << "\n");
       regOff.emplace(Reg, offset);
       immediate.reset();
@@ -68,6 +77,16 @@ bool Z80IncrementalLoadingPass::runOnMachineFunction(MachineFunction &MF)
         LLVM_DEBUG(dbgs() << "Z80IncrementalLoadingPass: " << TRI->getName(reg) << " = " << *immediate << "\n");
       } else if (regOff) {
         regOff->second = regOff->second + 1;
+        LLVM_DEBUG(dbgs() << "Z80IncrementalLoadingPass: " << TRI->getName(reg) << " = " << TRI->getName(regOff->first) << " + " << regOff->second << "\n");
+      }
+    }
+
+    void dec() {
+      if (immediate) {
+        *immediate = *immediate - 1;
+        LLVM_DEBUG(dbgs() << "Z80IncrementalLoadingPass: " << TRI->getName(reg) << " = " << *immediate << "\n");
+      } else if (regOff) {
+        regOff->second = regOff->second - 1;
         LLVM_DEBUG(dbgs() << "Z80IncrementalLoadingPass: " << TRI->getName(reg) << " = " << TRI->getName(regOff->first) << " + " << regOff->second << "\n");
       }
     }
@@ -106,7 +125,8 @@ bool Z80IncrementalLoadingPass::runOnMachineFunction(MachineFunction &MF)
       for (auto it = Regs.begin(); it != Regs.end(); ) {
         auto& RE = it->second;
         if (RE.reg == Reg || TRI->isSubRegister(RE.reg, Reg) || TRI->isSubRegister(Reg, RE.reg)) {
-          LLVM_DEBUG(dbgs() << "Z80IncrementalLoadingPass: clearing " << TRI->getName(RE.reg) << "\n");
+          if (RE.isSet())
+            LLVM_DEBUG(dbgs() << "Z80IncrementalLoadingPass: clearing " << TRI->getName(RE.reg) << "\n");
           it = Regs.erase(it);
           continue;
         } else if (RE.regOff && (RE.regOff->first == Reg || TRI->isSubRegister(RE.regOff->first, Reg) || TRI->isSubRegister(Reg, RE.regOff->first))) {
@@ -152,7 +172,55 @@ bool Z80IncrementalLoadingPass::runOnMachineFunction(MachineFunction &MF)
 
         bool applied = false;
 
-        // look for the pattern
+        do {
+          // We look for
+          //    $r0 = COPY $r1
+          //    $r0 = ADD16ao killed $r0(tied-def 0), killed $r2, implicit-def dead $f
+          //    $r1 = COPY killed $r0
+          // where $r0 = IX/IY, $r1 = DE and $r2 = BC
+          if (!(MI0.getOpcode() == Z80::COPY && MI1.getOpcode() == Z80::ADD16ao && MI2.getOpcode() == Z80::COPY))
+            break;
+          // sanity
+          if (!MI0.getOperand(0).isReg() || !MI0.getOperand(1).isReg())
+            break;
+          if (!MI1.getOperand(0).isReg() || !MI1.getOperand(1).isReg() || !MI1.getOperand(2).isReg())
+            break;
+          if (!MI2.getOperand(0).isReg() || !MI2.getOperand(1).isReg())
+            break;
+          // extract registers in the pattern
+          Register r0 = MI0.getOperand(0).getReg();
+          Register r1 = MI0.getOperand(1).getReg();
+          Register r2 = MI1.getOperand(2).getReg();
+          bool isR2Kill = MI1.getOperand(2).isKill();
+          // make sure r0 is IX/IY
+          if (!(r0 == Z80::IX || r0 == Z80::IY))
+            break;
+          if (r1 != Z80::DE || r2 != Z80::BC)
+            break;
+          if (MI2.getOperand(0).getReg() != r1 || MI2.getOperand(1).getReg() != r0)
+            break;
+          if (MI1.getOperand(0).getReg() != r0 || MI1.getOperand(1).getReg() != r0)
+            break;
+          // make sure that $r0 is killed at the end
+          if (!MI2.getOperand(1).isKill())
+            break;
+          MachineIRBuilder MIB(MI0);
+          Register HL = Z80::HL;
+          MachineInstr *EX0 = MIB.buildInstr(Z80::EX16DE);
+          MIB.buildInstr(Z80::ADD16aa).addDef(HL).addUse(r2, isR2Kill ? RegState::Kill : 0);
+          MIB.buildInstr(Z80::EX16DE);
+          MII = EX0->getIterator();
+          MI0.eraseFromParent();
+          MI1.eraseFromParent();
+          MI2.eraseFromParent();
+          changes = true;
+          applied = true;
+          LLVM_DEBUG(dbgs() << "Z80IncrementalLoadingPass: optimized DE = DE + BC\n");
+          break;
+        } while(false);
+        if (applied)
+            continue;
+
         do {
           // We look for
           //    $r0 = COPY $r1
@@ -199,17 +267,23 @@ bool Z80IncrementalLoadingPass::runOnMachineFunction(MachineFunction &MF)
             break;
           int64_t NewOffset = *NewOffsetValue;
 
-          if (NewOffset == OldOffset + 1) {
+          int64_t Delta = NewOffset - OldOffset;
+
+          if (Delta == 1 || Delta == 2) {
             --MII;
             MII = MBB.erase(MII);
             MII = MBB.erase(MII);
             MII = MBB.erase(MII);
             MachineInstr *NewMI = BuildMI(MBB, MII, MI1.getDebugLoc(), TII->get(Z80::INC16r), r0)
               .addReg(r0);
+            if (Delta == 2) {
+              BuildMI(MBB, MII, MI1.getDebugLoc(), TII->get(Z80::INC16r), r0)
+                .addReg(r0);
+            }
             MII = NewMI->getIterator();
             changes = true;
             applied = true;
-            LLVM_DEBUG(dbgs() << "Z80IncrementalLoadingPass: replaced 3 instruction with "; NewMI->dump());
+            LLVM_DEBUG(dbgs() << "Z80IncrementalLoadingPass: replaced 3 instruction with " << Delta << " X "; NewMI->dump());
             r0RE.clearLastKill();
             break;
           } else {
@@ -297,6 +371,22 @@ bool Z80IncrementalLoadingPass::runOnMachineFunction(MachineFunction &MF)
         assert(Dst == Dst2);
         auto& RE = getReg(Dst);
         RE.inc();
+        continue;
+      } else if (MI.getOpcode() == Z80::LDI16) {
+        auto& bcRE = getReg(Z80::BC);
+        bcRE.dec();
+        auto& hlRE = getReg(Z80::HL);
+        hlRE.inc();
+        auto& deRE = getReg(Z80::DE);
+        deRE.inc();
+        continue;
+      } else if (MI.getOpcode() == Z80::LDD16) {
+        auto& bcRE = getReg(Z80::BC);
+        bcRE.dec();
+        auto& hlRE = getReg(Z80::HL);
+        hlRE.dec();
+        auto& deRE = getReg(Z80::DE);
+        deRE.dec();
         continue;
       }
 
