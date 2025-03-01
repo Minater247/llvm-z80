@@ -127,8 +127,18 @@ namespace ZX {
             return (uint8_t*)row_addresses[y];
         }
 
+        constexpr static uint16_t rowblock_addresses[24] = {row_addresses[0], row_addresses[8], row_addresses[16], row_addresses[24], row_addresses[32], row_addresses[40], row_addresses[48], row_addresses[56], row_addresses[64], row_addresses[72], row_addresses[80], row_addresses[88], row_addresses[96], row_addresses[104], row_addresses[112], row_addresses[120], row_addresses[128], row_addresses[136], row_addresses[144], row_addresses[152], row_addresses[160], row_addresses[168], row_addresses[176], row_addresses[184]};
+
+        constexpr static uint16_t attr_addresses[24] = {
+            ADDRESS + 6144 +  0 * 32, ADDRESS + 6144 +  1 * 32, ADDRESS + 6144 +  2 * 32, ADDRESS + 6144 +  3 * 32,
+            ADDRESS + 6144 +  4 * 32, ADDRESS + 6144 +  5 * 32, ADDRESS + 6144 +  6 * 32, ADDRESS + 6144 +  7 * 32,
+            ADDRESS + 6144 +  8 * 32, ADDRESS + 6144 +  9 * 32, ADDRESS + 6144 + 10 * 32, ADDRESS + 6144 + 11 * 32,
+            ADDRESS + 6144 + 12 * 32, ADDRESS + 6144 + 13 * 32, ADDRESS + 6144 + 14 * 32, ADDRESS + 6144 + 15 * 32,
+            ADDRESS + 6144 + 16 * 32, ADDRESS + 6144 + 17 * 32, ADDRESS + 6144 + 18 * 32, ADDRESS + 6144 + 19 * 32,
+            ADDRESS + 6144 + 20 * 32, ADDRESS + 6144 + 21 * 32, ADDRESS + 6144 + 22 * 32, ADDRESS + 6144 + 23 * 32,
+        };
         static uint8_t * attr_row(uint8_t y) {
-            return ptr() + ROW_SIZE * HEIGHT + (y / 8) * ROW_SIZE;
+            return (uint8_t*)attr_addresses[y / 8];
         }
     };
 
@@ -150,10 +160,10 @@ namespace ZX {
 
             template <typename ScreenType>
             void paint(uint8_t x_in, uint8_t y_in) __attribute__((noinline)) {
-                uint8_t y = y_in * 8;
+                auto *rowblock = &ScreenType::rowblock_addresses[y_in];
                 #pragma unroll
                 for (uint8_t cy = 0; cy < cfg.height; ) {
-                    uint8_t *ptr = ScreenType::row(y + cy) + x_in;
+                    uint8_t *ptr = (uint8_t*)*rowblock++ + x_in;
                     #pragma unroll
                     for (uint8_t i = 0; i < 8; ++i) {
                         memcpy(ptr, &bitmap[cy + i][0], cfg.width / 8);
@@ -184,9 +194,9 @@ namespace ZX {
 
             template <typename ScreenType>
             void paint(uint8_t x_in, uint8_t y_in) __attribute__((noinline)) {
-                uint8_t y = y_in * 8;
+                auto *rowblock = &ScreenType::rowblock_addresses[y_in];
                 for (uint8_t cy = 0; cy < cfg.height; ) {
-                    uint8_t *ptr = ScreenType::row(y + cy) + x_in;
+                    uint8_t *ptr = (uint8_t*)*rowblock++ + x_in;
                     #pragma unroll
                     for (uint8_t i = 0; i < 8; ++i) {
                         #pragma unroll
