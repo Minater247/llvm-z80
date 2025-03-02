@@ -1077,8 +1077,9 @@ LegalizerHelper::LegalizeResult Z80LegalizerInfo::legalizeMemIntrinsic(
           // Copy one less byte.
           LenReg = MIRBuilder.buildConstant(LenTy, --ConstLen->Value).getReg(0);
           // Now it's just an ldir.
-        } else
+        } else {
           LoadMMO = MI.memoperands().back();
+        }
 
         Register DE = Is24Bit ? Z80::UDE : Z80::DE;
         Register HL = Is24Bit ? Z80::UHL : Z80::HL;
@@ -1124,15 +1125,25 @@ LegalizerHelper::LegalizeResult Z80LegalizerInfo::legalizeMemIntrinsic(
               unsigned count = ConstLen->Value.getZExtValue();
               while (count--) {
                 auto LDI = MIRBuilder.buildInstr(Is24Bit ? Z80::LDI24 : Z80::LDI16);
-                // we don't care about the input value of BC
-                for (int i = LDI->getNumOperands() - 1; i >= 0; --i) {
-                    MachineOperand &Op = LDI->getOperand(i);
-                    if (Op.isReg() && Op.getReg() == Z80::BC) {
-                        LDI->removeOperand(i);
-                        continue;
-                    }
+                // we don't care about the input value of BC, so remove its use
+                if (count == ConstLen->Value.getZExtValue() - 1) {
+                  for (int i = LDI->getNumOperands() - 1; i >= 0; --i) {
+                      MachineOperand &Op = LDI->getOperand(i);
+                      if (Op.isReg() && Op.getReg() == Z80::BC) {
+                          LDI->removeOperand(i);
+                          continue;
+                      }
+                  }
+                  LDI.addReg(BC, RegState::ImplicitDefine);
                 }
-                LDI.addReg(BC, RegState::ImplicitDefine);
+                // at the end mark all defined registers as dead
+                if (count == 0) {
+                  for (auto& OP : LDI->operands()) {
+                    if (OP.isReg() && OP.isDef()) {
+                      OP.setIsDead(true);
+                    }
+                  }
+                }
               }
             } else {
               MIRBuilder.buildCopy(BC, LenReg);

@@ -75,6 +75,14 @@ bool Z80LDIOptPass::runOnMachineFunction(MachineFunction &MF)
   MachineRegisterInfo &MRI = MF.getRegInfo();
   const TargetInstrInfo *TII = MF.getSubtarget().getInstrInfo();
 
+  auto clearDead = [&](MachineInstr& MI, Register Reg) {
+    for (auto& OP : MI.operands()) {
+      if (OP.isReg() && OP.getReg() == Reg && OP.isDead()) {
+        OP.setIsDead(false);
+      }
+    }
+  };
+
   for (auto &MBB : MF) {
     Register hl_base_reg, de_base_reg;
     int64_t hl_base_offset = 0, de_base_offset = 0;
@@ -167,34 +175,42 @@ bool Z80LDIOptPass::runOnMachineFunction(MachineFunction &MF)
         if (auto Imm = getIConstantVRegValWithLookThrough(offset, MRI)) {
           int64_t offset_value = Imm->Value.getZExtValue();
           if (base == hl_base_reg && offset_value != hl_base_offset) {
+            clearDead(*LastLDI, Z80::HL);
             Register dest = MRI.createGenericVirtualRegister(LLT::pointer(0, 16));
-            BuildMI(MBB, std::next(LastLDI->getIterator()), LastLDI->getDebugLoc(), TII->get(TargetOpcode::COPY), dest).addReg(Z80::HL);
+            BuildMI(MBB, std::next(LastLDI->getIterator()), LastLDI->getDebugLoc(), TII->get(TargetOpcode::COPY), dest).addReg(Z80::HL, RegState::Kill);
             Register off = MRI.createGenericVirtualRegister(LLT::scalar(16));
             BuildMI(MBB, std::next(LastLDI->getIterator()), LastLDI->getDebugLoc(), TII->get(TargetOpcode::G_CONSTANT), off).addImm(offset_value - hl_base_offset);
             MI.getOperand(1).setReg(dest);
             MI.getOperand(2).setReg(off);
+            hl_base_reg = Register();
             changed = true;
           } else if (base == hl_base_reg && offset_value == hl_base_offset) {
+            clearDead(*LastLDI, Z80::HL);
             Register dest = MRI.createGenericVirtualRegister(LLT::pointer(0, 16));
-            BuildMI(MBB, std::next(LastLDI->getIterator()), LastLDI->getDebugLoc(), TII->get(TargetOpcode::COPY), dest).addReg(Z80::HL);
+            BuildMI(MBB, std::next(LastLDI->getIterator()), LastLDI->getDebugLoc(), TII->get(TargetOpcode::COPY), dest).addReg(Z80::HL, RegState::Kill);
             MI.setDesc(TII->get(TargetOpcode::COPY));
             MI.getOperand(1).setReg(dest);
             MI.removeOperand(2);
+            hl_base_reg = Register();
             changed = true;
           } else if (base == de_base_reg && offset_value != de_base_offset) {
+            clearDead(*LastLDI, Z80::DE);
             Register dest = MRI.createGenericVirtualRegister(LLT::pointer(0, 16));
-            BuildMI(MBB, std::next(LastLDI->getIterator()), LastLDI->getDebugLoc(), TII->get(TargetOpcode::COPY), dest).addReg(Z80::DE);
+            BuildMI(MBB, std::next(LastLDI->getIterator()), LastLDI->getDebugLoc(), TII->get(TargetOpcode::COPY), dest).addReg(Z80::DE, RegState::Kill);
             Register off = MRI.createGenericVirtualRegister(LLT::scalar(16));
             BuildMI(MBB, std::next(LastLDI->getIterator()), LastLDI->getDebugLoc(), TII->get(TargetOpcode::G_CONSTANT), off).addImm(offset_value - de_base_offset);
             MI.getOperand(1).setReg(dest);
             MI.getOperand(2).setReg(off);
+            de_base_reg = Register();
             changed = true;
           } else if (base == de_base_reg && offset_value == de_base_offset) {
+            clearDead(*LastLDI, Z80::DE);
             Register dest = MRI.createGenericVirtualRegister(LLT::pointer(0, 16));
-            BuildMI(MBB, std::next(LastLDI->getIterator()), LastLDI->getDebugLoc(), TII->get(TargetOpcode::COPY), dest).addReg(Z80::DE);
+            BuildMI(MBB, std::next(LastLDI->getIterator()), LastLDI->getDebugLoc(), TII->get(TargetOpcode::COPY), dest).addReg(Z80::DE, RegState::Kill);
             MI.setDesc(TII->get(TargetOpcode::COPY));
             MI.getOperand(1).setReg(dest);
             MI.removeOperand(2);
+            de_base_reg = Register();
             changed = true;
           }
         }
