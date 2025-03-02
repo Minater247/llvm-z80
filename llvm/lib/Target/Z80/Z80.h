@@ -26,7 +26,6 @@ class Z80TargetMachine;
 
 FunctionPass *createZ80PreLegalizeCombiner(bool IsOptNone);
 FunctionPass *createZ80PostLegalizeCombiner(bool IsOptNone);
-FunctionPass *createZ80LDIOptPass();
 FunctionPass *createZ80StaticStackPass();
 FunctionPass *createZ80SelfOrAndOptPass();
 InstructionSelector *createZ80InstructionSelector(const Z80TargetMachine &TM,
@@ -40,6 +39,7 @@ FunctionPass *createZ80BranchSelectorPass();
 FunctionPass *createZ80PostRewritePass();
 FunctionPass *createZ80DanglingRegPass();
 FunctionPass *createZ80IncrementalLoadingPass();
+FunctionPass *createZ80EarlyIncrementalLoadingPass();
 
 void initializeZ80PreLegalizerCombinerPass(PassRegistry &);
 void initializeZ80PostLegalizerCombinerPass(PassRegistry &);

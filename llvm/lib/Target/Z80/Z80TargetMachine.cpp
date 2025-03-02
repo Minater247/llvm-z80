@@ -185,7 +185,7 @@ void Z80PassConfig::addPreRegBankSelect() {
   // if we split the combines into separate O0/opt groupings.
   bool IsOptNone = getOptLevel() == CodeGenOpt::None;
   if (!IsOptNone) {
-    addPass(createZ80LDIOptPass());
+    addPass(createZ80EarlyIncrementalLoadingPass());
     addPass(createZ80PostLegalizeCombiner(IsOptNone));
   }
 }
