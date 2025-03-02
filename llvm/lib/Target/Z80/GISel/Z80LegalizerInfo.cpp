@@ -1158,11 +1158,11 @@ LegalizerHelper::LegalizeResult Z80LegalizerInfo::legalizeMemIntrinsic(
               MIRBuilder.buildInstr(Is24Bit ? Z80::CALL24 : Z80::CALL16)
                 .addExternalSymbol(call_name[name_index])
                 .addReg(DE, RegState::ImplicitKill)
-                .addReg(DE, RegState::ImplicitDefine)
+                .addReg(DE, RegState::ImplicitDefine + RegState::Dead)
                 .addReg(HL, RegState::ImplicitKill)
-                .addReg(HL, RegState::ImplicitDefine)
+                .addReg(HL, RegState::ImplicitDefine + RegState::Dead)
                 .addReg(BC, RegState::ImplicitKill)
-                .addReg(BC, RegState::ImplicitDefine)
+                .addReg(BC, RegState::ImplicitDefine + RegState::Dead)
                 .cloneMemRefs(MI)
               ;
             }
