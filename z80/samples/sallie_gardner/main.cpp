@@ -9,7 +9,7 @@ int main() {
 
     const uint8_t *frames[] = {
         // horse_000, // seems to be the same position as horse_010
-        horse_001,
+//        horse_001,
         horse_002,
         horse_003,
         horse_004,
@@ -19,32 +19,33 @@ int main() {
         horse_008,
         horse_009,
         horse_010,
+        horse_011,
     };
 
     ZX::Console::border(7);
     memset(ZX::Screen::ptr() + 32*192, 0x38, 32*192/8);
 
-    // we use double buffering
-    static uint8_t buffer[32*192];
+    rle_decode(horse_001, ZX::Screen::ptr());
+
+    ZX::enable_interrupts();
+    __asm__ volatile("halt");
+    ZX::disable_interrupts();
+
+    for ( int i = 0; i < 200; ++i ) __asm__ volatile("nop");
 
     while(true) {
         for (auto *frame : frames) {
-#if 0
-            // Pure C++ version is quite slow right now
-            RLE::decode(frame, buffer);
-#else
-            //rle_decode(frame, ZX::Screen::ptr());
-            rle_decode(frame, buffer);
-#endif
+            rle_decode(frame, ZX::Screen::ptr());
 
             ZX::enable_interrupts();
             __asm__ volatile("halt");
             ZX::disable_interrupts();
 
-#if 1
-            memcpy(ZX::Screen::ptr(), buffer, 32*192);
-#endif
+            // timing hack
+            for ( int i = 0; i < 200; ++i ) __asm__ volatile("nop");
         }
     }
+
+    return 0;
 }
 

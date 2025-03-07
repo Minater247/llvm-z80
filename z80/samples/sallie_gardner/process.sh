@@ -37,10 +37,21 @@ do
   python3 reorder_zx.py $i $n
 done
 
+prev=
 for i in *.zx.bin
 do
-  python3 rle.py encode $i $i.rle
+  if [ $i = "horse_000.zx.bin" ]; then
+    continue
+  fi
+  if [ -z "${prev}" ]; then
+    python3 rle.py encode $i $i.rle
+  else
+    echo python3 rle.py encode --relative $prev $i $i.rle
+    python3 rle.py encode --relative $prev $i $i.rle
+  fi
+  prev=$i
 done
+python3 rle.py encode --relative $prev horse_001.zx.bin horse_011.zx.bin.rle
 
 python3 files2c.py horse_*.rle horse.h
 
