@@ -198,6 +198,7 @@ bool Z80PassConfig::addRegBankSelect() {
 bool Z80PassConfig::addGlobalInstructionSelect() {
   addPass(new InstructionSelect);
   addPass(createZ80SelfOrAndOptPass());
+  addPass(createZ80UnrollLd());
   return false;
 }
 
@@ -205,6 +206,7 @@ void Z80PassConfig::addMachineSSAOptimization() {
   addPass(createZ80PostSelectCombiner());
   TargetPassConfig::addMachineSSAOptimization();
   addPass(createZ80MachineEarlyOptimizationPass());
+  addPass(createZ80BlitFolder());
 }
 
 void Z80PassConfig::addFastRegAlloc() {

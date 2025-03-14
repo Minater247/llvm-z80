@@ -18,6 +18,7 @@ tablegen(LLVM Z80GenSubtargetInfo.inc -gen-subtarget)
 add_public_tablegen_target(Z80CommonTableGen)
 
 set(sources
+  GISel/Z80BlitFolder.cpp
   GISel/Z80CallLowering.cpp
   GISel/Z80DanglingRegPass.cpp
   GISel/Z80EarlyIncrementalLoadingPass.cpp
@@ -31,6 +32,8 @@ set(sources
   GISel/Z80PreLegalizerCombiner.cpp
   GISel/Z80RegisterBankInfo.cpp
   GISel/Z80SelfOrAndOptPass.cpp
+  GISel/Z80Tracker.cpp
+  GISel/Z80UnrollLd.cpp
   Z80AsmPrinter.cpp
   Z80BranchSelector.cpp
   Z80CallingConv.cpp
