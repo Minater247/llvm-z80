@@ -46,10 +46,10 @@ bool Z80BlitFolder::runOnMachineFunction(MachineFunction &MF)
   MachineRegisterInfo &MRI = MF.getRegInfo();
   const TargetRegisterInfo *TRI = MF.getSubtarget().getRegisterInfo();
 
+  std::map<Register, std::vector<MachineInstr*>> todelete;
+  std::set<Register> phi_registers;
   for (auto& MBB : MF) {
     MachineInstr *PrevMI = nullptr;
-    std::map<Register, std::vector<MachineInstr*>> todelete;
-    std::set<Register> phi_registers;
     for (auto& MI : MBB) {
       bool IgnoreUse = false;
       LLVM_DEBUG(dbgs() << "Z80BlitFolder 1st pass: "; MI.dump());
@@ -166,13 +166,12 @@ bool Z80BlitFolder::runOnMachineFunction(MachineFunction &MF)
       }
       PrevMI = &MI;
     }
-
-    for (auto& e : todelete) {
-      LLVM_DEBUG(dbgs() << "Z80BlitFolder: dropping register " << Z80Tracker::RegisterEntry::getName(TRI, e.first) << "\n");
-      for (auto *MI : e.second) {
-        MI->removeFromParent();
-        changes = true;
-      }
+  }
+  for (auto& e : todelete) {
+    LLVM_DEBUG(dbgs() << "Z80BlitFolder: dropping register " << Z80Tracker::RegisterEntry::getName(TRI, e.first) << "\n");
+    for (auto *MI : e.second) {
+      MI->removeFromParent();
+      changes = true;
     }
   }
 
