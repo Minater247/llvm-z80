@@ -177,7 +177,7 @@ bool Z80BlitFolder::runOnMachineFunction(MachineFunction &MF)
     }
   }
   for (auto& e : todelete) {
-    LLVM_DEBUG(dbgs() << "Z80BlitFolder: dropping register " << Z80Tracker::RegisterEntry::getName(TRI, e.first) << "\n");
+    LLVM_DEBUG(dbgs() << "@Z80BlitFolder: dropping register " << Z80Tracker::RegisterEntry::getName(TRI, e.first) << "\n");
     for (auto *MI : e.second) {
       MI->removeFromParent();
       changes = true;
@@ -228,7 +228,7 @@ bool Z80BlitFolder::runOnMachineFunction(MachineFunction &MF)
           BuildMI(MBB, MI0, MI0.getDebugLoc(), TII->get(TargetOpcode::COPY))
             .addDef(Z80::IY)
             .addReg(SrcReg);
-          LLVM_DEBUG(dbgs() << "Z80BlitFolder: rewrote to use $hl and $iy\n");
+          LLVM_DEBUG(dbgs() << "@Z80BlitFolder: rewrote to use $hl and $iy\n");
           changes = true;
         } while(false);
       }
@@ -268,7 +268,7 @@ bool Z80BlitFolder::runOnMachineFunction(MachineFunction &MF)
             break;
           }
           if (DstRE.getRegOff().first == Src) {
-            LLVM_DEBUG(dbgs() << "Z80BlitFolder: dropping: "; MI.dump());
+            LLVM_DEBUG(dbgs() << "@Z80BlitFolder: dropping: "; MI.dump());
             MI.removeFromParent();
             applied = true;
             changes = true;
@@ -282,26 +282,26 @@ bool Z80BlitFolder::runOnMachineFunction(MachineFunction &MF)
             MachineInstr *INCMI = BuildMI(MBB, MI0, MI0.getDebugLoc(), TII->get(Z80::INC16r))
               .addDef(Dst)
               .addReg(Dst);
-            LLVM_DEBUG(dbgs() << "Z80BlitFolder: added: "; INCMI->dump());
+            LLVM_DEBUG(dbgs() << "@Z80BlitFolder: added: "; INCMI->dump());
             DstRE.inc(MI0);
             MI0.removeFromParent();
             changes = true;
             applied = true;
             if (MRI.use_empty(Src)) {
               if (MachineInstr *DefMI = MRI.getVRegDef(Src)) {
-                LLVM_DEBUG(dbgs() << "Z80BlitFolder: dropping: "; DefMI->dump());
+                LLVM_DEBUG(dbgs() << "@Z80BlitFolder: dropping: "; DefMI->dump());
                 DefMI->removeFromParent();
               }
             }
             break;
           } else if (Delta == 0) {
-            LLVM_DEBUG(dbgs() << "Z80BlitFolder: dropping: "; MI0.dump());
+            LLVM_DEBUG(dbgs() << "@Z80BlitFolder: dropping: "; MI0.dump());
             MI0.removeFromParent();
             changes = true;
             applied = true;
             if (MRI.use_empty(Src)) {
               if (MachineInstr *DefMI = MRI.getVRegDef(Src)) {
-                LLVM_DEBUG(dbgs() << "Z80BlitFolder: dropping: "; DefMI->dump());
+                LLVM_DEBUG(dbgs() << "@Z80BlitFolder: dropping: "; DefMI->dump());
                 DefMI->removeFromParent();
               }
             }
