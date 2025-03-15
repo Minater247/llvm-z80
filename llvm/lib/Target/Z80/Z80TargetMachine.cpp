@@ -208,6 +208,7 @@ void Z80PassConfig::addMachineSSAOptimization() {
   addPass(createZ80RegisterOptPass());
   addPass(createZ80MachineEarlyOptimizationPass());
   addPass(createZ80BlitFolder());
+  addPass(&DeadMachineInstructionElimID);
 }
 
 void Z80PassConfig::addFastRegAlloc() {
