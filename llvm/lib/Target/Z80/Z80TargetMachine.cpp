@@ -205,6 +205,7 @@ bool Z80PassConfig::addGlobalInstructionSelect() {
 void Z80PassConfig::addMachineSSAOptimization() {
   addPass(createZ80PostSelectCombiner());
   TargetPassConfig::addMachineSSAOptimization();
+  addPass(createZ80RegisterOptPass());
   addPass(createZ80MachineEarlyOptimizationPass());
   addPass(createZ80BlitFolder());
 }

@@ -42,6 +42,7 @@ FunctionPass *createZ80IncrementalLoadingPass();
 FunctionPass *createZ80EarlyIncrementalLoadingPass();
 FunctionPass *createZ80BlitFolder();
 FunctionPass *createZ80UnrollLd();
+FunctionPass *createZ80RegisterOptPass();
 
 void initializeZ80PreLegalizerCombinerPass(PassRegistry &);
 void initializeZ80PostLegalizerCombinerPass(PassRegistry &);

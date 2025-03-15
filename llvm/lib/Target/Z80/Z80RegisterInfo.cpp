@@ -53,6 +53,7 @@ Z80RegisterInfo::getPointerRegClass(const MachineFunction &MF,
   case 2: return Is24Bit ? &Z80::O24RegClass : &Z80::O16RegClass;
   case 3: return Is24Bit ? &Z80::A24RegClass : &Z80::A16RegClass;
   case 4: return Is24Bit ? &Z80::I24RegClass : &Z80::I16RegClass;
+  case 5: return Is24Bit ? &Z80::R24RegClass : &Z80::R16RegClass;
   }
 }
 

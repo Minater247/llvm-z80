@@ -113,6 +113,7 @@ class Z80RC8 <dag regList> : RegisterClass<"Z80", [i8 ], 8, regList>;
 class Z80RC16<dag regList> : RegisterClass<"Z80", [i16], 8, regList>;
 class Z80RC24<dag regList> : RegisterClass<"Z80", [i24], 8, regList>;
 
+def A8  : Z80RC8 <(add A)>;
 def G8  : Z80RC8 <(add A, L, E, C, H, D, B)>;
 def O8  : Z80RC8 <(add A, E, C, D, B)>;
 def Y8  : Z80RC8 <(add O8, IYL, IYH)>;

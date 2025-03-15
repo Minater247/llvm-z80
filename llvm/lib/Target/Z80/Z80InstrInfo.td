@@ -170,6 +170,7 @@ def gptr_rc : PointerLikeRegClass<1>;
 def optr_rc : PointerLikeRegClass<2>;
 def aptr_rc : PointerLikeRegClass<3>;
 def iptr_rc : PointerLikeRegClass<4>;
+def rptr_rc : PointerLikeRegClass<5>;
 
 let OperandType = "OPERAND_IMMEDIATE" in {
   def bitimm : Operand<i8>, PatLeaf<(i8 imm), [{
@@ -197,6 +198,9 @@ let OperandType = "OPERAND_MEMORY" in {
     }
     def aptr: Operand<iPTR> {
       let MIOperandInfo = (ops aptr_rc);
+    }
+    def rptr: Operand<iPTR> {
+      let MIOperandInfo = (ops rptr_rc);
     }
     def port : Operand<i8>;
   }
@@ -486,12 +490,12 @@ let mayLoad = true, canFoldAsLoad = true, isReMaterializable = true in {
 
   def LD8rp  : Pseudo<               "ld", "\t$dst, $src", "",
                      (outs R8:$dst), (ins aptr:$src)>;
-  let Defs = [A] in
-  def LD8ap  : I     <Idx0Pre, 0x02, "ld", "\ta, $src", "",
-                      (outs), (ins optr:$src), [(set A, (load iPTR:$src))]>;
   def LD8gp  : I     <Idx1Pre, 0x46, "ld", "\t$dst, $src", "",
                       (outs G8:$dst), (ins aptr:$src),
                       [(set G8:$dst, (load iPTR:$src))]>;
+  def LD8ap  : I     <Idx1Pre, 0x46, "ld", "\t$dst, $src", "",
+                      (outs A8:$dst), (ins rptr:$src),
+                      [(set A8:$dst, (load iPTR:$src))]>;
   def LD16rp : I16   <Pre<Idx1Pre, EDPre>, 0x07, "ld", "\t$dst, $src", "",
                       (outs R16:$dst), (ins aptr:$src),
                       [(set R16:$dst, (load iPTR:$src))]>,
@@ -560,12 +564,12 @@ let mayStore = true in {
 
   def LD8pr  : Pseudo<               "ld", "\t$dst, $src", "",
                       (outs), (ins aptr:$dst, R8:$src)>;
-  let Uses = [A] in
-  def LD8pa  : I     <Idx0Pre, 0x02, "ld", "\t$dst, a", "",
-                      (outs), (ins optr:$dst), [(store A, iPTR:$dst)]>;
   def LD8pg  : I     <Idx0Pre, 0x70, "ld", "\t$dst, $src", "",
                       (outs), (ins aptr:$dst, G8:$src),
                       [(store G8 :$src, iPTR:$dst)]>;
+  def LD8pa  : I     <Idx0Pre, 0x70, "ld", "\t$dst, $src", "",
+                      (outs), (ins rptr:$dst, A8:$src),
+                      [(store A8 :$src, iPTR:$dst)]>;
   def LD16pr : I16   <Pre<Idx0Pre, EDPre>, 0x0F, "ld", "\t$dst, $src", "",
                       (outs), (ins aptr:$dst, R16:$src),
                       [(store R16:$src, iPTR:$dst)]>,

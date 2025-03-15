@@ -31,6 +31,7 @@ set(sources
   GISel/Z80PostRewritePass.cpp
   GISel/Z80PreLegalizerCombiner.cpp
   GISel/Z80RegisterBankInfo.cpp
+  GISel/Z80RegisterOptPass.cpp
   GISel/Z80SelfOrAndOptPass.cpp
   GISel/Z80Tracker.cpp
   GISel/Z80UnrollLd.cpp
