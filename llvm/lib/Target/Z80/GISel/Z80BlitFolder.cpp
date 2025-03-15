@@ -71,6 +71,9 @@ bool Z80BlitFolder::runOnMachineFunction(MachineFunction &MF)
           if (MI0.getOpcode() != TargetOpcode::COPY) {
             break;
           }
+          if (MI0.getFlags() != 0) {
+            break;
+          }
           if (MI1.getOpcode() != TargetOpcode::COPY) {
             break;
           }
@@ -103,6 +106,9 @@ bool Z80BlitFolder::runOnMachineFunction(MachineFunction &MF)
           if (MI0.getOpcode() != TargetOpcode::COPY) {
             break;
           }
+          if (MI0.getFlags() != 0) {
+            break;
+          }
           if (MI1.getOpcode() != Z80::LD8pg) {
             break;
           }
@@ -131,6 +137,9 @@ bool Z80BlitFolder::runOnMachineFunction(MachineFunction &MF)
         //    LD8or %87:a16, 1, $a
         do {
           if (MI0.getOpcode() != TargetOpcode::COPY) {
+            break;
+          }
+          if (MI0.getFlags() != 0) {
             break;
           }
           if (MI1.getOpcode() != Z80::LD8og) {
