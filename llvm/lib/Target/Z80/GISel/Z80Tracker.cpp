@@ -181,7 +181,7 @@ void Z80Tracker::process(MachineInstr& MI)
   // clobber defined registers
   for (const MachineOperand &MO : MI.operands()) {
     if (!MO.isReg()) {
-      return;
+      continue;
     }
     Register Reg = MO.getReg();
     assert(Reg);
