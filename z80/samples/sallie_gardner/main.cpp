@@ -42,7 +42,7 @@ int main() {
             ZX::disable_interrupts();
 
             // timing hack
-            for ( int i = 0; i < 200; ++i ) __asm__ volatile("nop");
+            for ( int i = 0; i < 165; ++i ) __asm__ volatile("nop");
         }
     }
 
