@@ -199,7 +199,7 @@ bool Z80BlitFolder::runOnMachineFunction(MachineFunction &MF)
         //    OR8ao %12:i16, -124, implicit-def $a, implicit-def $f, implicit $a :: (load (s8) from %ir.uglygep14, !tbaa !10)
         //    LD8pg %57:a16, $a :: (store (s8) into %ir.add.ptr32, !tbaa !10)
         do {
-          if (!(MI0.getOpcode() == Z80::LD8ro || MI0.getOpcode() == Z80::LD8rp) ) {
+          if (!(MI0.getOpcode() == Z80::LD8ro || MI0.getOpcode() == Z80::LD8rp || MI0.getOpcode() == Z80::LD8ap) ) {
             break;
           }
           if (!(MI2.getOpcode() == Z80::OR8ao || MI2.getOpcode() == Z80::OR8ap)) {
@@ -210,10 +210,13 @@ bool Z80BlitFolder::runOnMachineFunction(MachineFunction &MF)
           }
           Register SrcReg = MI0.getOperand(1).getReg();
           Register DstReg = MI1.getOperand(0).getReg();
-          if (DstReg != MI3.getOperand(0).getReg()) {
+          if (!SrcReg.isVirtual() || !DstReg.isVirtual()) {
             break;
           }
-          if (SrcReg != MI2.getOperand(0).getReg()) {
+          if (getSrcRegIgnoringCopies(DstReg, MRI) != getSrcRegIgnoringCopies(MI3.getOperand(0).getReg(), MRI)) {
+            break;
+          }
+          if (getSrcRegIgnoringCopies(SrcReg, MRI) != getSrcRegIgnoringCopies(MI2.getOperand(0).getReg(), MRI)) {
             break;
           }
           MI1.getOperand(0).setReg(Z80::HL);
