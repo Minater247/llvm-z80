@@ -23,6 +23,8 @@ CXXFLAGS += -Wall
 # We use c++20
 CXXFLAGS += -std=c++20
 
+CXXFLAGS += -I../../include
+
 ASFLAGS += -march=$(ARCH)+full -sdcc
 
 all: hello_world.tap
