@@ -1,0 +1,6 @@
+.depend
+*.hex
+*.map
+*.o
+*.s
+*.ll
