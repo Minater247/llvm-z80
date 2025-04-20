@@ -5,6 +5,19 @@ using namespace llvm;
 
 void Z80Tracker::process(MachineInstr& MI)
 {
+  bool HasRegMask = false;
+  for (auto& MO : MI.operands()) {
+    if (MO.isRegMask()) {
+      HasRegMask = true;
+      break;
+    }
+  }
+  if (HasRegMask) {
+    LLVM_DEBUG(dbgs() << "Z80Tracker: encountered regmask, clearing all: "; MI.dump());
+    Regs.clear();
+    return;
+  }
+
   if (MI.getOpcode() == TargetOpcode::G_CONSTANT) {
     auto& MO0 = MI.getOperand(0);
     auto& MO1 = MI.getOperand(1);

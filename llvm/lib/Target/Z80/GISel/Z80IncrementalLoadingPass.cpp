@@ -52,21 +52,6 @@ bool Z80IncrementalLoadingPass::runOnMachineFunction(MachineFunction &MF)
       MachineInstr &MI = *MII++;
       LLVM_DEBUG(dbgs() << "Z80IncrementalLoadingPass: "; MI.dump());
 
-#if 0
-      bool HasRegMask = false;
-      for (auto& MO : MI.operands()) {
-        if (MO.isRegMask()) {
-          LLVM_DEBUG(dbgs() << "Z80IncrementalLoadingPass: encountered regmask, clearing all: "; MI.dump());
-          Regs.clear();
-          HasRegMask = true;
-          break;
-        }
-      }
-      if (HasRegMask) {
-        continue;
-      }
-#endif
-
       if (MII != MBB.end() && std::next(MII) != MBB.end()) {
         auto& MI0 = MI;
         auto& MI1 = *MII;
