@@ -13,6 +13,8 @@
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/Constants.h"
 
+#include "Z80Tracker.h"
+
 #define DEBUG_TYPE "z80-incremental-loading"
 
 using namespace llvm;
@@ -43,143 +45,14 @@ bool Z80IncrementalLoadingPass::runOnMachineFunction(MachineFunction &MF)
   const TargetRegisterInfo *TRI = MF.getSubtarget().getRegisterInfo();
   const TargetInstrInfo *TII = MF.getSubtarget().getInstrInfo();
 
-  struct RegisterEntry {
-    const TargetRegisterInfo *TRI;
-    Register reg;
-    MachineInstr* lastUse = nullptr;
-    Optional<std::pair<Register, int64_t>> regOff;
-    Optional<int64_t> immediate;
-
-    bool isSet() const {
-      return regOff || immediate;
-    }
-
-    void reset()
-    {
-      if (isSet()) {
-        LLVM_DEBUG(dbgs() << "Z80IncrementalLoadingPass: clearing " << TRI->getName(reg) << "\n");
-      }
-      immediate.reset();
-      regOff.reset();
-      lastUse = nullptr;
-    }
-
-    void def(Register Reg, int64_t offset) {
-      if (Reg == reg) {
-        reset();
-        return;
-      }
-      LLVM_DEBUG(dbgs() << "Z80IncrementalLoadingPass: " << TRI->getName(reg) << " = " << TRI->getName(Reg) << " + " << offset << "\n");
-      regOff.emplace(Reg, offset);
-      immediate.reset();
-    }
-
-    void setImm(int64_t i) {
-      LLVM_DEBUG(dbgs() << "Z80IncrementalLoadingPass: " << TRI->getName(reg) << " = " << i << "\n");
-      regOff.reset();
-      immediate = i;
-    }
-
-    void inc() {
-      if (immediate) {
-        *immediate = *immediate + 1;
-        LLVM_DEBUG(dbgs() << "Z80IncrementalLoadingPass: " << TRI->getName(reg) << " = " << *immediate << "\n");
-      } else if (regOff) {
-        regOff->second = regOff->second + 1;
-        LLVM_DEBUG(dbgs() << "Z80IncrementalLoadingPass: " << TRI->getName(reg) << " = " << TRI->getName(regOff->first) << " + " << regOff->second << "\n");
-      }
-    }
-
-    void dec() {
-      if (immediate) {
-        *immediate = *immediate - 1;
-        LLVM_DEBUG(dbgs() << "Z80IncrementalLoadingPass: " << TRI->getName(reg) << " = " << *immediate << "\n");
-      } else if (regOff) {
-        regOff->second = regOff->second - 1;
-        LLVM_DEBUG(dbgs() << "Z80IncrementalLoadingPass: " << TRI->getName(reg) << " = " << TRI->getName(regOff->first) << " + " << regOff->second << "\n");
-      }
-    }
-
-    void ex(RegisterEntry& RE)
-    {
-      RegisterEntry RECopy = RE;
-      if (immediate) {
-        RE.setImm(*immediate);
-      } else if (regOff) {
-        RE.def(regOff->first, regOff->second);
-      } else {
-        RE.reset();
-      }
-      if (RECopy.immediate) {
-        setImm(*RECopy.immediate);
-      } else if (RECopy.regOff) {
-        def(RECopy.regOff->first, RECopy.regOff->second);
-      } else {
-        reset();
-      }
-    }
-
-    void use(MachineInstr *MI) {
-      if (lastUse == MI)
-          return;
-      lastUse = MI;
-      LLVM_DEBUG(dbgs() << "Z80IncrementalLoadingPass: " << TRI->getName(reg) << " used\n");
-    }
-
-    void clearLastKill() {
-      assert(lastUse);
-      for (auto& MO : lastUse->operands()) {
-        if (MO.isReg() && MO.getReg() == reg && MO.isKill()) {
-          MO.setIsKill(false);
-          LLVM_DEBUG(dbgs() << "Z80IncrementalLoadingPass: cleared kill in "; lastUse->dump());
-        }
-    }
-    }
-  };
-
   for (auto& MBB : MF) {
-    std::map<Register, RegisterEntry> Regs;
-
-    auto getReg = [&](Register Reg) -> RegisterEntry& {
-      assert(Reg && !Reg.isVirtual());
-      auto& RE = Regs[Reg];
-      RE.TRI = TRI;
-      RE.reg = Reg;
-      return RE;
-    };
-
-    auto clobber = [&](Register Reg) {
-      assert(Reg && !Reg.isVirtual());
-      for (auto it = Regs.begin(); it != Regs.end(); ) {
-        auto& RE = it->second;
-        if (RE.reg == Reg || TRI->isSubRegister(RE.reg, Reg) || TRI->isSubRegister(Reg, RE.reg)) {
-          if (RE.isSet())
-            LLVM_DEBUG(dbgs() << "Z80IncrementalLoadingPass: clearing " << TRI->getName(RE.reg) << "\n");
-          it = Regs.erase(it);
-          continue;
-        } else if (RE.regOff && (RE.regOff->first == Reg || TRI->isSubRegister(RE.regOff->first, Reg) || TRI->isSubRegister(Reg, RE.regOff->first))) {
-          LLVM_DEBUG(dbgs() << "Z80IncrementalLoadingPass: clearing " << TRI->getName(RE.reg) << "\n");
-          it = Regs.erase(it);
-          continue;
-        }
-        ++it;
-      }
-    };
-
-    auto extractImmediate = [](MachineOperand& MO) -> Optional<int64_t> {
-      if (MO.isImm()) {
-        return MO.getImm();
-      } else if (MO.isCImm()) {
-        return MO.getCImm()->getZExtValue();
-      } else {
-        return None;
-      }
-    };
+    Z80Tracker T(MBB);
 
     for (auto MII = MBB.begin(), E = MBB.end(); MII != E; ) {
       MachineInstr &MI = *MII++;
       LLVM_DEBUG(dbgs() << "Z80IncrementalLoadingPass: "; MI.dump());
 
+#if 0
       bool HasRegMask = false;
       for (auto& MO : MI.operands()) {
         if (MO.isRegMask()) {
@@ -192,6 +65,7 @@ bool Z80IncrementalLoadingPass::runOnMachineFunction(MachineFunction &MF)
       if (HasRegMask) {
         continue;
       }
+#endif
 
       if (MII != MBB.end() && std::next(MII) != MBB.end()) {
         auto& MI0 = MI;
@@ -207,17 +81,17 @@ bool Z80IncrementalLoadingPass::runOnMachineFunction(MachineFunction &MF)
           if (MI0.getOpcode() != Z80::LD16ri)
             break;
           Register r0 = MI0.getOperand(0).getReg();
-          auto& r0RE = getReg(r0);
-          if (!r0RE.immediate)
+          auto& r0RE = T.getReg(r0);
+          if (!r0RE.isImm())
             break;
-          auto Value = extractImmediate(MI0.getOperand(1));
+          auto Value = T.extractImmediate(MI0.getOperand(1));
           if (!Value)
             break;
           // make sure we know where it was last used
-          if (!r0RE.lastUse)
+          if (!r0RE.getLastUse())
             break;
           // if exactly same value
-          if (*Value == *r0RE.immediate) {
+          if (*Value == r0RE.getImm()) {
             LLVM_DEBUG(dbgs() << "Z80IncrementalLoadingPass: no change in value of " << TRI->getName(r0) << ", dropping: "; MI0.dump());
             MI0.removeFromParent();
             r0RE.clearLastKill();
@@ -311,15 +185,15 @@ bool Z80IncrementalLoadingPass::runOnMachineFunction(MachineFunction &MF)
           if (!MI2.getOperand(2).isKill())
             break;
           // make sure that $r0 is currently already an offset of $r1
-          auto& r0RE = getReg(r0);
-          if (!r0RE.regOff || r0RE.regOff->first != r1)
+          auto& r0RE = T.getReg(r0);
+          if (!r0RE.isRegOff() || r0RE.getRegOff().first != r1)
             break;
           // make sure we know where it was last used
-          if (!r0RE.lastUse)
+          if (!r0RE.getLastUse())
             break;
 
-          int64_t OldOffset = r0RE.regOff->second;
-          auto NewOffsetValue = extractImmediate(MI1.getOperand(1));
+          int64_t OldOffset = r0RE.getRegOff().second;
+          auto NewOffsetValue = T.extractImmediate(MI1.getOperand(1));
           if (!NewOffsetValue)
             break;
           int64_t NewOffset = *NewOffsetValue;
@@ -361,134 +235,7 @@ bool Z80IncrementalLoadingPass::runOnMachineFunction(MachineFunction &MF)
             continue;
       }
 
-      if (MI.getOpcode() == Z80::COPY) {
-        auto& MO0 = MI.getOperand(0);
-        auto& MO1 = MI.getOperand(1);
-        if (MO0.isReg() && MO1.isReg()) {
-          Register Dst = MO0.getReg();
-          Register Src = MO1.getReg();
-          assert(Dst && !Dst.isVirtual());
-          assert(Src && !Src.isVirtual());
-          auto fit = Regs.find(Src);
-          if (fit != Regs.end()) {
-            auto& SrcRE = fit->second;
-            if (SrcRE.regOff && SrcRE.regOff->first != Dst) {
-              getReg(Dst).def(SrcRE.regOff->first, SrcRE.regOff->second);
-            } else if (SrcRE.immediate) {
-              getReg(Dst).setImm(*SrcRE.immediate);
-            } else {
-              getReg(Dst).def(Src, 0);
-            }
-          } else {
-            getReg(Dst).def(Src, 0);
-          }
-          getReg(Src).use(&MI);
-          continue;
-        }
-      } else if (MI.getOpcode() == Z80::LD16ri) {
-        auto& MO0 = MI.getOperand(0);
-        auto& MO1 = MI.getOperand(1);
-        Register Dst = MO0.getReg();
-        assert(Dst && !Dst.isVirtual());
-        auto& RE = getReg(Dst);
-        if (MO1.isImm()) {
-          RE.setImm(MO1.getImm());
-          continue;
-        } else if (MO1.isCImm()) {
-          RE.setImm(MO1.getCImm()->getZExtValue());
-          continue;
-        }
-      } else if (MI.getOpcode() == Z80::ADD16ao) {
-        auto& MO0 = MI.getOperand(0);
-        auto& MO1 = MI.getOperand(1);
-        auto& MO2 = MI.getOperand(2);
-        Register Dst = MO0.getReg();
-        Register Dst2 = MO1.getReg();
-        Register Src = MO2.getReg();
-        assert(Dst && !Dst.isVirtual());
-        assert(Dst2 && !Dst2.isVirtual());
-        assert(Dst == Dst2);
-        assert(Src && !Src.isVirtual());
-        auto& DstRE = getReg(Dst);
-        auto& SrcRE = getReg(Src);
-        clobber(Z80::F);
-        if (DstRE.regOff) {
-          if (SrcRE.immediate) {
-            DstRE.def(DstRE.regOff->first, DstRE.regOff->second + *SrcRE.immediate);
-          } else {
-            clobber(Dst);
-          }
-        } else if (DstRE.immediate) {
-          clobber(Dst);
-        }
-        getReg(Src).use(&MI);
-        continue;
-      } else if (MI.getOpcode() == Z80::INC16r) {
-        auto& MO0 = MI.getOperand(0);
-        auto& MO1 = MI.getOperand(1);
-        Register Dst = MO0.getReg();
-        Register Dst2 = MO1.getReg();
-        assert(Dst == Dst2);
-        auto& RE = getReg(Dst);
-        RE.inc();
-        continue;
-      } else if (MI.getOpcode() == Z80::LDI16) {
-        auto& bcRE = getReg(Z80::BC);
-        bcRE.dec();
-        auto& hlRE = getReg(Z80::HL);
-        hlRE.inc();
-        auto& deRE = getReg(Z80::DE);
-        deRE.inc();
-        continue;
-      } else if (MI.getOpcode() == Z80::LDD16) {
-        auto& bcRE = getReg(Z80::BC);
-        bcRE.dec();
-        auto& hlRE = getReg(Z80::HL);
-        hlRE.dec();
-        auto& deRE = getReg(Z80::DE);
-        deRE.dec();
-        continue;
-      } else if (MI.getOpcode() == Z80::EX16DE) {
-        auto& hlRE = getReg(Z80::HL);
-        auto& deRE = getReg(Z80::DE);
-        hlRE.ex(deRE);
-        continue;
-      } else if (MI.getOpcode() == Z80::ADD16aa) {
-        auto& MO0 = MI.getOperand(0);
-        auto& MO1 = MI.getOperand(1);
-        Register Dst = MO0.getReg();
-        Register Src = MO1.getReg();
-        assert(Dst && !Dst.isVirtual());
-        assert(Src && !Src.isVirtual());
-        auto& DstRE = getReg(Dst);
-        auto& SrcRE = getReg(Src);
-        clobber(Z80::F);
-        if (DstRE.regOff) {
-          if (SrcRE.immediate) {
-            DstRE.def(DstRE.regOff->first, DstRE.regOff->second + *SrcRE.immediate);
-          } else {
-            clobber(Dst);
-          }
-        } else if (DstRE.immediate) {
-          clobber(Dst);
-        }
-        getReg(Src).use(&MI);
-        continue;
-      }
-
-      for (const MachineOperand &MO : MI.operands()) {
-        if (!MO.isReg()) {
-          continue;
-        }
-        Register Reg = MO.getReg();
-        assert(Reg && !Reg.isVirtual());
-        // Reg gets defined. Clobber anything that uses it.
-        if (MO.isDef()) {
-          clobber(MO.getReg());
-        } else if (MO.isUse() && Regs.count(Reg) != 0) {
-            getReg(Reg).use(&MI);
-        }
-      }
+      T.process(MI);
     }
   }
   return changes;

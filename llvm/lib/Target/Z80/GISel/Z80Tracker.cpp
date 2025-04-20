@@ -70,13 +70,14 @@ void Z80Tracker::process(MachineInstr& MI)
     } else {
       Imm = extractImmediate(MO2);
     }
-    if (!SrcRE.isSet() && Imm) {
-      DstRE.def(MI, SrcRE.getReg(), *Imm);
-      return;
-    }
-    if (SrcRE.isImm() && Imm) {
-      DstRE.setImm(MI, SrcRE.getImm() + *Imm);
-      return;
+    if (Imm) {
+      if (SrcRE.isImm()) {
+        DstRE.setImm(MI,  SrcRE.getImm() + *Imm);
+      } else if (SrcRE.isRegOff()) {
+        DstRE.def(MI, SrcRE.getRegOff().first, SrcRE.getRegOff().second + *Imm);
+      } else if (!SrcRE.isSet()) {
+        DstRE.def(MI, SrcRE.getReg(), *Imm);
+      }
     }
     return;
   } else if (MI.getOpcode() == TargetOpcode::COPY) {
@@ -128,6 +129,13 @@ void Z80Tracker::process(MachineInstr& MI)
     auto& deRE = getReg(Z80::DE);
     deRE.dec(MI);
     return;
+  } else if (MI.getOpcode() == Z80::EX16DE) {
+    clobber(Z80::HL, false);
+    clobber(Z80::DE, false);
+    auto& hlRE = getReg(Z80::HL);
+    auto& deRE = getReg(Z80::DE);
+    hlRE.ex(MI, deRE);
+    return;
   } else if (MI.getOpcode() == Z80::CALL16 && isMemcpy(MI.getOperand(0))) {
     clobber(Z80::BC, false);
     clobber(Z80::HL, false);
@@ -175,6 +183,22 @@ void Z80Tracker::process(MachineInstr& MI)
       deRE.reset();
     }
     bcRE.setImm(MI, 0);
+    return;
+  } else if (MI.getOpcode() == Z80::ADD16aa) {
+    auto& MO0 = MI.getOperand(0);
+    auto& MO1 = MI.getOperand(1);
+    Register Dst = MO0.getReg();
+    Register Src = MO1.getReg();
+    auto& DstRE = getReg(Dst);
+    auto& SrcRE = getReg(Src);
+    clobber(Z80::F);
+    if (DstRE.isRegOff() && SrcRE.isImm()) {
+      clobber(Dst, false);
+      DstRE.def(MI, DstRE.getRegOff().first, DstRE.getRegOff().second + SrcRE.getImm());
+    } else {
+      clobber(Dst, true);
+    }
+    SrcRE.use(MI);
     return;
   }
 
