@@ -1,6 +1,10 @@
 #pragma once
 
 namespace ZX {
+    inline void halt() {
+        __asm__ volatile("halt");
+    }
+
     inline void disable_interrupts() { __asm__ volatile("di"); }
     inline void enable_interrupts() { __asm__ volatile("ei"); }
 
