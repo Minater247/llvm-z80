@@ -18,6 +18,14 @@ namespace ZX {
                 putchar(*str++);
         }
 
+        static void print_at(uint8_t x, uint8_t y, const char *str) __attribute__((noinline)) {
+            putchar(22);
+            putchar(y);
+            putchar(x);
+            while (*str)
+                putchar(*str++);
+        }
+
         static void border(uint8_t color) {
             __asm__ volatile (
                 "out\t(0xfe), a"
