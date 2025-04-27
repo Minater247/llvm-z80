@@ -34,6 +34,11 @@ namespace ZX {
                 :
             );
         }
+
+        static void set_print_attr(uint8_t color) {
+            uint8_t *attr_t = (uint8_t*)0x5C8F; // ATTR_T @ 0x5C8F
+            *attr_t = color;
+        }
     };
 } // namespace ZX
 
