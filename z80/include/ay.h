@@ -88,11 +88,11 @@ namespace ZX {
             }
         };
 
-        _Channel<0> ChannelA;
-        _Channel<1> ChannelB;
-        _Channel<2> ChannelC;
+        static _Channel<0> ChannelA;
+        static _Channel<1> ChannelB;
+        static _Channel<2> ChannelC;
 
-        void mute_all() {
+        static inline void mute_all() {
             _MIXER = 0x3F;
             write_register(7, _MIXER);
         }
