@@ -51,6 +51,7 @@ namespace ZX {
 
             void mute() {
                 _MIXER |= (1 << CHANNEL);
+                _MIXER |= (1 << (CHANNEL + 3));
                 write_register(7, _MIXER);
             }
 
@@ -61,6 +62,12 @@ namespace ZX {
                     mute<CHANNEL>();
             }
 
+            static void set_envelope(uint16_t envelope_period, Envelope envelope) __attribute__((noinline)) {
+                write_register(11, envelope_period & 0xFF);
+                write_register(12, (envelope_period >> 8) & 0xFF);
+                write_register(13, envelope);
+            }
+
             static void play_envelope(uint16_t tone_period, uint16_t envelope_period, Envelope envelope) __attribute__((noinline)) {
                 write_register(CHANNEL * 2 + 0, tone_period & 0xff);
                 write_register(CHANNEL * 2 + 1, tone_period >> 8);
@@ -69,6 +76,14 @@ namespace ZX {
                 write_register(13, envelope);
                 write_register(8 + CHANNEL, 0x10);
                 _MIXER &= ~(1 << CHANNEL);
+                write_register(7, _MIXER);
+            }
+
+            static void play_noise(uint8_t noise_period, bool keep_tone) __attribute__((noinline)) {
+                write_register(6, noise_period);
+                _MIXER &= ~(1 << (3 + CHANNEL));
+                if (!keep_tone)
+                    _MIXER |= 1 << CHANNEL;
                 write_register(7, _MIXER);
             }
         };
