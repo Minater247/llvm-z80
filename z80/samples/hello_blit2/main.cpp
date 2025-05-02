@@ -193,6 +193,7 @@ int main() {
     uint8_t x = 128;
     uint8_t y = 96;
 
+    uint16_t down_counter = 0;
     while (true) {
         uint8_t mask = 0;
         for (int i = 0 ; i < 1; ++i) {
@@ -225,14 +226,23 @@ int main() {
         if (y && mask & (1 << 3))
             --y;
 
-        if (mask & (1 << 4)) {
-            ZX::AY::ChannelA.play_envelope(1600, 1000, ZX::AY::Envelope::RAMP_DOWN);
+        if (!down_counter && mask & (1 << 4)) {
+            ZX::AY::ChannelA.play_envelope(600, 1000, ZX::AY::Envelope::RAMP_DOWN);
+            ZX::AY::ChannelA.play_noise(1, true);
+            down_counter = 25;
         }
 
-        if (use_sprite1)
+        if (use_sprite1) {
             SPRITE1.paint<ZX::Screen>(x, y);
-        else
+            if (down_counter >= 3)
+                down_counter -= 3;
+            else
+                down_counter = 0;
+        } else {
             SPRITE2.paint<ZX::Screen>(x, y);
+            if (down_counter)
+                down_counter--;
+        }
     }
 
     return 0;
