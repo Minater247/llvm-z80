@@ -183,6 +183,13 @@ int main() {
         }
     }
 
+    for (uint16_t i = 440; i >= 220; --i) {
+        ZX::AY::ChannelA.play_tone(i, 15);
+        for (int j = 0; j < 200; ++j )
+            __asm__ volatile ("nop");
+    }
+    ZX::AY::ChannelA.mute();
+
     uint8_t x = 128;
     uint8_t y = 96;
 
@@ -209,14 +216,18 @@ int main() {
             }
         }
 
-      if (mask & (1 << 0) && x < 256 - 33)
-          ++x;
-      if (x && mask & (1 << 1))
-          --x;
-      if (mask & (1 << 2) && y < 192 - 32)
-          ++y;
-      if (y && mask & (1 << 3))
-          --y;
+        if (mask & (1 << 0) && x < 256 - 33)
+            ++x;
+        if (x && mask & (1 << 1))
+            --x;
+        if (mask & (1 << 2) && y < 192 - 32)
+            ++y;
+        if (y && mask & (1 << 3))
+            --y;
+
+        if (mask & (1 << 4)) {
+            ZX::AY::ChannelA.play_envelope(1600, 1000, ZX::AY::Envelope::RAMP_DOWN);
+        }
 
         if (use_sprite1)
             SPRITE1.paint<ZX::Screen>(x, y);
