@@ -153,7 +153,7 @@ namespace ZX {
             constexpr MaskedInstance(
                 const std::array<std::array<uint8_t, cfg.width / 8>, cfg.height>& in_bitmap,
                 const std::array<std::array<uint8_t, cfg.width / 8>, cfg.height>& in_mask
-            ) __attribute__((always_inline)) : data {} {
+            ) __attribute__((always_inline)) : offsets {} {
                 for (int shift = 0; shift < 8; ++shift) {
                     for (int y = 0; y < cfg.height; ++y) {
                         uint8_t bitmap_remainder = 0;
@@ -162,43 +162,53 @@ namespace ZX {
                             uint8_t new_bitmap_remainder = (in_bitmap[y][x] & (0xff >> (8 - shift))) << (8 - shift);
                             uint8_t m = ~in_mask[y][x];
                             uint8_t new_mask_remainder = (m & (0xff >> (8 - shift))) << (8 - shift);
-                            data[shift].bitmap[y][x] = (in_bitmap[y][x] >> shift) | bitmap_remainder;
-                            data[shift].mask[y][x] = ~((m >> shift) | mask_remainder);
+                            offsets[shift].data[y][x] = octet_entry {
+                                .mask = (uint8_t)(~((m >> shift) | mask_remainder)),
+                                .bitmap = (uint8_t)((in_bitmap[y][x] >> shift) | bitmap_remainder),
+                            };
                             bitmap_remainder = new_bitmap_remainder;
                             mask_remainder = new_mask_remainder;
                         }
-                        data[shift].bitmap[y][cfg.width / 8] = bitmap_remainder;
-                        data[shift].mask[y][cfg.width / 8] = ~mask_remainder;
+                        offsets[shift].data[y][cfg.width / 8] = octet_entry {
+                            .mask = (uint8_t)(~mask_remainder),
+                            .bitmap = (uint8_t)(bitmap_remainder),
+                        };
                     }
                 }
             }
 
             template <typename ScreenType>
             void paint(uint8_t x_in, uint8_t y_in) const __attribute__((noinline)) {
-                auto *rows = &ScreenType::row_addresses[y_in];
                 uint8_t xb = x_in >> 3;
                 uint8_t shift = x_in & 7;
-                const shift_entry *d = shift_address[shift];
-                for (uint8_t cy = 0; cy < cfg.height; cy += 4) {
+                const offset_entry *d = shift_address[shift];
+                auto *rows = &ScreenType::row_addresses[y_in];
+                for (uint8_t cy = 0; cy < cfg.height; cy += 8) {
+                    uint8_t *row_addresses[8];
                     #pragma unroll
-                    for (uint8_t dy = 0; dy < 4; ++dy) {
-                        uint8_t *ptr = (uint8_t*)*rows++ + xb;
+                    for (uint8_t y = 0; y < 8; ++y)
+                        row_addresses[y] = (uint8_t*)*rows++ + xb;
+                    #pragma unroll
+                    for (uint8_t dy = 0; dy < 8; ++dy) {
+                        uint8_t *ptr = row_addresses[dy];
                         #pragma unroll
                         for (uint8_t x = 0; x < cfg.width / 8 + 1; ++x) {
-                            ptr[x] = (ptr[x] & d->mask[cy + dy][x]) | d->bitmap[cy + dy][x];
+                            ptr[x] = (ptr[x] & d->data[cy + dy][x].mask) | d->data[cy + dy][x].bitmap;
                         }
                     }
                 }
-
             }
 
-            struct shift_entry {
-                uint8_t bitmap[cfg.height][cfg.width / 8 + 1];
-                uint8_t mask[cfg.height][cfg.width / 8 + 1];
+            struct octet_entry {
+                uint8_t mask;
+                uint8_t bitmap;
+            };
+            struct offset_entry {
+                octet_entry data[cfg.height][cfg.width / 8 + 1];
             };
 
-            shift_entry data[8];
-            std::array<const shift_entry*, 8> shift_address {&data[0], &data[1], &data[2], &data[3], &data[4], &data[5], &data[6], &data[7]};
+            offset_entry offsets[8];
+            std::array<const offset_entry*, 8> shift_address {&offsets[0], &offsets[1], &offsets[2], &offsets[3], &offsets[4], &offsets[5], &offsets[6], &offsets[7]};
         };
     };
 } // namespace ZX
