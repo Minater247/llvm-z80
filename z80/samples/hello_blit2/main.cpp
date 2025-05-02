@@ -134,12 +134,7 @@ uint8_t read_keypress_mask() {
         ZX::Keyboard::KEY_A, 2,
         ZX::Keyboard::KEY_UP, 3,
         ZX::Keyboard::KEY_Q, 3,
-        ZX::Keyboard::KEY_SPACE, 4,
-        ZX::Keyboard::KEY_7, 0,
-        ZX::Keyboard::KEY_6, 1,
-        ZX::Keyboard::KEY_8, 2,
-        ZX::Keyboard::KEY_9, 3,
-        ZX::Keyboard::KEY_0, 4
+        ZX::Keyboard::KEY_SPACE, 4
     );
 }
 
@@ -229,13 +224,13 @@ int main() {
         if (!down_counter && mask & (1 << 4)) {
             ZX::AY::ChannelA.play_envelope(600, 1000, ZX::AY::Envelope::RAMP_DOWN);
             ZX::AY::ChannelA.play_noise(1, true);
-            down_counter = 25;
+            down_counter = 40;
         }
 
         if (use_sprite1) {
             SPRITE1.paint<ZX::Screen>(x, y);
-            if (down_counter >= 3)
-                down_counter -= 3;
+            if (down_counter >= 2)
+                down_counter -= 2;
             else
                 down_counter = 0;
         } else {
