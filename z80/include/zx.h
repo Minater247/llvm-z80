@@ -9,4 +9,5 @@
 #include "screen.h"
 #include "bigletters.h"
 #include "sprite.h"
+#include "ay.h"
 
