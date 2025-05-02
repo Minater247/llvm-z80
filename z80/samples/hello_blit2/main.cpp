@@ -78,6 +78,7 @@ static constexpr MaskedSprite SPRITE1(
         BIN32(0b11111111111111111111111111111111),
       }}
 );
+static constexpr MaskedSprite SPRITE1L = SPRITE1.hmirror();
 
 using BlockSprite = ZX::Sprite::Instance<
     ZX::Sprite::Config {
@@ -122,6 +123,7 @@ static constexpr BlockSprite SPRITE2(
         BIN32(0b00000000000000000000000000000000),
     }}
 );
+static constexpr BlockSprite SPRITE2L = SPRITE2.hmirror();
 
 uint8_t read_keypress_mask() __attribute__((noinline));
 uint8_t read_keypress_mask() {
@@ -189,6 +191,7 @@ int main() {
     uint8_t y = 96;
 
     uint16_t down_counter = 0;
+    bool right = true;
     while (true) {
         uint8_t mask = 0;
         for (int i = 0 ; i < 1; ++i) {
@@ -212,10 +215,28 @@ int main() {
             }
         }
 
-        if (mask & (1 << 0) && x < 256 - 33)
-            ++x;
-        if (x && mask & (1 << 1))
-            --x;
+        if (mask & (1 << 0) && x < 256 - 33) {
+            if (!right) {
+                if (use_sprite1) {
+                    SPRITE1L.clear_for<ZX::Screen>(x, y, SPRITE1);
+                    SPRITE1.paint<ZX::Screen>(x, y);
+                }
+                right = true;
+            } else {
+                ++x;
+            }
+        }
+        if (x && mask & (1 << 1)) {
+            if (right) {
+                if (use_sprite1) {
+                    SPRITE1.clear_for<ZX::Screen>(x, y, SPRITE1L);
+                    SPRITE1L.paint<ZX::Screen>(x, y);
+                }
+                right = false;
+            } else {
+                --x;
+            }
+        }
         if (mask & (1 << 2) && y < 192 - 32)
             ++y;
         if (y && mask & (1 << 3))
@@ -228,13 +249,19 @@ int main() {
         }
 
         if (use_sprite1) {
-            SPRITE1.paint<ZX::Screen>(x, y);
+            if (right)
+                SPRITE1.paint<ZX::Screen>(x, y);
+            else
+                SPRITE1L.paint<ZX::Screen>(x, y);
             if (down_counter >= 2)
                 down_counter -= 2;
             else
                 down_counter = 0;
         } else {
-            SPRITE2.paint<ZX::Screen>(x, y);
+            if (right)
+                SPRITE2.paint<ZX::Screen>(x, y);
+            else
+                SPRITE2L.paint<ZX::Screen>(x, y);
             if (down_counter)
                 down_counter--;
         }
