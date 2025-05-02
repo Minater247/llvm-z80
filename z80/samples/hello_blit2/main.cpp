@@ -1,14 +1,14 @@
 
 #include "zx.h"
 
-using Sprite = ZX::Sprite::MaskedInstance<
+using MaskedSprite = ZX::Sprite::MaskedInstance<
     ZX::Sprite::Config {
         .width = 32,
         .height = 32,
     }
 >;
 
-static constexpr Sprite SPRITE(
+static constexpr MaskedSprite SPRITE1(
     {{
         BIN32(0b00000000000000000000000000000000),
         BIN32(0b00000000000000000000000000000000),
@@ -79,6 +79,50 @@ static constexpr Sprite SPRITE(
       }}
 );
 
+using BlockSprite = ZX::Sprite::Instance<
+    ZX::Sprite::Config {
+        .width = 32,
+        .height = 32,
+    }
+>;
+
+static constexpr BlockSprite SPRITE2(
+    {{
+        BIN32(0b00000000000000000000000000000000),
+        BIN32(0b00000000000000000000000000000000),
+        BIN32(0b00000000000000000000000000000000),
+        BIN32(0b00000000000000001111100000000000),
+        BIN32(0b00000000000000110000011000000000),
+        BIN32(0b00000000000001000000000100000000),
+        BIN32(0b00000000000010000000000010000000),
+        BIN32(0b00000000000100000000000001000000),
+        BIN32(0b00000000000100001100011001000000),
+        BIN32(0b00000000001000010010100100100000),
+        BIN32(0b00000000001000010110101100100000),
+        BIN32(0b00000000001000011110111100100000),
+        BIN32(0b00000000011000000000000000110000),
+        BIN32(0b00000000100100000111110001001000),
+        BIN32(0b00000000100100000100010001001000),
+        BIN32(0b00000000100010000011100010001000),
+        BIN32(0b00001000100000000000000000001000),
+        BIN32(0b00010100010000000000000000010000),
+        BIN32(0b00100100011100000000000001100000),
+        BIN32(0b00100011100000000000000001000000),
+        BIN32(0b00100001000000000000000001000000),
+        BIN32(0b00100000100000000000000010000000),
+        BIN32(0b00010000000000000000000010000000),
+        BIN32(0b00010000000000000000000100000000),
+        BIN32(0b00001000000000000000000100000000),
+        BIN32(0b00001000000000000000001000000000),
+        BIN32(0b00000110000000000000010000000000),
+        BIN32(0b00000001100000000001100000000000),
+        BIN32(0b00000000011111111110000000000000),
+        BIN32(0b00000000000000000000000000000000),
+        BIN32(0b00000000000000000000000000000000),
+        BIN32(0b00000000000000000000000000000000),
+    }}
+);
+
 uint8_t read_keypress_mask() __attribute__((noinline));
 uint8_t read_keypress_mask() {
     return ZX::Keyboard::pressed_mask(
@@ -90,7 +134,12 @@ uint8_t read_keypress_mask() {
         ZX::Keyboard::KEY_A, 2,
         ZX::Keyboard::KEY_UP, 3,
         ZX::Keyboard::KEY_Q, 3,
-        ZX::Keyboard::KEY_SPACE, 4
+        ZX::Keyboard::KEY_SPACE, 4,
+        ZX::Keyboard::KEY_7, 0,
+        ZX::Keyboard::KEY_6, 1,
+        ZX::Keyboard::KEY_8, 2,
+        ZX::Keyboard::KEY_9, 3,
+        ZX::Keyboard::KEY_0, 4
     );
 }
 
@@ -107,11 +156,12 @@ int main() {
     ZX::Console::at(2, 19);
     ZX::Console::print("Press K for Kempston joystick.");
     ZX::Console::at(2, 20);
-    //ZX::Console::print("Space or FIRE to clear.");
+    ZX::Console::print("Press 1 for mask, 2 for block.");
     ZX::Console::at(2, 21);
     ZX::Console::print("Press S to START!");
 
     bool kempston_enabled = false;
+    bool use_sprite1 = true;
 
     while (!ZX::Keyboard::KEY_S.is_pressed()) {
         __asm__ volatile("nop");
@@ -122,6 +172,15 @@ int main() {
         }
         if (kempston_enabled && (ZX::Kempston::read() & (1 << 4)))
             break;
+        if (!use_sprite1 && ZX::Keyboard::KEY_1.is_pressed()) {
+            use_sprite1 = true;
+            ZX::Console::at(2, 20);
+            ZX::Console::print("Masked blit selected.          ");
+        } else if (use_sprite1 && ZX::Keyboard::KEY_2.is_pressed()) {
+            use_sprite1 = false;
+            ZX::Console::at(2, 20);
+            ZX::Console::print("Block blit selected.           ");
+        }
     }
 
     uint8_t x = 128;
@@ -131,10 +190,23 @@ int main() {
         uint8_t mask = 0;
         for (int i = 0 ; i < 1; ++i) {
             mask |= read_keypress_mask();
-            if (kempston_enabled)
+            if (kempston_enabled) {
                 mask |= ZX::Kempston::read();
-            else if (ZX::Keyboard::KEY_K.is_pressed())
+            } else if (!kempston_enabled && ZX::Keyboard::KEY_K.is_pressed()) {
                 kempston_enabled = true;
+                ZX::Console::at(2, 19);
+                ZX::Console::print("Kempston Joystick is enabled! ");
+            }
+
+            if (!use_sprite1 && ZX::Keyboard::KEY_1.is_pressed()) {
+                use_sprite1 = true;
+                ZX::Console::at(2, 20);
+                ZX::Console::print("Masked blit selected.         ");
+            } else if (use_sprite1 && ZX::Keyboard::KEY_2.is_pressed()) {
+                use_sprite1 = false;
+                ZX::Console::at(2, 20);
+                ZX::Console::print("Block blit selected.          ");
+            }
         }
 
       if (mask & (1 << 0) && x < 256 - 33)
@@ -146,7 +218,10 @@ int main() {
       if (y && mask & (1 << 3))
           --y;
 
-        SPRITE.paint<ZX::Screen>(x, y);
+        if (use_sprite1)
+            SPRITE1.paint<ZX::Screen>(x, y);
+        else
+            SPRITE2.paint<ZX::Screen>(x, y);
     }
 
     return 0;
