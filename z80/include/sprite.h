@@ -126,18 +126,19 @@ namespace ZX {
 
             template <typename ScreenType>
             void paint(uint8_t x_in, uint8_t y_in) const __attribute__((noinline)) {
-                auto *rows = &ScreenType::row_addresses[y_in];
                 uint8_t xb = x_in >> 3;
+                auto *rows = &ScreenType::row_addresses[y_in];
+                uint8_t *row_addresses[cfg.height];
+                #pragma unroll
+                for (uint8_t y = 0; y < cfg.height; ++y)
+                    row_addresses[y] = (uint8_t*)*rows++ + xb;
                 uint8_t shift = x_in & 7;
                 const shift_entry *d = shift_address[shift];
-                for (uint8_t cy = 0; cy < cfg.height; cy += 8) {
-                    #pragma unroll
-                    for (uint8_t dy = 0; dy < 8; ++dy) {
-                        uint8_t *ptr = (uint8_t*)*rows++ + xb;
-                        memcpy(ptr, &d->bitmap[cy + dy][0], cfg.width / 8 + 1);
-                    }
+                #pragma unroll
+                for (uint8_t cy = 0; cy < cfg.height; ++cy) {
+                    uint8_t *ptr = row_addresses[cy];
+                    memcpy(ptr, &d->bitmap[cy][0], cfg.width / 8 + 1);
                 }
-
             }
 
             constexpr uint8_t get_width() const { return cfg.width; }
