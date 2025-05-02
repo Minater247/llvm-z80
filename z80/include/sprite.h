@@ -19,6 +19,14 @@
 }
 
 namespace ZX {
+    // XXX move this into utils?
+    static constexpr uint8_t reverse_bits(uint8_t b) {
+        b = (b & 0xF0) >> 4 | (b & 0x0F) << 4;
+        b = (b & 0xCC) >> 2 | (b & 0x33) << 2;
+        b = (b & 0xAA) >> 1 | (b & 0x55) << 1;
+        return b;
+    }
+
     struct AlignedSprite {
         struct Config {
             uint8_t width;
@@ -82,7 +90,6 @@ namespace ZX {
                     }
                     cy += 8;
                 }
-
             }
 
             uint8_t get_width() const { return cfg.width; }
@@ -115,6 +122,16 @@ namespace ZX {
                         data[shift].bitmap[y][cfg.width / 8] = bitmap_remainder;
                     }
                 }
+            }
+
+            constexpr Instance hmirror() const __attribute__((always_inline)) {
+                std::array<std::array<uint8_t, cfg.width / 8>, cfg.height> bitmap;
+                for (int y = 0; y < cfg.height; ++y) {
+                    for ( int x = 0; x < cfg.width / 8; ++x) {
+                        bitmap[y][cfg.width / 8  - x - 1] = reverse_bits(data[0].bitmap[y][x]);
+                    }
+                }
+                return Instance(bitmap);
             }
 
             struct shift_entry {
@@ -177,6 +194,18 @@ namespace ZX {
                 }
             }
 
+            constexpr MaskedInstance hmirror() const __attribute__((always_inline)) {
+                std::array<std::array<uint8_t, cfg.width / 8>, cfg.height> bitmap;
+                std::array<std::array<uint8_t, cfg.width / 8>, cfg.height> mask;
+                for (int y = 0; y < cfg.height; ++y) {
+                    for ( int x = 0; x < cfg.width / 8; ++x) {
+                        bitmap[y][cfg.width / 8  - x - 1] = reverse_bits(offsets[0].data[y][x].bitmap);
+                        mask[y][cfg.width / 8 - x - 1] = reverse_bits(offsets[0].data[y][x].mask);
+                    }
+                }
+                return MaskedInstance(bitmap, mask);
+            }
+
             template <typename ScreenType>
             void paint(uint8_t x_in, uint8_t y_in) const __attribute__((noinline)) {
                 uint8_t xb = x_in >> 3;
@@ -194,6 +223,33 @@ namespace ZX {
                         #pragma unroll
                         for (uint8_t x = 0; x < cfg.width / 8 + 1; ++x) {
                             ptr[x] = (ptr[x] & d->data[cy + dy][x].mask) | d->data[cy + dy][x].bitmap;
+                        }
+                    }
+                }
+            }
+
+            // clear masked bits that would not be drawn for the next sprite instance being drawn at same coordinates
+            template <typename ScreenType>
+            void clear_for(uint8_t x_in, uint8_t y_in, const MaskedInstance& next_frame) const __attribute__((noinline)) {
+                uint8_t xb = x_in >> 3;
+                uint8_t shift = x_in & 7;
+                const offset_entry *d = shift_address[shift];
+                const offset_entry *d2 = next_frame.shift_address[shift];
+                auto *rows = &ScreenType::row_addresses[y_in];
+                for (uint8_t cy = 0; cy < cfg.height; cy += 8) {
+                    uint8_t *row_addresses[8];
+                    #pragma unroll
+                    for (uint8_t y = 0; y < 8; ++y)
+                        row_addresses[y] = (uint8_t*)*rows++ + xb;
+                    #pragma unroll
+                    for (uint8_t dy = 0; dy < 8; ++dy) {
+                        uint8_t *ptr = row_addresses[dy];
+                        #pragma unroll
+                        for (uint8_t x = 0; x < cfg.width / 8 + 1; ++x) {
+                            uint8_t mask = d->data[cy + dy][x].mask;
+                            uint8_t d2mask = d2->data[cy + dy][x].mask;
+                            uint8_t delta_mask = ~(mask ^ d2mask);
+                            ptr[x] &= delta_mask;
                         }
                     }
                 }
