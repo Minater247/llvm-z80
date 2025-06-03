@@ -101,9 +101,9 @@ if __name__ == "__main__":
     start_address = args.start if args.start is not None else detected_start_address
 
     if start_address <= 0x4000:
-        print('Warning: start address at ROM space: 0x{start_address:04x}')
+        print(f'Warning: start address at ROM space: 0x{start_address:04x}')
     elif start_address < 0x6000:
-        print('Warning: start address at low value: 0x{start_address:04x}')
+        print(f'Warning: start address at low value: 0x{start_address:04x}')
 
     if False:
         key = b'\x21\x00\x00'
