@@ -106,11 +106,11 @@ entry:
 
 ; Test function with multiple separate sequences
 define void @test_multiple_sequences() {
-; Each sequence should be optimized independently
+; First sequence has only 2 stores and HL is live, so won't be optimized
+; Second sequence has 3 stores and HL is not live, so will be optimized
 ; OPT-LABEL: test_multiple_sequences:
-; OPT:       ld hl, 24576
-; OPT:       ld (hl), a
-; OPT:       ld (hl), a
+; OPT:       ld (24576), a
+; OPT:       ld (24576), a
 ; OPT:       ld hl, 28672
 ; OPT:       ld (hl), a
 ; OPT:       ld (hl), a
