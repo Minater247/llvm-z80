@@ -43,6 +43,7 @@ FunctionPass *createZ80EarlyIncrementalLoadingPass();
 FunctionPass *createZ80BlitFolder();
 FunctionPass *createZ80UnrollLd();
 FunctionPass *createZ80RegisterOptPass();
+FunctionPass *createZ80RepeatedStoreOptPass();
 
 void initializeZ80PreLegalizerCombinerPass(PassRegistry &);
 void initializeZ80PostLegalizerCombinerPass(PassRegistry &);
@@ -51,6 +52,7 @@ void initializeZ80MachineEarlyOptimizationPass(PassRegistry &);
 void initializeZ80MachinePreRAOptimizationPass(PassRegistry &);
 void initializeZ80MachineLateOptimizationPass(PassRegistry &);
 void initializeZ80BranchSelectorPass(PassRegistry &);
+void initializeZ80RepeatedStoreOptPass(PassRegistry &);
 
 } // namespace llvm
 

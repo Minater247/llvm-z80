@@ -47,6 +47,7 @@ set(sources
   Z80MachinePreRAOptimization.cpp
   Z80PostSelectCombiner.cpp
   Z80RegisterInfo.cpp
+  Z80RepeatedStoreOptPass.cpp
   Z80Subtarget.cpp
   Z80TargetMachine.cpp
   Z80TargetObjectFile.cpp

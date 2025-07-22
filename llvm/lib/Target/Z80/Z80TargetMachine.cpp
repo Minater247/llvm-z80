@@ -46,6 +46,7 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeZ80Target() {
   initializeZ80MachineEarlyOptimizationPass(PR);
   initializeZ80MachineLateOptimizationPass(PR);
   initializeZ80BranchSelectorPass(PR);
+  initializeZ80RepeatedStoreOptPass(PR);
 }
 
 static std::string computeDataLayout(const Triple &TT) {
@@ -226,6 +227,7 @@ bool Z80PassConfig::addRegAssignAndRewriteOptimized() {
 
 void Z80PassConfig::addMachineLateOptimization() {
   TargetPassConfig::addMachineLateOptimization();
+  addPass(createZ80RepeatedStoreOptPass());
   addPass(createZ80MachineLateOptimizationPass());
   addPass(createZ80DanglingRegPass());
   addPass(createZ80IncrementalLoadingPass());
