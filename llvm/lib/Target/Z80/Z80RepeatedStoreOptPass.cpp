@@ -223,6 +223,7 @@ bool Z80RepeatedStoreOptPass::optimizeRepeatedStores(
   
   MachineFunction &MF = *MBB.getParent();
   const TargetInstrInfo &TII = *MF.getSubtarget().getInstrInfo();
+  const TargetRegisterInfo &TRI = *MBB.getParent()->getSubtarget().getRegisterInfo();
   
   // Count the number of stores in the sequence
   unsigned NumStores = 0;
