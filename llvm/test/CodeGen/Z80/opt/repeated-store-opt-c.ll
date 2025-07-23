@@ -1,5 +1,5 @@
 ; Test make sure that the optimization pass works correctly
-; RUN: llc -mtriple=z80 -O2 < %s | FileCheck %s
+; RUN: llc -mtriple=z80-none-elf+full -O2 < %s | FileCheck %s
 
 ; This is the C code `for (int i = 0; i < 256; i++) { *(volatile char*)0x8000 = i; }`
 
@@ -25,8 +25,9 @@ for.end:                                          ; preds = %for.body
 ; This is what should be optimized - multiple stores within one block
 define void @optimizable_sequential_stores() {
 ; CHECK-LABEL: optimizable_sequential_stores:
+; CHECK:       ld (-32768), a
+; CHECK:       ld a, l
 ; CHECK:       ld hl, -32768
-; CHECK:       ld (hl), a
 ; CHECK:       ld (hl), a
 ; CHECK:       ld (hl), a
 

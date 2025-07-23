@@ -1,11 +1,12 @@
-; RUN: llc -mtriple=z80 -O2 < %s | FileCheck %s --check-prefix=OPT
-; RUN: llc -mtriple=z80 -O0 < %s | FileCheck %s --check-prefix=NOOPT
+; RUN: llc -mtriple=z80-none-elf+full -O2 < %s | FileCheck %s --check-prefix=OPT
+; RUN: llc -mtriple=z80-none-elf+full -O0 < %s | FileCheck %s --check-prefix=NOOPT
 
 ; Basic test to ensure the pass functions in some capacity
 define void @test_repeated_stores() {
 ; OPT-LABEL: test_repeated_stores:
+; OPT:       ld (4096), a
+; OPT:       ld a, l
 ; OPT:       ld hl, 4096
-; OPT:       ld (hl), a
 ; OPT:       ld (hl), a
 ; OPT:       ld (hl), a
 

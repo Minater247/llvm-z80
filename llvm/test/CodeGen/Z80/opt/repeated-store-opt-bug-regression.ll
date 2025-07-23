@@ -2,7 +2,7 @@
 ; all stores were from register A, causing incorrect transformations.
 ;
 ; This test ensures that different source registers are preserved correctly.
-; RUN: llc -mtriple=z80 -O2 < %s | FileCheck %s
+; RUN: llc -mtriple=z80-none-elf+full -O2 < %s | FileCheck %s
 
 ; Test using inline assembly - these should NOT be optimized since inline asm is opaque
 define void @test_register_preservation_bug() {

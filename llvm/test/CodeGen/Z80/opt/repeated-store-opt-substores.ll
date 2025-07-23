@@ -1,6 +1,6 @@
 ; Test for substores optimization when sequences need to be split
-; RUN: llc -mtriple=z80 -O2 < %s | FileCheck %s --check-prefix=OPT
-; RUN: llc -mtriple=z80 -O0 < %s | FileCheck %s --check-prefix=NOOPT
+; RUN: llc -mtriple=z80-none-elf+full -O2 < %s | FileCheck %s --check-prefix=OPT
+; RUN: llc -mtriple=z80-none-elf+full -O0 < %s | FileCheck %s --check-prefix=NOOPT
 
 ; Test simple subsequence optimization with inline assembly breaking the sequence
 define void @test_inline_assembly_break() {

@@ -78,6 +78,10 @@ private:
                            MachineBasicBlock::iterator End,
                            uint64_t Address,
                            const LiveRegUnits &LiveRegs);
+  
+  // Check for H/L register conflicts within a sequence
+  bool hasHLConflictInSequence(MachineBasicBlock::iterator Begin,
+                              MachineBasicBlock::iterator End);
 };
 } // end anonymous namespace
 
@@ -144,19 +148,75 @@ bool Z80RepeatedStoreOptPass::isHLLiveAfterPoint(const MachineBasicBlock &MBB,
   LiveRegUnits LocalLiveRegs(TRI);
   LocalLiveRegs.addLiveOuts(MBB);
   
+  LLVM_DEBUG(dbgs() << "Checking HL liveness after point (checking if HL needed after sequence)\n");
+  LLVM_DEBUG({
+    if (Point == MBB.end()) {
+      dbgs() << "Point is end of block\n";
+    } else {
+      dbgs() << "Point instruction: " << *Point;
+    }
+  });
+  
+  LLVM_DEBUG(dbgs() << "Initial live-outs:\n");
+  LLVM_DEBUG({
+    for (unsigned Reg = 1; Reg < TRI.getNumRegs(); ++Reg) {
+      if (!LocalLiveRegs.available(Reg)) {
+        dbgs() << "  " << TRI.getName(Reg) << "\n";
+      }
+    }
+  });
+  
+  // If Point is at the end of the block, we want to check liveness at the end
+  if (Point == MBB.end()) {
+    MCRegister HLReg = Z80::HL;
+    bool hlAvailable = LocalLiveRegs.available(HLReg);
+    bool hAvailable = LocalLiveRegs.available(Z80::H);
+    bool lAvailable = LocalLiveRegs.available(Z80::L);
+    
+    LLVM_DEBUG(dbgs() << "At end of block:\n");
+    LLVM_DEBUG(dbgs() << "  HL available: " << hlAvailable << "\n");
+    LLVM_DEBUG(dbgs() << "  H available: " << hAvailable << "\n");
+    LLVM_DEBUG(dbgs() << "  L available: " << lAvailable << "\n");
+    LLVM_DEBUG(dbgs() << "  HL is live: " << !hlAvailable << "\n");
+    
+    return !hlAvailable;
+  }
+  
   // Process the block backwards from the end to Point
   for (auto MI = MBB.rbegin(); MI != MBB.rend(); ++MI) {
     if (&*MI == &*Point) {
-      // We've reached the point we're interested in
+      // We've reached the point we're interested in - check liveness AFTER this point
+      LLVM_DEBUG(dbgs() << "Found target point, checking liveness after it\n");
       MCRegister HLReg = Z80::HL;
-      return !LocalLiveRegs.available(HLReg);
+      bool hlAvailable = LocalLiveRegs.available(HLReg);
+      bool hAvailable = LocalLiveRegs.available(Z80::H);
+      bool lAvailable = LocalLiveRegs.available(Z80::L);
+      
+      LLVM_DEBUG(dbgs() << "At target point:\n");
+      LLVM_DEBUG(dbgs() << "  HL available: " << hlAvailable << "\n");
+      LLVM_DEBUG(dbgs() << "  H available: " << hAvailable << "\n");
+      LLVM_DEBUG(dbgs() << "  L available: " << lAvailable << "\n");
+      LLVM_DEBUG(dbgs() << "  HL is live: " << !hlAvailable << "\n");
+      
+      return !hlAvailable;
     }
+    LLVM_DEBUG(dbgs() << "Stepping backward through: " << *MI);
     LocalLiveRegs.stepBackward(*MI);
+    LLVM_DEBUG(dbgs() << "Live registers after stepping backward:\n");
+    LLVM_DEBUG({
+      for (unsigned Reg = 1; Reg < TRI.getNumRegs(); ++Reg) {
+        if (!LocalLiveRegs.available(Reg)) {
+          dbgs() << "  " << TRI.getName(Reg) << "\n";
+        }
+      }
+    });
   }
   
   // If we didn't find Point, return the original liveness info
   MCRegister HLReg = Z80::HL;
-  return !LiveRegs.available(HLReg);
+  bool hlAvailable = LiveRegs.available(HLReg);
+  LLVM_DEBUG(dbgs() << "Point not found, using original liveness: HL available = " << hlAvailable << "\n");
+  return !hlAvailable;
 }
 
 // Optimize a sequence of repeated stores
@@ -175,7 +235,7 @@ bool Z80RepeatedStoreOptPass::optimizeRepeatedStores(
   MCRegister HLReg = Z80::HL;
   
   // Check if HL is live after the last store in this subsequence
-  bool IsHLLive = isHLLiveAfterPoint(MBB, std::prev(End), LiveRegs);
+  bool IsHLLive = isHLLiveAfterPoint(MBB, End, LiveRegs);
   
   // Check against the cost model
   LLVM_DEBUG(dbgs() << "NumStores: " << NumStores << ", IsHLLive: " << IsHLLive << "\n");
@@ -301,6 +361,7 @@ bool Z80RepeatedStoreOptPass::optimizeSubsequences(MachineBasicBlock &MBB,
                                                   uint64_t Address,
                                                   const LiveRegUnits &LiveRegs) {
   bool Changed = false;
+  const TargetRegisterInfo &TRI = *MBB.getParent()->getSubtarget().getRegisterInfo();
   
   // Iterate through the range and split on HL conflicts
   auto SubseqBegin = Begin;
@@ -310,6 +371,9 @@ bool Z80RepeatedStoreOptPass::optimizeSubsequences(MachineBasicBlock &MBB,
     uint64_t StoreAddress;
     if (isAbsoluteAddressStore(*Current, StoreAddress) && StoreAddress == Address) {
       Register SrcReg = getStoreSourceRegister(*Current);
+      
+      LLVM_DEBUG(dbgs() << "Processing store with source register: " 
+                       << TRI.getName(SrcReg) << " in instruction: " << *Current);
       
       // Check if this store uses HL as the source register - this would conflict
       if (SrcReg == Z80::HL || SrcReg == Z80::H || SrcReg == Z80::L) {
@@ -345,6 +409,24 @@ bool Z80RepeatedStoreOptPass::optimizeSubsequences(MachineBasicBlock &MBB,
   return Changed;
 }
 
+// Check for H/L register conflicts within a sequence
+bool Z80RepeatedStoreOptPass::hasHLConflictInSequence(MachineBasicBlock::iterator Begin,
+                                                     MachineBasicBlock::iterator End) {
+  for (auto I = Begin; I != End; ++I) {
+    // Check if this instruction uses H or L registers
+    for (const auto &MO : I->operands()) {
+      if (MO.isReg() && MO.isUse()) {
+        MCRegister Reg = MO.getReg();
+        if (Reg == Z80::H || Reg == Z80::L || Reg == Z80::HL) {
+          LLVM_DEBUG(dbgs() << "Found H/L conflict in sequence at: " << *I);
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
 bool Z80RepeatedStoreOptPass::runOnMachineFunction(MachineFunction &MF) {
   LLVM_DEBUG(dbgs() << "********** Z80 Repeated Store Optimization **********\n"
                     << "********** Function: " << MF.getName() << '\n');
@@ -353,14 +435,36 @@ bool Z80RepeatedStoreOptPass::runOnMachineFunction(MachineFunction &MF) {
   const TargetRegisterInfo &TRI = *MF.getSubtarget().getRegisterInfo();
   
   for (auto &MBB : MF) {
+    LLVM_DEBUG(dbgs() << "=== Processing Basic Block: " << MBB.getName() << " ===\n");
+    
     // Create a LiveRegUnits tracker to check if HL is live
     LiveRegUnits LiveRegs(TRI);
     LiveRegs.addLiveOuts(MBB);
     
+    LLVM_DEBUG(dbgs() << "Live-outs at end of block:\n");
+    LLVM_DEBUG({
+      for (unsigned Reg = 1; Reg < TRI.getNumRegs(); ++Reg) {
+        if (!LiveRegs.available(Reg)) {
+          dbgs() << "  " << TRI.getName(Reg) << "\n";
+        }
+      }
+    });
+    
     // Process the block backwards for liveness analysis
     for (auto MI = MBB.rbegin(); MI != MBB.rend(); ++MI) {
+      LLVM_DEBUG(dbgs() << "Stepping backward through: " << *MI);
       LiveRegs.stepBackward(*MI);
+      LLVM_DEBUG(dbgs() << "Live registers after stepping backward:\n");
+      LLVM_DEBUG({
+        for (unsigned Reg = 1; Reg < TRI.getNumRegs(); ++Reg) {
+          if (!LiveRegs.available(Reg)) {
+            dbgs() << "  " << TRI.getName(Reg) << "\n";
+          }
+        }
+      });
     }
+    
+    LLVM_DEBUG(dbgs() << "=== Starting forward pass through block ===\n");
     
     // Now process the block forwards to find repeated stores
     for (auto MI = MBB.begin(); MI != MBB.end(); /* increment in loop */) {
@@ -391,7 +495,27 @@ bool Z80RepeatedStoreOptPass::runOnMachineFunction(MachineFunction &MF) {
           continue;
         }
         
-        // Check if this is a non-interfering instruction (like COPY) that we can skip
+        // Check if this instruction uses HL - if so, process current subsequence and break
+        if ((MI->isCopy() || MI->getOpcode() == Z80::LD8ri) && 
+            (MI->readsRegister(Z80::HL, &TRI) || MI->readsRegister(Z80::H, &TRI) || MI->readsRegister(Z80::L, &TRI))) {
+          // Process the current subsequence before the HL conflict
+          if (std::distance(Begin, End) >= 2) {
+            LLVM_DEBUG(dbgs() << "Found subsequence of " << std::distance(Begin, End) 
+                              << " stores to address " << Address << " before HL conflict\n");
+            
+            if (optimizeSubsequences(MBB, Begin, End, Address, LiveRegs)) {
+              LLVM_DEBUG(dbgs() << "Successfully optimized subsequence before HL conflict\n");
+              Changed = true;
+            }
+          }
+          
+          // Skip past the HL-conflicting instruction
+          ++MI;
+          // Don't restart sequence building here - let the outer loop handle finding the next store
+          break;
+        }
+        
+        // Check if this is a non-interfering instruction that we can skip
         if (MI->isCopy() || MI->getOpcode() == Z80::LD8ri) {
           ++MI;
           continue;
@@ -411,7 +535,8 @@ bool Z80RepeatedStoreOptPass::runOnMachineFunction(MachineFunction &MF) {
       if (std::distance(Begin, End) >= 2) {
         LLVM_DEBUG(dbgs() << "Found sequence of " << std::distance(Begin, End) 
                           << " stores to address " << Address << "\n");
-        // Optimize this sequence, handling HL conflicts by splitting into subsequences
+        
+        // Optimize this sequence using subsequences (which handles HL conflicts internally)
         if (optimizeSubsequences(MBB, Begin, End, Address, LiveRegs)) {
           LLVM_DEBUG(dbgs() << "Successfully optimized sequence/subsequences\n");
           Changed = true;
@@ -425,6 +550,8 @@ bool Z80RepeatedStoreOptPass::runOnMachineFunction(MachineFunction &MF) {
         LLVM_DEBUG(dbgs() << "Sequence too short: " << std::distance(Begin, End) << " stores\n");
       }
     }
+    
+    LLVM_DEBUG(dbgs() << "=== End of Basic Block: " << MBB.getName() << " ===\n");
   }
   
   return Changed;
