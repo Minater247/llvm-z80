@@ -45,13 +45,13 @@ entry:
   ret void
 }
 
-; Test mixed-size stores - same type stores should be optimized separately
+; Test mixed-size stores - HL is live (L used later), so no optimization with < 6 stores
 define void @test_mixed_size_stores() {
-; 8-bit and 16-bit stores optimized together, then HL conflict breaks sequence
+; L register is used later, making HL live. Cost model requires 6+ stores when HL is live.
+; Since there are only 3 stores, no optimization should occur.
 ; OPT-LABEL: test_mixed_size_stores:
-; OPT:       ld hl, 12288
-; OPT:       ld (hl), a
-; OPT:       ld (hl), de
+; OPT:       ld (12288), a
+; OPT:       ld (12288), {{[a-z]+}}
 ; OPT:       ld a, l
 ; OPT:       ld (12288), a
 

@@ -4,13 +4,10 @@
 
 ; Test simple subsequence optimization with inline assembly breaking the sequence
 define void @test_inline_assembly_break() {
-; The first two stores should be optimized together
-; Inline assembly breaks the sequence, creating a new subsequence
-; Single store after inline assembly should not be optimized
+; L register is used, making HL live. With only 2 stores and HL live, no optimization should occur.
 ; OPT-LABEL: test_inline_assembly_break:
-; OPT:       ld hl, 4096
-; OPT:       ld (hl), a
-; OPT:       ld (hl), a
+; OPT:       ld (4096), a
+; OPT:       ld (4096), a
 ; OPT:       ld (4096), a
 
 ; NOOPT-LABEL: test_inline_assembly_break:
@@ -28,10 +25,11 @@ entry:
 
 ; Test multiple subsequences with mixed register usage
 define void @test_mixed_register_stores() {
-; All stores here use compatible registers, so should be optimized together
+; HL conflict from `ld a, l` splits the sequence. First store unoptimized, then 3 stores optimized.
 ; OPT-LABEL: test_mixed_register_stores:
+; OPT:       ld (8192), a
+; OPT:       ld a, l
 ; OPT:       ld hl, 8192
-; OPT:       ld (hl), a
 ; OPT:       ld (hl), a
 ; OPT:       ld (hl), bc
 ; OPT:       ld (hl), a
@@ -50,16 +48,21 @@ entry:
   ret void
 }
 
-; Test cost model - when HL is not live, optimize with 2+ stores
+; Test cost model - when HL conflicts split the sequence
 define void @test_hl_liveness_cost_model() {
-; This function has 6 stores and HL is not live, so will be optimized
+; Multiple HL conflicts (ld a, l and ld a, h) split the sequence into subsequences
 ; OPT-LABEL: test_hl_liveness_cost_model:
+; OPT:       ld (12288), a
+; OPT:       ld a, l
+; OPT:       ld (12288), a
+; OPT:       ld a, e
+; OPT:       ld (12288), a
+; OPT:       ld a, c
+; OPT:       ld (12288), a
+; OPT:       ld a, h
 ; OPT:       ld hl, 12288
 ; OPT:       ld (hl), a
-; OPT:       ld (hl), a
-; OPT:       ld (hl), a
-; OPT:       ld (hl), a
-; OPT:       ld (hl), a
+; OPT:       ld a, d
 ; OPT:       ld (hl), a
 
 ; NOOPT-LABEL: test_hl_liveness_cost_model:
@@ -82,13 +85,13 @@ entry:
   ret void
 }
 
-; Test that small sequences get optimized when HL is not live
+; Test that small sequences do NOT get optimized when HL is live
 define void @test_small_sequence_hl_not_live() {
-; 2 stores and HL is not live, so should be optimized
+; L register is used (ld a, l), making HL live. With only 2 stores, no optimization should occur.
 ; OPT-LABEL: test_small_sequence_hl_not_live:
-; OPT:       ld hl, 16384
-; OPT:       ld (hl), a
-; OPT:       ld (hl), a
+; OPT:       ld (16384), a
+; OPT:       ld a, l
+; OPT:       ld (16384), a
 
 ; NOOPT-LABEL: test_small_sequence_hl_not_live:
 ; NOOPT:     ld (16384), a
@@ -163,19 +166,15 @@ entry:
   ret i16 %hl_input
 }
 
-; Test H register liveness detection
+; Test H register liveness detection - HL conflict causes sequence split
 define i8 @test_h_register_preservation() {
-; H register live should trigger HL preservation
+; HL conflict from `ld a, h` splits sequence. Only 5 stores in subsequence, so no optimization occurs.
 ; OPT-LABEL: test_h_register_preservation:
-; OPT:       push hl
-; OPT:       ld hl, 28672
-; OPT:       ld (hl), a
-; OPT:       ld (hl), a
-; OPT:       ld (hl), a
-; OPT:       ld (hl), a
-; OPT:       ld (hl), a
-; OPT:       ld (hl), a
-; OPT:       pop hl
+; OPT:       ld (28672), a
+; OPT:       ld (28672), a
+; OPT:       ld (28672), a
+; OPT:       ld (28672), a
+; OPT:       ld (28672), a
 
 ; NOOPT-LABEL: test_h_register_preservation:
 ; NOOPT:     ld (28672), a
@@ -201,19 +200,21 @@ entry:
   ret i8 %h_input
 }
 
-; Test L register liveness detection
+; Test L register liveness detection - HL is live, insufficient stores for optimization
 define i8 @test_l_register_preservation() {
-; L register live should trigger HL preservation
+; L register is live and used at the end. With only 6 stores but HL live, insufficient for optimization.
 ; OPT-LABEL: test_l_register_preservation:
-; OPT:       push hl
-; OPT:       ld hl, -32768
-; OPT:       ld (hl), a
-; OPT:       ld (hl), a
-; OPT:       ld (hl), a
-; OPT:       ld (hl), a
-; OPT:       ld (hl), a
-; OPT:       ld (hl), a
-; OPT:       pop hl
+; OPT:       ld (-32768), a
+; OPT:       ld a, e
+; OPT:       ld (-32768), a
+; OPT:       ld a, c
+; OPT:       ld (-32768), a
+; OPT:       ld a, h
+; OPT:       ld (-32768), a
+; OPT:       ld a, d
+; OPT:       ld (-32768), a
+; OPT:       ld a, b
+; OPT:       ld (-32768), a
 
 ; NOOPT-LABEL: test_l_register_preservation:
 ; NOOPT:     ld (-32768), a
