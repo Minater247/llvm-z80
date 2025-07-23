@@ -302,6 +302,9 @@ static const char *getLDMOption(const llvm::Triple &T, const ArgList &Args) {
     return "elf64ve";
   case llvm::Triple::csky:
     return "cskyelf_linux";
+  case llvm::Triple::z80:
+  case llvm::Triple::ez80:
+    return "elf32z80";
   default:
     return nullptr;
   }
@@ -456,7 +459,8 @@ void tools::gnutools::Linker::ConstructJob(Compilation &C, const JobAction &JA,
 
   ToolChain.addExtraOpts(CmdArgs);
 
-  CmdArgs.push_back("--eh-frame-hdr");
+  if (!Triple.isZ80())
+    CmdArgs.push_back("--eh-frame-hdr");
 
   if (const char *LDMOption = getLDMOption(ToolChain.getTriple(), Args)) {
     CmdArgs.push_back("-m");
@@ -475,7 +479,8 @@ void tools::gnutools::Linker::ConstructJob(Compilation &C, const JobAction &JA,
     if (Args.hasArg(options::OPT_rdynamic))
       CmdArgs.push_back("-export-dynamic");
 
-    if (!Args.hasArg(options::OPT_shared) && !IsStaticPIE) {
+      // Dynamic linking does not work on Z80 as of Binutils 2.44
+      if (!Args.hasArg(options::OPT_shared) && !IsStaticPIE && !Triple.isZ80()) {
       CmdArgs.push_back("-dynamic-linker");
       CmdArgs.push_back(Args.MakeArgString(Twine(D.DyldPrefix) +
                                            ToolChain.getDynamicLinker(Args)));
@@ -2796,7 +2801,12 @@ Tool *Generic_GCC::buildAssembler() const {
   return new tools::gnutools::Assembler(*this);
 }
 
-Tool *Generic_GCC::buildLinker() const { return new tools::gcc::Linker(*this); }
+Tool *Generic_GCC::buildLinker() const { 
+  // This allows bypassing the nonexistent z80 GCC for linking
+  if (getTriple().isZ80())
+    return new tools::gnutools::Linker(*this);
+  return new tools::gcc::Linker(*this); 
+}
 
 void Generic_GCC::printVerboseInfo(raw_ostream &OS) const {
   // Print the information about how we detected the GCC installation.

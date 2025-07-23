@@ -1171,9 +1171,7 @@ bool Z80InstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
   default:
     return false;
   case Z80::RCF:
-    MI.setDesc(get(Z80::OR8ar));
-    MIB.addReg(Z80::A, RegState::Undef)
-        .addReg(Z80::A, RegState::ImplicitDefine);
+    MI.setDesc(get(Z80::OR8aa));
     break;
   case Z80::LD8r0:
     if (MI.getOperand(0).getReg() == Z80::A) {
