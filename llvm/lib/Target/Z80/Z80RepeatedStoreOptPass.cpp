@@ -78,10 +78,6 @@ private:
                            MachineBasicBlock::iterator End,
                            uint64_t Address,
                            const LiveRegUnits &LiveRegs);
-  
-  // Check for H/L register conflicts within a sequence
-  bool hasHLConflictInSequence(MachineBasicBlock::iterator Begin,
-                              MachineBasicBlock::iterator End);
 };
 } // end anonymous namespace
 
@@ -194,7 +190,7 @@ bool Z80RepeatedStoreOptPass::isHLLiveAfterPoint(const MachineBasicBlock &MBB,
     if (MI->readsRegister(Z80::HL, &TRI) || 
         MI->readsRegister(Z80::H, &TRI) || 
         MI->readsRegister(Z80::L, &TRI)) {
-      LLVM_DEBUG(dbgs() << "Found instruction that uses HL: " << *MI << " | HL becomes live after this point");
+      LLVM_DEBUG(dbgs() << "Found instruction that uses HL: " << *MI << " | HL becomes live after this point\n");
       return true;
     }
     
@@ -273,6 +269,13 @@ bool Z80RepeatedStoreOptPass::optimizeRepeatedStores(
       uint64_t StoreAddress;
       if (isAbsoluteAddressStore(*I, StoreAddress) && StoreAddress == Address) {
         Register SrcReg = getStoreSourceRegister(*I);
+        
+        // For safety purposes, ensure this store does not use HL as its source.
+        if (SrcReg == Z80::HL || SrcReg == Z80::H || SrcReg == Z80::L) {
+          LLVM_DEBUG(dbgs() << "Unexpected HL conflict in optimizeRepeatedStores: " 
+                           << TRI.getName(SrcReg) << " from instruction: " << *I << "\n");
+          return false;
+        }
         
         // Validate that an HL-indirect store is actually possible before committing to it
         bool CanOptimize = false;
@@ -408,8 +411,10 @@ bool Z80RepeatedStoreOptPass::optimizeSubsequences(MachineBasicBlock &MBB,
           } else {
             LLVM_DEBUG(dbgs() << "end of block\n");
           }
-          if (optimizeRepeatedStores(MBB, SubseqBegin, LastStoreIt, Address, LiveRegs)) {
-            Changed = true;
+          if (StoreCount >= 2) {  // Only optimize if we have actual stores
+            if (optimizeRepeatedStores(MBB, SubseqBegin, LastStoreIt, Address, LiveRegs)) {
+              Changed = true;
+            }
           }
         }
         
@@ -437,30 +442,14 @@ bool Z80RepeatedStoreOptPass::optimizeSubsequences(MachineBasicBlock &MBB,
     
     LLVM_DEBUG(dbgs() << "Optimizing final subsequence: " 
                      << StoreCount << " stores in " << std::distance(SubseqBegin, End) << " instructions\n");
-    if (optimizeRepeatedStores(MBB, SubseqBegin, LastStoreIt, Address, LiveRegs)) {
-      Changed = true;
+    if (StoreCount >= 2) {  // Only optimize if we have actual stores
+      if (optimizeRepeatedStores(MBB, SubseqBegin, LastStoreIt, Address, LiveRegs)) {
+        Changed = true;
+      }
     }
   }
   
   return Changed;
-}
-
-// Check for H/L register conflicts within a sequence
-bool Z80RepeatedStoreOptPass::hasHLConflictInSequence(MachineBasicBlock::iterator Begin,
-                                                     MachineBasicBlock::iterator End) {
-  for (auto I = Begin; I != End; ++I) {
-    // Check if this instruction uses H or L registers
-    for (const auto &MO : I->operands()) {
-      if (MO.isReg() && MO.isUse()) {
-        MCRegister Reg = MO.getReg();
-        if (Reg == Z80::H || Reg == Z80::L || Reg == Z80::HL) {
-          LLVM_DEBUG(dbgs() << "Found H/L conflict in sequence at: " << *I);
-          return true;
-        }
-      }
-    }
-  }
-  return false;
 }
 
 bool Z80RepeatedStoreOptPass::runOnMachineFunction(MachineFunction &MF) {
