@@ -553,6 +553,16 @@ bool Z80RepeatedStoreOptPass::runOnMachineFunction(MachineFunction &MF) {
           break;
         }
         
+        // Check if this is an inline asm instruction that doesn't interfere with HL
+        if (MI->isInlineAsm()) {
+          if (MI->modifiesRegister(Z80::HL, &TRI) || 
+              MI->killsRegister(Z80::HL, &TRI)) {
+            break;
+          }
+          ++MI;
+          continue;
+        }
+        
         // If this is some other instruction, stop looking
         break;
       }
