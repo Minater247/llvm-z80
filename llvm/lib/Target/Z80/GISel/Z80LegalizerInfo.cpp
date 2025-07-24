@@ -440,6 +440,14 @@ Z80LegalizerInfo::legalizeBitwise(LegalizerHelper &Helper, MachineInstr &MI,
     auto RHSImm = getIConstantVRegValWithLookThrough(RightReg, MRI);
 
     LLT s8 {LLT::scalar(8)};
+    LLT s16 {LLT::scalar(16)};
+
+    // Handle pointer types - convert to integer first
+    Register LeftIntReg = LeftReg;
+    if (LeftRegTy.isPointer()) {
+      LeftIntReg = MRI.createGenericVirtualRegister(s16);
+      Builder.buildPtrToInt(LeftIntReg, LeftReg);
+    }
 
     Register left_low = MRI.createGenericVirtualRegister(s8);
     Register left_high = MRI.createGenericVirtualRegister(s8);
@@ -447,7 +455,7 @@ Z80LegalizerInfo::legalizeBitwise(LegalizerHelper &Helper, MachineInstr &MI,
     Builder.buildInstr(TargetOpcode::G_UNMERGE_VALUES)
         .addDef(left_low)
         .addDef(left_high)
-        .addUse(LeftReg);
+        .addUse(LeftIntReg);
 
     Register right_low = MRI.createGenericVirtualRegister(s8);
     Register right_high = MRI.createGenericVirtualRegister(s8);
@@ -456,12 +464,26 @@ Z80LegalizerInfo::legalizeBitwise(LegalizerHelper &Helper, MachineInstr &MI,
         .addDef(right_high)
         .addUse(RightReg);
 
-    auto res_low = Builder.buildInstr(MI.getOpcode(), {s8}, {left_low, right_low}).getReg(0);
-    auto res_high = Builder.buildInstr(MI.getOpcode(), {s8}, {left_high, right_high}).getReg(0);
+    unsigned opcode = (MI.getOpcode() == G_PTRMASK) ? G_AND : MI.getOpcode();
+    auto res_low = Builder.buildInstr(opcode, {s8}, {left_low, right_low}).getReg(0);
+    auto res_high = Builder.buildInstr(opcode, {s8}, {left_high, right_high}).getReg(0);
 
-    MI.setDesc(Builder.getTII().get(TargetOpcode::G_MERGE_VALUES));
-    MI.getOperand(1).setReg(res_low);
-    MI.getOperand(2).setReg(res_high);
+    Register result_int = MRI.createGenericVirtualRegister(s16);
+    Builder.buildInstr(TargetOpcode::G_MERGE_VALUES)
+        .addDef(result_int)
+        .addUse(res_low)
+        .addUse(res_high);
+
+    // If original was a pointer type, convert back to pointer
+    if (LeftRegTy.isPointer()) {
+      MI.setDesc(Builder.getTII().get(TargetOpcode::G_INTTOPTR));
+      MI.getOperand(1).setReg(result_int);
+      MI.removeOperand(2);
+    } else {
+      MI.setDesc(Builder.getTII().get(COPY));
+      MI.getOperand(1).setReg(result_int);
+      MI.removeOperand(2);
+    }
 
     return LegalizerHelper::Legalized;
   }
