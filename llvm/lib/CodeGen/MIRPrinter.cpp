@@ -469,8 +469,16 @@ void MIRPrinter::convertStackObjects(yaml::MachineFunction &YMF,
   for (unsigned I = 0, E = MFI.getLocalFrameObjectCount(); I < E; ++I) {
     auto LocalObject = MFI.getLocalFrameObjectMap(I);
     assert(LocalObject.first >= 0 && "Expected a locally mapped stack object");
-    YMF.StackObjects[StackObjectsIdx[LocalObject.first]].LocalOffset =
-        LocalObject.second;
+    
+    // Skip dead objects - they were not added to YMF.StackObjects
+    if (MFI.isDeadObjectIndex(LocalObject.first))
+      continue;
+    
+    unsigned StackObjectIdx = StackObjectsIdx[LocalObject.first];
+    if (StackObjectIdx == (unsigned)-1)
+      continue;
+    
+    YMF.StackObjects[StackObjectIdx].LocalOffset = LocalObject.second;
   }
 
   // Print the stack object references in the frame information class after
