@@ -479,8 +479,8 @@ void tools::gnutools::Linker::ConstructJob(Compilation &C, const JobAction &JA,
     if (Args.hasArg(options::OPT_rdynamic))
       CmdArgs.push_back("-export-dynamic");
 
-      // Dynamic linking does not work on Z80 as of Binutils 2.44
-      if (!Args.hasArg(options::OPT_shared) && !IsStaticPIE && !Triple.isZ80()) {
+    // Dynamic linking does not work on Z80 as of Binutils 2.44
+    if (!Args.hasArg(options::OPT_shared) && !IsStaticPIE && !Triple.isZ80()) {
       CmdArgs.push_back("-dynamic-linker");
       CmdArgs.push_back(Args.MakeArgString(Twine(D.DyldPrefix) +
                                            ToolChain.getDynamicLinker(Args)));
@@ -942,6 +942,10 @@ void tools::gnutools::Assembler::ConstructJob(Compilation &C,
     CmdArgs.push_back(Args.MakeArgString("-march=" + CPUName));
     break;
   }
+  case llvm::Triple::z80:
+  case llvm::Triple::ez80:
+    DefaultAssembler = "z80-none-elf-as";
+    break;
   case llvm::Triple::ve:
     DefaultAssembler = "nas";
   }
@@ -3209,4 +3213,10 @@ void Generic_ELF::addClangTargetOptions(const ArgList &DriverArgs,
   if (!DriverArgs.hasFlag(options::OPT_fuse_init_array,
                           options::OPT_fno_use_init_array, true))
     CC1Args.push_back("-fno-use-init-array");
+}
+
+const char *Generic_ELF::getDefaultLinker() const {
+  if (getTriple().isZ80())
+    return "z80-none-elf-ld";
+  return Generic_GCC::getDefaultLinker();
 }

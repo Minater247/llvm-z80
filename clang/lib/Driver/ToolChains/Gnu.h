@@ -375,6 +375,8 @@ public:
     return {};
   }
 
+  const char *getDefaultLinker() const override;
+
   virtual void addExtraOpts(llvm::opt::ArgStringList &CmdArgs) const {}
 };
 
