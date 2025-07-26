@@ -1,4 +1,3 @@
-
 #include "Z80.h"
 #include "Z80InstrInfo.h"
 #include "MCTargetDesc/Z80MCTargetDesc.h"
@@ -57,6 +56,10 @@ bool Z80UnrollLd::runOnMachineFunction(MachineFunction &MF)
       // into
       //    LD8pg %147:a16, %55:g8 :: (store (s8) into %ir.arrayidx14.3, !tbaa !10)
       if (MI.getOpcode() == Z80::LD8og) {
+        // Check if operands are actually registers/immediates before calling getReg()/getImm()
+        if (!MI.getOperand(0).isReg() || !MI.getOperand(1).isImm()) {
+          continue;
+        }
         Register Reg = MI.getOperand(0).getReg();
         int64_t OffsetValue = MI.getOperand(1).getImm();
         auto Fit = OffsetMap.find(Reg);
@@ -93,17 +96,24 @@ bool Z80UnrollLd::runOnMachineFunction(MachineFunction &MF)
         if (Opcodes != decltype(Opcodes){Z80::LD8go, Z80::LD8go}) {
           break;
         }
-        int64_t OffsetValue = MI0.getOperand(2).getImm();
+        // Check if operands are actually registers/immediates before calling getReg()/getImm()
+        if (!MI0.getOperand(1).isReg() || !MI0.getOperand(2).isImm()) {
+          break;
+        }
         Register Reg = MI0.getOperand(1).getReg();
+        int64_t OffsetValue = MI0.getOperand(2).getImm();
+        if (!MI1.getOperand(1).isReg()) {
+          break;
+        }
         if (MI1.getOperand(1).getReg() == Reg) {
           break;
         }
         bool FoundUsage = false;
-        size_t LookupLen = 10;
-        for (auto IT = MI.getIterator(); IT != MBB.end() && LookupLen; ++IT, --LookupLen) {
-          if (IT->getOpcode() == Z80::LD8og && IT->getOperand(0).getReg() == Reg) {
-            if (IT->getOperand(1).getImm() == OffsetValue) {
+        for (auto IT = MI.getIterator(); IT != MBB.end(); ++IT) {
+          if (IT->getOpcode() == Z80::LD8og && IT->getOperand(0).isReg() && IT->getOperand(1).isImm()) {
+            if (IT->getOperand(0).getReg() == Reg && IT->getOperand(1).getImm() == OffsetValue) {
               FoundUsage = true;
+              break;
             }
           }
         }

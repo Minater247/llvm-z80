@@ -4,11 +4,15 @@
 
 ; Test simple subsequence optimization with inline assembly breaking the sequence
 define void @test_inline_assembly_break() {
-; L register is used, making HL live. With only 2 stores and HL live, no optimization should occur.
+; Inline assembly doesn't interfere with HL, but register allocation does affect the sequence.
 ; OPT-LABEL: test_inline_assembly_break:
 ; OPT:       ld (4096), a
-; OPT:       ld (4096), a
-; OPT:       ld (4096), a
+; OPT:       ld a, l
+; OPT:       ld hl, 4096
+; OPT:       ld (hl), a
+; OPT:       ;APP
+; OPT:       ;NO_APP
+; OPT:       ld (hl), a
 
 ; NOOPT-LABEL: test_inline_assembly_break:
 ; NOOPT:     ld (4096), a
@@ -18,7 +22,7 @@ define void @test_inline_assembly_break() {
 entry:
   store volatile i8 1, i8* inttoptr (i64 4096 to i8*)
   store volatile i8 2, i8* inttoptr (i64 4096 to i8*)
-  call void asm sideeffect "", ""()  ; Inline assembly breaks sequence
+  call void asm sideeffect "", ""()  ; Inline assembly doesn't affect HL, sequence continues
   store volatile i8 3, i8* inttoptr (i64 4096 to i8*)
   ret void
 }

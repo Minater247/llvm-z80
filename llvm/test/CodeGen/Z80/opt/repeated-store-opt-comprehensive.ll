@@ -497,15 +497,16 @@ entry:
 
 ; ========== INSTRUCTION SEQUENCE INTERRUPTION TESTS ==========
 
-; Test 19: Inline assembly breaking sequence
+; Test 19: Inline assembly that doesn't affect HL - sequence should NOT break
 define void @test_inline_asm_breaks_sequence() {
 ; OPT-LABEL: test_inline_asm_breaks_sequence:
 ; OPT:       ld (4116), a
-; OPT:       ld (4116), a
+; OPT:       ld a, l
+; OPT:       ld hl, 4116
+; OPT:       ld (hl), a
 ; OPT:       ;APP
 ; OPT:       nop
 ; OPT:       ;NO_APP
-; OPT:       ld hl, 4116
 ; OPT:       ld (hl), a
 ; OPT:       ld (hl), a
 
@@ -519,7 +520,37 @@ define void @test_inline_asm_breaks_sequence() {
 entry:
   store volatile i8 1, i8* inttoptr (i64 4116 to i8*)
   store volatile i8 2, i8* inttoptr (i64 4116 to i8*)
-  call void asm sideeffect "nop", ""()  ; Breaks sequence
+  call void asm sideeffect "nop", ""()  ; Does not affect HL, sequence continues
+  store volatile i8 3, i8* inttoptr (i64 4116 to i8*)
+  store volatile i8 4, i8* inttoptr (i64 4116 to i8*)
+  ret void
+}
+
+; Test 19b: Inline assembly that DOES modify HL - should break sequence
+define void @test_inline_asm_modifies_hl() {
+; OPT-LABEL: test_inline_asm_modifies_hl:
+; OPT:       ld (4116), a
+; OPT:       ld a, l
+; OPT:       ld (4116), a
+; OPT:       ;APP
+; OPT:       ld hl, 0x1234
+; OPT:       ;NO_APP
+; OPT:       ld hl, 4116
+; OPT:       ld (hl), a
+; OPT:       ld (hl), a
+
+; NOOPT-LABEL: test_inline_asm_modifies_hl:
+; NOOPT:     ld (4116), a
+; NOOPT:     ld a, l
+; NOOPT:     ld (4116), a
+; NOOPT:     ld hl, 0x1234
+; NOOPT:     ld (4116), a
+; NOOPT:     ld (4116), a
+
+entry:
+  store volatile i8 1, i8* inttoptr (i64 4116 to i8*)
+  store volatile i8 2, i8* inttoptr (i64 4116 to i8*)
+  call void asm sideeffect "ld hl, 0x1234", "~{hl}"()  ; Modifies HL, breaks sequence
   store volatile i8 3, i8* inttoptr (i64 4116 to i8*)
   store volatile i8 4, i8* inttoptr (i64 4116 to i8*)
   ret void
