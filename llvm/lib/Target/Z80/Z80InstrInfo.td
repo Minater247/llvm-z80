@@ -939,7 +939,28 @@ defm ADD : BinOp8RF <         0, "add">;
 defm ADC : BinOp8RFF<         1, "adc", adde>;
 defm SUB : BinOp8RF <         2, "sub", true>;
 defm SBC : BinOp8RFF<         3, "sbc", sube>;
-defm AND : BinOp8RF <         4, "and">;
+multiclass ANDInstr<bits<3> opcode, string mnemonic> {
+  let isCompare = false, Defs = [A, F], Uses = [A] in {
+    def 8ar  : I <Idx0Pre, {0b10, opcode, 0b000}, mnemonic, "\t$src", "",
+                  (outs), (ins    R8:$src),
+                  [(set A, F, (Z80and_flag A, R8:$src))]>;
+    def 8ai  : Ii<  NoPre, {0b11, opcode, 0b110}, mnemonic, "\t$src", "",
+                  (outs), (ins i8imm:$src),
+                  [(set A, F, (Z80and_flag A, imm:$src))]>;
+    let mayLoad = true in {
+      def  8ap : I <Idx0Pre, {0b10, opcode, 0b110}, mnemonic, "\t$src", "",
+                    (outs), (ins  aptr:$src),
+                    [(set A, F, (Z80and_flag A, (i8 (load   iPTR:$src))))]>;
+      def  8ao : Io<Idx0Pre, {0b10, opcode, 0b110}, mnemonic, "\t$src", "",
+                    (outs), (ins   off:$src),
+                    [(set A, F, (Z80and_flag A, (i8 (load offpat:$src))))]>;
+    }
+  }
+  def : Pat<(and A,  R8:$src), (!cast<Instruction>(!strconcat(NAME, "8ar"))  R8:$src)>;
+  def : Pat<(and A, imm:$src), (!cast<Instruction>(!strconcat(NAME, "8ai")) imm:$src)>;
+}
+
+defm AND : ANDInstr<4, "and">;
 defm XOR : BinOp8RF <         5, "xor">;
 
 multiclass ORInstr<bits<3> opcode, string mnemonic> {
@@ -970,7 +991,38 @@ def OR8aa : I<NoPre, 0xB7, "or", "\ta", "",
                (outs), (ins),
                [(set A, F, (Z80or_flag A, A))]>;
 
-defm CP  : BinOp8F  <Idx0Pre, 7, "cp",  true>;
+multiclass CPInstr<Prefix prefix, bits<3> opcode, string mnemonic,
+                   bit compare = false> {
+  defvar   s = !cond(!eq(prefix, Idx0Pre): "r", !eq(prefix, EDPre): "g");
+  defvar rc8 = !cond(!eq(prefix, Idx0Pre):  R8, !eq(prefix, EDPre):  G8);
+  let isCompare = compare, Defs = [F], Uses = [A] in {
+    def 8a#s : I <prefix, {0b10, opcode, 0b000}, mnemonic, "\t$src", "",
+                  (outs), (ins   rc8:$src),
+                  [(set F,
+                        (!cast<SDNode>(!strconcat("Z80", mnemonic, "_flag"))
+                            A, rc8:$src))]>;
+    def 8ai  : Ii<prefix, {0b11, opcode, 0b110}, mnemonic, "\t$src", "",
+                  (outs), (ins i8imm:$src),
+                  [(set F,
+                        (!cast<SDNode>(!strconcat("Z80", mnemonic, "_flag"))
+                            A, imm:$src))]>;
+    let mayLoad = true in {
+      def 8ap  : I <prefix, {0b10, opcode, 0b110}, mnemonic, "\t$src", "",
+                    (outs), (ins  aptr:$src),
+                    [(set F,
+                          (!cast<SDNode>(!strconcat("Z80", mnemonic, "_flag"))
+                              A, (i8 (load iPTR:$src))))]>;
+      if !eq(prefix, Idx0Pre) then
+      def 8ao  : Io<prefix, {0b10, opcode, 0b110}, mnemonic, "\t$src", "",
+                    (outs), (ins   off:$src),
+                    [(set F,
+                          (!cast<SDNode>(!strconcat("Z80", mnemonic, "_flag"))
+                              A, (i8 (load offpat:$src))))]>;
+    }
+  }
+}
+
+defm CP  : CPInstr  <Idx0Pre, 7, "cp",  true>;
 defm TST : BinOp8F  <  EDPre, 4, "tst", true>, Requires<[HaveZ180Ops]>;
 
 def : MnemonicAlias<"sll", "sli">, Requires<[HaveSliOp]>;
