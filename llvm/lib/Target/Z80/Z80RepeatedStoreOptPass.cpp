@@ -541,17 +541,15 @@ bool Z80RepeatedStoreOptPass::runOnMachineFunction(MachineFunction &MF) {
           break;
         }
         
-        // Check if this is a non-interfering instruction that we can skip
-        if (MI->isCopy() || MI->getOpcode() == Z80::LD8ri) {
-          ++MI;
-          continue;
-        }
-        
         // Check if HL is modified between the stores
         if (MI->modifiesRegister(Z80::HL, &TRI) || 
             MI->killsRegister(Z80::HL, &TRI)) {
           break;
         }
+        
+        // If this instruction doesn't interfere with HL, we can skip over it
+        ++MI;
+        continue;
         
         // Check if this is an inline asm instruction that doesn't interfere with HL
         if (MI->isInlineAsm()) {

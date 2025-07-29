@@ -645,14 +645,16 @@ entry:
   ret void
 }
 
-; Test 24: Non-consecutive stores with skippable instructions (no optimization)
+; Test 24: Stores with skippable load instructions (should be optimized)
 define void @test_non_consecutive_no_optimization() {
 ; OPT-LABEL: test_non_consecutive_no_optimization:
-; OPT:       ld (4119), a
+; OPT:       ld a, 1
+; OPT:       ld hl, 4119
+; OPT:       ld (hl), a
 ; OPT:       ld a, (5000)
-; OPT:       ld (4119), a
+; OPT:       ld (hl), a
 ; OPT:       ld a, (5001)
-; OPT:       ld (4119), a
+; OPT:       ld (hl), a
 
 ; NOOPT-LABEL: test_non_consecutive_no_optimization:
 ; NOOPT:     ld (4119), a
