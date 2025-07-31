@@ -961,7 +961,28 @@ multiclass ANDInstr<bits<3> opcode, string mnemonic> {
 }
 
 defm AND : ANDInstr<4, "and">;
-defm XOR : BinOp8RF <         5, "xor">;
+multiclass XORInstr<bits<3> opcode, string mnemonic> {
+  let isCompare = false, Defs = [A, F], Uses = [A] in {
+    def 8ar  : I <Idx0Pre, {0b10, opcode, 0b000}, mnemonic, "\t$src", "",
+                  (outs), (ins    R8:$src),
+                  [(set A, F, (Z80xor_flag A, R8:$src))]>;
+    def 8ai  : Ii<  NoPre, {0b11, opcode, 0b110}, mnemonic, "\t$src", "",
+                  (outs), (ins i8imm:$src),
+                  [(set A, F, (Z80xor_flag A, imm:$src))]>;
+    let mayLoad = true in {
+      def  8ap : I <Idx0Pre, {0b10, opcode, 0b110}, mnemonic, "\t$src", "",
+                    (outs), (ins  aptr:$src),
+                    [(set A, F, (Z80xor_flag A, (i8 (load   iPTR:$src))))]>;
+      def  8ao : Io<Idx0Pre, {0b10, opcode, 0b110}, mnemonic, "\t$src", "",
+                    (outs), (ins   off:$src),
+                    [(set A, F, (Z80xor_flag A, (i8 (load offpat:$src))))]>;
+    }
+  }
+  def : Pat<(xor A,  R8:$src), (!cast<Instruction>(!strconcat(NAME, "8ar"))  R8:$src)>;
+  def : Pat<(xor A, imm:$src), (!cast<Instruction>(!strconcat(NAME, "8ai")) imm:$src)>;
+}
+
+defm XOR : XORInstr<5, "xor">;
 
 multiclass ORInstr<bits<3> opcode, string mnemonic> {
   let isCompare = false, Defs = [A, F], Uses = [A] in {
