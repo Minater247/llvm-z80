@@ -1458,8 +1458,20 @@ Z80InstructionSelector::foldCompare(MachineInstr &I, MachineIRBuilder &MIB,
           Opc = Z80::OR8ar;
           Ops = {Reg};
         }
+      } else if (OpSize == 16) {
+        // Generic 16-bit zero test that does not force use of HL: A = H; OR L
+        MachineIRBuilder MIB(I);
+        auto CopyHi = MIB.buildCopy(Register(Z80::A), LHSReg);
+        CopyHi->getOperand(1).setSubReg(Z80::sub_high);
+        if (!constrainSelectedInstRegOperands(*CopyHi, TII, TRI, RBI))
+          return Z80::COND_INVALID;
+        auto OrLo = MIB.buildInstr(Z80::OR8ar);
+        OrLo.addReg(LHSReg, 0, Z80::sub_low);
+        if (!constrainSelectedInstRegOperands(*OrLo, TII, TRI, RBI))
+          return Z80::COND_INVALID;
+        return CC;
       } else {
-        Opc = OpSize == 24 ? Z80::Cmp24a0 : Z80::Cmp16a0;
+        Opc = Z80::Cmp24a0;
         Ops.clear();
       }
     } else if (OpSize == 8) {

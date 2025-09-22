@@ -490,6 +490,8 @@ let mayLoad = true, canFoldAsLoad = true, isReMaterializable = true in {
 
   def LD8rp  : Pseudo<               "ld", "\t$dst, $src", "",
                      (outs R8:$dst), (ins aptr:$src)>;
+  // Slightly prefer HL-based pointer loads so loops naturally use HL for ptrs
+  let AddedComplexity = 1 in
   def LD8gp  : I     <Idx1Pre, 0x46, "ld", "\t$dst, $src", "",
                       (outs G8:$dst), (ins aptr:$src),
                       [(set G8:$dst, (load iPTR:$src))]>;

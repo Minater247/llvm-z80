@@ -475,7 +475,7 @@ void Z80InstrInfo::copyRegister(MachineBasicBlock &MBB,
                                 MachineBasicBlock::iterator MI,
                                 const DebugLoc &DL, Register DstReg,
                                 Register SrcReg, bool KillSrc) const {
-  if (DstReg.isPhysical() && DstReg.isPhysical()) {
+  if (DstReg.isPhysical() && SrcReg.isPhysical()) {
     copyPhysReg(MBB, MI, DL, DstReg, SrcReg, KillSrc);
     return;
   }
@@ -961,7 +961,9 @@ void Z80InstrInfo::rewriteFrameIndex(MachineInstr &MI, unsigned FIOperandNum,
     return;
   }
 
-  bool SaveFlags = RS && RS->isRegUsed(Z80::F);
+  // Determine whether F is live at this insertion point; avoid saving if dead.
+  bool SaveFlags = MBB.computeRegisterLiveness(&getRegisterInfo(), Z80::F, II) !=
+                   MachineBasicBlock::LQR_Dead;
   Register OffsetReg = scavengeOrCreateRegister(
       Is24Bit ? &Z80::O24RegClass : &Z80::O16RegClass, MRI, II, RS, SPAdj);
   if ((Opc == Z80::LEA24ro &&
@@ -1166,6 +1168,11 @@ bool Z80InstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
   const TargetRegisterInfo &TRI = getRegisterInfo();
   bool Is24Bit = Subtarget.is24Bit();
   bool UseLEA = Is24Bit && !MF.getFunction().hasOptSize();
+  // Helper: check pointwise liveness of a physical register at a specific location.
+  auto isLive = [&](MCRegister R, MachineBasicBlock::iterator Where) {
+    return MBB.computeRegisterLiveness(&getRegisterInfo(), R, Where) !=
+           MachineBasicBlock::LQR_Dead;
+  };
   LLVM_DEBUG(dbgs() << "\nZ80InstrInfo::expandPostRAPseudo:"; MI.dump());
   switch (unsigned Opc = MI.getOpcode()) {
   default:
@@ -1224,26 +1231,42 @@ bool Z80InstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
   case Z80::Cmp16a0:
   case Z80::Cmp24a0: {
     MCRegister Reg = Opc == Z80::Cmp24a0 ? Z80::UHL : Z80::HL;
-    MCRegister UndefReg = Opc == Z80::Cmp24a0 ? Z80::UBC : Z80::BC;
-    BuildMI(MBB, MI, DL, get(Opc == Z80::Cmp24a0 ? Z80::ADD24ao : Z80::ADD16ao),
-            Reg).addReg(Reg).addReg(UndefReg, RegState::Undef);
-    expandPostRAPseudo(*BuildMI(MBB, MI, DL, get(Z80::RCF)));
-    MI.setDesc(get(Opc == Z80::Cmp24a0 ? Z80::SBC24ao : Z80::SBC16ao));
-    MIB.addReg(UndefReg, RegState::Undef).addReg(Reg, RegState::ImplicitDefine)
-        .addReg(Z80::F, RegState::Implicit);
+    if (Opc == Z80::Cmp16a0) {
+      // For 16-bit: LD A, H; OR A, L
+      MCRegister HLReg = Reg;
+      BuildMI(MBB, MI, DL, get(Z80::LD8gg), Z80::A)
+          .addReg(RI.getSubReg(HLReg, Z80::sub_high));
+      MI.setDesc(get(Z80::OR8ar));
+      MIB.addReg(RI.getSubReg(HLReg, Z80::sub_low))
+          .addReg(Z80::A, RegState::ImplicitDefine)
+          .addReg(Z80::F, RegState::ImplicitDefine);
+    } else {
+      // For 24-bit, fall back to original method for now
+      // TODO: Implement efficient 24-bit zero check
+      MCRegister UndefReg = Z80::UBC;
+      BuildMI(MBB, MI, DL, get(Z80::ADD24ao), Reg)
+          .addReg(Reg).addReg(UndefReg, RegState::Undef);
+      expandPostRAPseudo(*BuildMI(MBB, MI, DL, get(Z80::RCF)));
+      MI.setDesc(get(Z80::SBC24ao));
+      MIB.addReg(UndefReg, RegState::Undef).addReg(Reg, RegState::ImplicitDefine)
+          .addReg(Z80::F, RegState::Implicit);
+    }
     break;
   }
   case Z80::LD8ro:
   case Z80::LD8rp: {
     MachineOperand &DstOp = MI.getOperand(0);
     if (Z80::I8RegClass.contains(DstOp.getReg())) {
-      applySPAdjust(
-          *BuildMI(MBB, MI, DL, get(Is24Bit ? Z80::PUSH24AF : Z80::PUSH16AF)))
-          .findRegisterUseOperand(Z80::AF)->setIsUndef();
+      if (isLive(Z80::A, MI) || isLive(Z80::F, MI)) {
+        applySPAdjust(
+            *BuildMI(MBB, MI, DL, get(Is24Bit ? Z80::PUSH24AF : Z80::PUSH16AF)))
+            .findRegisterUseOperand(Z80::AF)->setIsUndef();
+      }
       copyPhysReg(MBB, Next, DL, DstOp.getReg(), Z80::A, true);
       DstOp.setReg(Z80::A);
-      applySPAdjust(
-          *BuildMI(MBB, Next, DL, get(Is24Bit ? Z80::POP24AF : Z80::POP16AF)));
+      if (isLive(Z80::A, Next) || isLive(Z80::F, Next))
+        applySPAdjust(
+            *BuildMI(MBB, Next, DL, get(Is24Bit ? Z80::POP24AF : Z80::POP16AF)));
     }
     MI.setDesc(get(Opc == Z80::LD8ro ? Z80::LD8go : Z80::LD8gp));
     break;
@@ -1327,14 +1350,17 @@ bool Z80InstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
   case Z80::LD8pr: {
     MachineOperand &SrcOp = MI.getOperand(MI.getNumExplicitOperands() - 1);
     if (Z80::I8RegClass.contains(SrcOp.getReg())) {
-      applySPAdjust(
-          *BuildMI(MBB, MI, DL, get(Is24Bit ? Z80::PUSH24AF : Z80::PUSH16AF)))
-          .findRegisterUseOperand(Z80::AF)->setIsUndef();
+      if (isLive(Z80::A, MI) || isLive(Z80::F, MI)) {
+        applySPAdjust(
+            *BuildMI(MBB, MI, DL, get(Is24Bit ? Z80::PUSH24AF : Z80::PUSH16AF)))
+            .findRegisterUseOperand(Z80::AF)->setIsUndef();
+      }
       copyPhysReg(MBB, MI, DL, Z80::A, SrcOp.getReg(), SrcOp.isKill());
       SrcOp.setReg(Z80::A);
       SrcOp.setIsKill();
-      applySPAdjust(
-          *BuildMI(MBB, Next, DL, get(Is24Bit ? Z80::POP24AF : Z80::POP16AF)));
+      if (isLive(Z80::A, Next) || isLive(Z80::F, Next))
+        applySPAdjust(
+            *BuildMI(MBB, Next, DL, get(Is24Bit ? Z80::POP24AF : Z80::POP16AF)));
     }
     MI.setDesc(get(Opc == Z80::LD8or ? Z80::LD8og : Z80::LD8pg));
     break;
