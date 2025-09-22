@@ -64,7 +64,11 @@ class LLVM_LIBRARY_VISIBILITY Z80TargetInfo : public Z80TargetInfoBase {
 public:
   explicit Z80TargetInfo(const llvm::Triple &T, const TargetOptions &Opts)
       : Z80TargetInfoBase(T, Opts) {
-    PointerWidth = IntWidth = 16;
+    PointerWidth = 16;
+    IntWidth = 32;
+    SizeType = UnsignedShort;
+    PtrDiffType = SignedShort;
+    IntPtrType = SignedShort;
     resetDataLayout("e-m:z-p:16:8-p2:8:8-p3:16:8-i16:8-i24:8-i32:8-i48:8-i64:8-i96:8-"
                     "f32:8-f64:8-a:8-n8:16-S8", "_");
   }
@@ -86,7 +90,13 @@ public:
   explicit EZ80TargetInfo(const llvm::Triple &T, const TargetOptions &Opts)
       : Z80TargetInfoBase(T, Opts) {
     if (T.getEnvironment() == llvm::Triple::CODE16) {
-      PointerWidth = IntWidth = 16;
+      // eZ80 in CODE16 mode: 16-bit pointers, 32-bit int for C compatibility.
+      PointerWidth = 16;
+      IntWidth = 32;
+      // Keep size/ptr-diff types 16-bit to reflect 16-bit addressing.
+      SizeType = UnsignedShort;
+      PtrDiffType = SignedShort;
+      IntPtrType = SignedShort;
       resetDataLayout("e-m:z-p:16:8-p1:24:8-p2:8:8-p3:16:8-p4:24:8-i16:8-i24:8-i32:8-i48:8-"
                       "i64:8-i96:8-f32:8-f64:8-a:8-n8:16-S8", "_");
     } else {
