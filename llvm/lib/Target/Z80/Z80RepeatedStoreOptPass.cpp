@@ -549,20 +549,6 @@ bool Z80RepeatedStoreOptPass::runOnMachineFunction(MachineFunction &MF) {
         
         // If this instruction doesn't interfere with HL, we can skip over it
         ++MI;
-        continue;
-        
-        // Check if this is an inline asm instruction that doesn't interfere with HL
-        if (MI->isInlineAsm()) {
-          if (MI->modifiesRegister(Z80::HL, &TRI) || 
-              MI->killsRegister(Z80::HL, &TRI)) {
-            break;
-          }
-          ++MI;
-          continue;
-        }
-        
-        // If this is some other instruction, stop looking
-        break;
       }
       
       // Check if we have a sequence worth optimizing (at least 2 stores)
