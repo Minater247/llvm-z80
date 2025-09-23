@@ -449,6 +449,98 @@ bool Z80MachineLateOptimization::runOnMachineFunction(MachineFunction &MF) {
           getKnownVal(*MIB);
 
       switch (unsigned Opc = MIB->getOpcode()) {
+      case Z80::ADD16ao: {
+        // Replace small +/- immediates with INC/DEC rr steps when flags are dead.
+        // Works for immediate operand or a register known to hold a small constant.
+        if (!LiveUnits.available(Z80::F)) break; // can't change flags semantics
+        MachineOperand &SrcMO = MIB->getOperand(2);
+
+        auto getSmallImm = [&](int &Out) -> bool {
+          // Consider |imm| up to 3 (non-index) or 2 (index) as profitable.
+          int val = 0;
+          if (SrcMO.isImm()) {
+            val = SrcMO.getImm();
+          } else if (SrcMO.isReg()) {
+            MCRegister R = SrcMO.getReg();
+            // Try known-specific small immediates only; avoids needing full value extraction.
+            for (int k = 1; k <= 3; ++k) {
+              if (isKnownSpecificImm(R, k)) { val = k; break; }
+              if (isKnownSpecificImm(R, -k)) { val = -k; break; }
+            }
+          }
+          // Already in ADD16ao; no normalization needed here.
+          Out = val;
+          return val != 0;
+        };
+
+        int Imm;
+        if (!getSmallImm(Imm)) break;
+
+        MCRegister Dst = MIB->getOperand(0).getReg();
+        bool IsIndex = Z80::I16RegClass.contains(Dst);
+        int limit = IsIndex ? 2 : 3;
+        int k = std::abs(Imm);
+        if (k > limit) break; // not profitable
+
+        unsigned StepOpcode = (Imm > 0) ? Z80::INC16r : Z80::DEC16r;
+        unsigned OppOpcode  = (Imm > 0) ? Z80::DEC16r : Z80::INC16r;
+
+        // Try canceling up to k preceding opposite steps on the same Dst.
+        int canceled = 0;
+        auto It = MIB->getIterator();
+        auto B = MBB.begin();
+        if (It != B) {
+          auto Look = std::prev(It);
+          while (canceled < k) {
+            MachineInstr &Prev = *Look;
+            if (Prev.getOpcode() == OppOpcode &&
+                Prev.getNumExplicitOperands() >= 2 &&
+                Prev.getOperand(0).isReg() && Prev.getOperand(1).isReg() &&
+                Prev.getOperand(0).getReg() == Dst &&
+                Prev.getOperand(1).getReg() == Dst) {
+              // Erase and move Look back if possible
+              // Erase Prev and move one step back if possible
+              if (Look == B) {
+                Prev.eraseFromParent();
+                ++canceled;
+                break;
+              }
+              Prev.eraseFromParent();
+              --Look;
+              ++canceled;
+              continue;
+            }
+            // Stop if Prev touches Dst in any way.
+            bool Touches = false;
+            for (const MachineOperand &MO : Prev.operands())
+              if (MO.isReg() && MO.getReg() == Dst) { Touches = true; break; }
+            if (Touches) break;
+            if (Look == B) break;
+            --Look;
+          }
+        }
+
+        int kEff = k - canceled;
+        if (kEff == 0) {
+          MIB->eraseFromParent();
+          Changed = true;
+          continue;
+        }
+
+        DebugLoc DL = MIB->getDebugLoc();
+        for (int i = 0; i < kEff; ++i)
+          BuildMI(MBB, MIB->getIterator(), DL, TII.get(StepOpcode), Dst)
+              .addReg(Dst);
+
+        LLVM_DEBUG(dbgs() << "Replacing: "; MIB->dump();
+                   dbgs() << "     With: " << kEff
+                          << (StepOpcode == Z80::INC16r ? " * INC16r " : " * DEC16r ")
+                          << TRI->getName(Dst) << " (canceled " << canceled << ")\n");
+
+        MIB->eraseFromParent();
+        Changed = true;
+        continue;
+      }
       case Z80::LD8r0:
       case Z80::LD8ri:
       case Z80::LD8pi:

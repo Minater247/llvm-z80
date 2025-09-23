@@ -45,6 +45,21 @@ Z80TargetLowering::Z80TargetLowering(const Z80TargetMachine &TM,
   // Compute derived properties from the register classes
   computeRegisterProperties(STI.getRegisterInfo());
 
+  // Legalize add-with-carry on 16-bit so multi-precision expansion (i32)
+  // forms become pairs of ADDC/ADDE instead of libcalls.
+  setOperationAction(ISD::ADDC, MVT::i16, Legal);
+  setOperationAction(ISD::ADDE, MVT::i16, Legal);
+
+  // Prefer native multi-precision expansion over libcalls for basic integer
+  // ops on wider-than-legal types in 16-bit mode. This lets i32 add become two
+  // 16-bit adds with carry, avoiding libcall CC overhead and index regs.
+  if (Subtarget.is16Bit()) {
+    setOperationAction(ISD::ADD, MVT::i32, Expand);
+    // Keep SRL here as well to encourage native pairwise shifts later; harmless
+    // if not immediately matched in tests.
+    setOperationAction(ISD::SRL, MVT::i32, Expand);
+  }
+
   setLibcall(RTLIB::ZEXT_I16_I24,     "_stoiu",      CallingConv::Z80_LibCall   );
   setLibcall(RTLIB::SEXT_I16_I24,     "_stoi",       CallingConv::Z80_LibCall   );
   setLibcall(RTLIB::SEXT_I24_I32,     "_itol",       CallingConv::Z80_LibCall   );

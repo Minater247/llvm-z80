@@ -422,6 +422,10 @@ Z80LegalizerInfo::legalizeAddSub(LegalizerHelper &Helper, MachineInstr &MI,
   }
   if (LegalSize)
     return LegalizerHelper::Legalized;
+  if (Size == 32)
+    if (Helper.narrowScalar(MI, 0, LLT::scalar(16)) ==
+        LegalizerHelper::Legalized)
+      return LegalizerHelper::Legalized;
   return Helper.libcall(MI, LocObserver);
 }
 
