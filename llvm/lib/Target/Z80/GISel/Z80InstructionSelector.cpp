@@ -734,6 +734,11 @@ bool Z80InstructionSelector::selectLoadStore(MachineInstr &I,
   MachineInstr *PtrMI = MRI.getVRegDef(PtrReg);
   LLT Ty = MRI.getType(ValReg);
 
+  // For 8-bit memory ops, if the vreg has multiple uses, keep it as a
+  // register (aptr) instead of collapsing to absolute. Otherwise the reg allocator
+  // can't do its job.
+  const bool PreferRegPtrFor8 = (Ty.getSizeInBits() == 8) && !MRI.hasOneUse(PtrReg);
+
   bool RMWOrdered = false;
   SmallVector<unsigned, 3> RMWOps;
   SmallVector<MachineInstr *, 2> MemMOs;
@@ -820,12 +825,22 @@ bool Z80InstructionSelector::selectLoadStore(MachineInstr &I,
   while (PtrMI) {
     switch (PtrMI->getOpcode()) {
     case TargetOpcode::G_INTTOPTR:
+      if (PreferRegPtrFor8) {
+        // Stop folding to keep pointer as a register (avoid absolute addr).
+        PtrMI = nullptr;
+        break;
+      }
       if (MachineInstr *IntMI = MRI.getVRegDef(PtrMI->getOperand(1).getReg()))
         if (IntMI->getOpcode() == TargetOpcode::G_CONSTANT)
           MOs.push_back(MachineOperand::CreateImm(
               IntMI->getOperand(1).getCImm()->getSExtValue() + Off));
       break;
     case TargetOpcode::G_GLOBAL_VALUE:
+      if (PreferRegPtrFor8) {
+        // Stop folding to keep pointer as a register.
+        PtrMI = nullptr;
+        break;
+      }
       MOs.push_back(PtrMI->getOperand(1));
       MOs.back().setOffset(MOs.back().getOffset() + Off);
       break;
@@ -834,17 +849,24 @@ bool Z80InstructionSelector::selectLoadStore(MachineInstr &I,
       MOs.push_back(MachineOperand::CreateImm(Off));
       break;
     case TargetOpcode::G_PTR_ADD:
-      if (auto OffConst =
-              getIConstantVRegVal(PtrMI->getOperand(2).getReg(), MRI)) {
-        if ((PtrMI = MRI.getVRegDef(PtrMI->getOperand(1).getReg()))) {
-          Off += OffConst->getSExtValue();
-          continue;
+      if (!PreferRegPtrFor8) {
+        if (auto OffConst =
+                getIConstantVRegVal(PtrMI->getOperand(2).getReg(), MRI)) {
+          if ((PtrMI = MRI.getVRegDef(PtrMI->getOperand(1).getReg()))) {
+            Off += OffConst->getSExtValue();
+            continue;
+          }
         }
       }
       break;
     }
     break;
   }
+
+  // When keeping the pointer as a register, also avoid folding a small offset
+  // into the addressing mode for 8-bit ops so we can use HL+INC instead of IX/IY+d.
+  if (PreferRegPtrFor8)
+    Off = 0;
 
   unsigned Opc;
   if (MOs.size() == 1 && (MOs[0].isImm() || MOs[0].isGlobal())) {
@@ -1361,6 +1383,31 @@ Z80InstructionSelector::foldCompare(MachineInstr &I, MachineIRBuilder &MIB,
       std::swap(LHSReg, RHSReg);
   }
 
+  // Fast-path: signed 8-bit compare against 0 is a sign-bit test. Prefer BIT 7.
+  if (OpSize == 8 && IsSigned && ConstRHS && ConstRHS->Value == 0) {
+    // Try memory BIT if LHS is a single-use load.
+    if (MachineInstr *LoadMI = MRI.getVRegDef(LHSReg)) {
+      if (LoadMI->getOpcode() == TargetOpcode::G_LOAD && LoadMI->hasOneMemOperand() &&
+          MRI.hasOneUse(LHSReg)) {
+        auto BitI = MIB.buildInstr(Z80::BIT8pb, {}, {});
+        BitI.add(LoadMI->getOperand(1));
+        BitI.addImm(7);
+        BitI.cloneMemRefs(*LoadMI);
+        // Retire the folded load to avoid generating a redundant ld a,(hl).
+        LoadMI->dropMemRefs(MIB.getMF());
+        LoadMI->setDesc(TII.get(TargetOpcode::G_IMPLICIT_DEF));
+        while (LoadMI->getNumOperands() > 1)
+          LoadMI->removeOperand(1);
+        return (Pred == CmpInst::ICMP_SLT) ? Z80::COND_Z : Z80::COND_NZ;
+      }
+    }
+    // Otherwise emit register BIT if possible.
+    auto BitI = MIB.buildInstr(Z80::BIT8gb, {}, {LHSReg, int64_t(7)});
+    if (!constrainSelectedInstRegOperands(*BitI, TII, TRI, RBI))
+      return Z80::COND_INVALID;
+    return (Pred == CmpInst::ICMP_SLT) ? Z80::COND_Z : Z80::COND_NZ;
+  }
+
   unsigned Opc, LDIOpc, AddOpc;
   Register Reg;
   switch (OpSize) {
@@ -1448,12 +1495,45 @@ Z80InstructionSelector::foldCompare(MachineInstr &I, MachineIRBuilder &MIB,
       if (OpSize == 8) {
         Register SrcReg;
         uint8_t Mask;
-        if (mi_match(LHSReg, MRI,
-                     m_OneUse(m_GAnd(m_Reg(SrcReg), m_ICst(Mask)))) &&
+        // Prefer a memory BIT when the source is a load masked by a single bit.
+        MachineInstr *LoadMI = nullptr;
+        if (mi_match(LHSReg, MRI, m_OneUse(m_GAnd(m_Reg(SrcReg), m_ICst(Mask)))) &&
             isPowerOf2_32(Mask)) {
-          Opc = Z80::BIT8gb;
-          Reg = {};
-          Ops = {SrcReg, uint64_t(findFirstSet(Mask))};
+          // Check if SrcReg is a load we can fold.
+          if ((LoadMI = MRI.getVRegDef(SrcReg)) && LoadMI->getOpcode() == TargetOpcode::G_LOAD &&
+              LoadMI->hasOneMemOperand() && MRI.hasOneUse(SrcReg)) {
+            // Build a memory BIT with the same addressing and memrefs as the load.
+            MachineInstrBuilder BitI;
+            // Choose aptr form by default; off form will be picked later by addressing legalization.
+            BitI = MIB.buildInstr(Z80::BIT8pb, {}, {});
+            // Append pointer operand from the load and the bit immediate.
+            BitI.add(LoadMI->getOperand(1));
+            BitI.addImm(findFirstSet(Mask));
+            // Preserve memory ordering/aliasing info.
+            BitI.cloneMemRefs(*LoadMI);
+            // Retire the AND and the folded LOAD to prevent emitting dead ld a,(hl).
+            if (MachineInstr *AndMI = MRI.getVRegDef(LHSReg)) {
+              AndMI->setDesc(TII.get(TargetOpcode::G_IMPLICIT_DEF));
+              while (AndMI->getNumOperands() > 1)
+                AndMI->removeOperand(1);
+            }
+            LoadMI->dropMemRefs(MIB.getMF());
+            LoadMI->setDesc(TII.get(TargetOpcode::G_IMPLICIT_DEF));
+            while (LoadMI->getNumOperands() > 1)
+              LoadMI->removeOperand(1);
+
+            if (CC == Z80::COND_Z)        CC = Z80::COND_NZ;
+            else if (CC == Z80::COND_NZ)  CC = Z80::COND_Z;
+
+            Opc = Z80::BIT8pb; // Marker only; we already emitted instruction.
+            Reg = {};
+            Ops.clear();
+          } else {
+            // Otherwise, use BIT on a register if available
+            Opc = Z80::BIT8gb;
+            Reg = {};
+            Ops = {SrcReg, uint64_t(findFirstSet(Mask))};
+          }
         } else {
           Opc = Z80::OR8ar;
           Ops = {Reg};
@@ -1491,9 +1571,11 @@ Z80InstructionSelector::foldCompare(MachineInstr &I, MachineIRBuilder &MIB,
     if (!constrainSelectedInstRegOperands(*Copy, TII, TRI, RBI))
       return Z80::COND_INVALID;
   }
-  auto Cmp = MIB.buildInstr(Opc, {}, Ops);
-  if (!constrainSelectedInstRegOperands(*Cmp, TII, TRI, RBI))
-    return Z80::COND_INVALID;
+  if (Ops.size() || Reg.isValid()) {
+    auto Cmp = MIB.buildInstr(Opc, {}, Ops);
+    if (!constrainSelectedInstRegOperands(*Cmp, TII, TRI, RBI))
+      return Z80::COND_INVALID;
+  }
   if (IsSigned && OptSize)
     STI.getCallLowering()->buildSCMP(MIB);
   return CC;
