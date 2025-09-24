@@ -12,11 +12,14 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/CodeGen/GlobalISel/InlineAsmLowering.h"
+#include "llvm/ADT/SmallString.h"
 #include "llvm/CodeGen/GlobalISel/MachineIRBuilder.h"
 #include "llvm/CodeGen/MachineOperand.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/TargetLowering.h"
+#include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/Module.h"
+#include "llvm/Support/raw_ostream.h"
 
 #define DEBUG_TYPE "inline-asm-lowering"
 
@@ -349,6 +352,22 @@ bool InlineAsmLowering::lowerInlineAsm(
   // Track the output registers to copy the output operands into
   ArrayRef<Register> ResRegs = GetOrCreateVRegs(Call);
 
+  const MDNode *SrcLocMD = Call.getMetadata("srcloc");
+  bool ShouldEmitDiag = true;
+  if (SrcLocMD)
+    ShouldEmitDiag = DiagnosedSrcLocs.insert(SrcLocMD).second;
+
+  auto EmitDiag = [&](const Twine &Msg) {
+    if (!ShouldEmitDiag)
+      return;
+    if (const Instruction *I = dyn_cast<Instruction>(&Call))
+      Call.getContext().diagnose(
+          DiagnosticInfoInlineAsm(*I, Msg, DiagnosticSeverity::DS_Error));
+    else
+      Call.getContext().diagnose(
+          DiagnosticInfoInlineAsm(Msg, DiagnosticSeverity::DS_Error));
+  };
+
   for (auto &OpInfo : ConstraintOperands) {
     GISelAsmOperandInfo &RefOpInfo =
         OpInfo.isMatchingInputConstraint()
@@ -357,6 +376,17 @@ bool InlineAsmLowering::lowerInlineAsm(
 
     // Assign registers for register operands
     getRegistersForValue(MF, OpInfo, RefOpInfo);
+
+    auto FailWithDiag = [&](ArrayRef<Register> PendingResRegs,
+                            const Twine &Msg) -> bool {
+      EmitDiag(Msg);
+      MachineInstr *InlineMI = Inst.getInstr();
+      if (InlineMI && InlineMI->getParent())
+        InlineMI->eraseFromParent();
+      for (Register R : PendingResRegs)
+        MIRBuilder.buildUndef(R);
+      return true;
+    };
 
     switch (OpInfo.Type) {
     case InlineAsm::isOutput: {
@@ -546,9 +576,17 @@ bool InlineAsmLowering::lowerInlineAsm(
 
       unsigned NumRegs = OpInfo.Regs.size();
       ArrayRef<Register> SourceRegs = GetOrCreateVRegs(*OpInfo.CallOperandVal);
-      assert(NumRegs == SourceRegs.size() &&
-             "Expected the number of input registers to match the number of "
-             "source registers");
+      if (NumRegs != SourceRegs.size()) {
+        SmallString<128> MsgStorage;
+        raw_svector_ostream Msg(MsgStorage);
+        Msg << "inline asm constraint '" << OpInfo.ConstraintCode
+            << "' expects " << NumRegs << " register"
+            << (NumRegs == 1 ? "" : "s") << " but value of type ";
+        OpInfo.CallOperandVal->getType()->print(Msg);
+        Msg << " requires " << SourceRegs.size() << " register"
+            << (SourceRegs.size() == 1 ? "" : "s");
+        return FailWithDiag(ResRegs, Msg.str());
+      }
 
       if (NumRegs > 1) {
         LLVM_DEBUG(dbgs() << "Input operands with multiple input registers are "
@@ -558,13 +596,19 @@ bool InlineAsmLowering::lowerInlineAsm(
 
       unsigned Flag = InlineAsm::getFlagWord(InlineAsm::Kind_RegUse, NumRegs);
       if (OpInfo.Regs.front().isVirtual()) {
-        // Put the register class of the virtual registers in the flag word.
         const TargetRegisterClass *RC = MRI->getRegClass(OpInfo.Regs.front());
         Flag = InlineAsm::getFlagWordForRegClass(Flag, RC->getID());
       }
       Inst.addImm(Flag);
-      if (!buildAnyextOrCopy(OpInfo.Regs[0], SourceRegs[0], InputMIRBuilder))
-        return false;
+      if (!buildAnyextOrCopy(OpInfo.Regs[0], SourceRegs[0], InputMIRBuilder)) {
+        SmallString<128> MsgStorage;
+        raw_svector_ostream Msg(MsgStorage);
+        Msg << "value of type ";
+        OpInfo.CallOperandVal->getType()->print(Msg);
+        Msg << " cannot be moved into register class for constraint '"
+            << OpInfo.ConstraintCode << "'";
+        return FailWithDiag(ResRegs, Msg.str());
+      }
       Inst.addReg(OpInfo.Regs[0]);
       break;
     }

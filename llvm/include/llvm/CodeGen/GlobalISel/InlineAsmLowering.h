@@ -15,11 +15,13 @@
 #define LLVM_CODEGEN_GLOBALISEL_INLINEASMLOWERING_H
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/CodeGen/TargetLowering.h"
 #include <functional>
 
 namespace llvm {
 class CallBase;
+class MDNode;
 class MachineIRBuilder;
 class MachineInstrBuilder;
 class MachineOperand;
@@ -41,6 +43,7 @@ public:
 
 class InlineAsmLowering {
   const TargetLowering *TLI;
+  mutable SmallPtrSet<const MDNode *, 8> DiagnosedSrcLocs;
 
   virtual void anchor();
 
