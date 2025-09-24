@@ -777,25 +777,26 @@ multiclass UnOp8RFF<OtherPrefix prefix, bits<8> opcode, string mnemonic,
                 Requires<!listconcat(Preds, [HaveUndocOps])>;
   }
 }
-multiclass BinOp8RF<bits<3> opcode, string mnemonic, bit compare = false> {
+multiclass BinOp8RF<bits<3> opcode, string mnemonic, bit compare = false,
+                    string asmOps = "\ta, $src"> {
   let isCompare = compare, Defs = [A, F], Uses = [A] in {
-    def 8ar  : I <Idx0Pre, {0b10, opcode, 0b000}, mnemonic, "\ta, $src", "",
+    def 8ar  : I <Idx0Pre, {0b10, opcode, 0b000}, mnemonic, asmOps, "",
                   (outs), (ins    R8:$src),
                   [(set A, F,
                         (!cast<SDNode>(!strconcat("Z80", mnemonic, "_flag"))
                             A, R8:$src))]>;
-    def 8ai  : Ii<  NoPre, {0b11, opcode, 0b110}, mnemonic, "\ta, $src", "",
+    def 8ai  : Ii<  NoPre, {0b11, opcode, 0b110}, mnemonic, asmOps, "",
                   (outs), (ins i8imm:$src),
                   [(set A, F,
                         (!cast<SDNode>(!strconcat("Z80", mnemonic, "_flag"))
                             A, imm:$src))]>;
     let mayLoad = true in {
-      def  8ap : I <Idx0Pre, {0b10, opcode, 0b110}, mnemonic, "\ta, $src", "",
+      def  8ap : I <Idx0Pre, {0b10, opcode, 0b110}, mnemonic, asmOps, "",
                     (outs), (ins  aptr:$src),
                     [(set A, F,
                           (!cast<SDNode>(!strconcat("Z80", mnemonic, "_flag"))
                               A, (i8 (load   iPTR:$src))))]>;
-      def  8ao : Io<Idx0Pre, {0b10, opcode, 0b110}, mnemonic, "\ta, $src", "",
+      def  8ao : Io<Idx0Pre, {0b10, opcode, 0b110}, mnemonic, asmOps, "",
                     (outs), (ins   off:$src),
                     [(set A, F,
                           (!cast<SDNode>(!strconcat("Z80", mnemonic, "_flag"))
@@ -939,7 +940,7 @@ defm INC : UnOp8RF  <  NoPre, 4, "inc">;
 defm DEC : UnOp8RF  <  NoPre, 5, "dec">;
 defm ADD : BinOp8RF <         0, "add">;
 defm ADC : BinOp8RFF<         1, "adc", adde>;
-defm SUB : BinOp8RF <         2, "sub", true>;
+defm SUB : BinOp8RF <         2, "sub", true, "\t$src">;
 defm SBC : BinOp8RFF<         3, "sbc", sube>;
 multiclass ANDInstr<bits<3> opcode, string mnemonic> {
   let isCompare = false, Defs = [A, F], Uses = [A] in {

@@ -147,6 +147,8 @@ bool Z80MachinePreRAOptimization::runOnMachineFunction(MachineFunction &MF) {
       return It->second;
     if (!PtrReg.isVirtual())
       return None;
+    if (!MRI.hasOneDef(PtrReg))
+      return None;
     MachineInstr *PtrDef = MRI.getVRegDef(PtrReg);
     if (!PtrDef)
       return None;
@@ -157,6 +159,8 @@ bool Z80MachinePreRAOptimization::runOnMachineFunction(MachineFunction &MF) {
         return None;
       Register SrcReg = PtrDef->getOperand(1).getReg();
       if (!SrcReg.isVirtual())
+        return None;
+      if (!MRI.hasOneDef(SrcReg))
         return None;
       CopyMI = PtrDef;
       ImmMI = MRI.getVRegDef(SrcReg);
