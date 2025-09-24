@@ -14,6 +14,7 @@
 #include "MCTargetDesc/Z80MCTargetDesc.h"
 #include "Z80.h"
 #include "Z80RegisterInfo.h"
+#include "Z80Subtarget.h"
 #include "llvm/CodeGen/LiveRegUnits.h"
 #include "llvm/CodeGen/MachineDominators.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
@@ -432,6 +433,7 @@ bool Z80MachineLateOptimization::runOnMachineFunction(MachineFunction &MF) {
   bool Changed = false;
   TRI = MF.getSubtarget().getRegisterInfo();
   const TargetInstrInfo &TII = *MF.getSubtarget().getInstrInfo();
+  const Z80Subtarget &ST = MF.getSubtarget<Z80Subtarget>();
   LiveRegUnits LiveUnits(*TRI);
   for (MachineBasicBlock &MBB : MF) {
     LiveUnits.clear();
@@ -448,7 +450,92 @@ bool Z80MachineLateOptimization::runOnMachineFunction(MachineFunction &MF) {
       std::tie(KnownFlagsVal, KnownFlagsMask, DstReg, DstVal) =
           getKnownVal(*MIB);
 
+      auto IsPairDead = [&](MCRegister Pair) {
+        if (!Pair)
+          return false;
+        if (LiveUnits.available(Pair))
+          return true;
+        auto Look = std::next(MIB->getIterator());
+        auto End = MBB.end();
+        for (; Look != End; ++Look) {
+          if (Look->isDebugInstr())
+            continue;
+          if (Look->readsRegister(Pair, TRI))
+            return false;
+          if (Look->definesRegister(Pair, TRI))
+            return true;
+          for (const MachineOperand &MO : Look->operands())
+            if (MO.isRegMask() && MO.clobbersPhysReg(Pair))
+              return true;
+        }
+        return true;
+      };
+
       switch (unsigned Opc = MIB->getOpcode()) {
+      case TargetOpcode::COPY: {
+        if (!MIB->getOperand(0).isReg() || !MIB->getOperand(1).isReg())
+          break;
+        Register Dst = MIB->getOperand(0).getReg();
+        Register Src = MIB->getOperand(1).getReg();
+        if (!Dst.isPhysical() || !Src.isPhysical())
+          break;
+
+        auto GetPair = [&](Register Reg) -> MCRegister {
+          if (TRI->isSubRegisterEq(Z80::HL, Reg))
+            return Z80::HL;
+          if (TRI->isSubRegisterEq(Z80::DE, Reg))
+            return Z80::DE;
+          if (TRI->isSubRegisterEq(Z80::UHL, Reg))
+            return Z80::UHL;
+          if (TRI->isSubRegisterEq(Z80::UDE, Reg))
+            return Z80::UDE;
+          return MCRegister();
+        };
+
+        MCRegister DstPair = GetPair(Dst);
+        MCRegister SrcPair = GetPair(Src);
+
+        if (!DstPair || !SrcPair)
+          break;
+
+        if (!(DstPair == Z80::HL && SrcPair == Z80::DE) &&
+            !(DstPair == Z80::DE && SrcPair == Z80::HL) &&
+            !(DstPair == Z80::UHL && SrcPair == Z80::UDE) &&
+            !(DstPair == Z80::UDE && SrcPair == Z80::UHL))
+          break;
+
+        MCRegister DeadPair = SrcPair;
+        if (!IsPairDead(DeadPair))
+          break;
+
+        bool Use24Bit = ST.is24Bit() &&
+                        (DstPair == Z80::UHL || DstPair == Z80::UDE ||
+                         SrcPair == Z80::UHL || SrcPair == Z80::UDE);
+
+        LLVM_DEBUG(dbgs() << "Replacing COPY with EX: "; MIB->dump());
+
+        MIB->setDesc(TII.get(Use24Bit ? Z80::EX24DE : Z80::EX16DE));
+        MIB->removeOperand(1);
+        MIB->removeOperand(0);
+        MIB->addImplicitDefUseOperands(MF);
+
+        if (MachineOperand *SrcUse =
+                MIB->findRegisterUseOperand(SrcPair, false))
+          SrcUse->setIsKill(true);
+        if (MachineOperand *SrcDef =
+                MIB->findRegisterDefOperand(SrcPair, false))
+          SrcDef->setIsDead(true);
+        if (MachineOperand *DstUse =
+                MIB->findRegisterUseOperand(DstPair, false))
+          DstUse->setIsUndef(true);
+
+        LLVM_DEBUG(dbgs() << "     => "; MIB->dump());
+
+        DstReg = MCRegister();
+        DstVal = RegVal();
+        Changed = true;
+        break;
+      }
       case Z80::ADD16ao: {
         // Replace small +/- immediates with INC/DEC rr steps when flags are dead.
         // Works for immediate operand or a register known to hold a small constant.
@@ -540,6 +627,111 @@ bool Z80MachineLateOptimization::runOnMachineFunction(MachineFunction &MF) {
         MIB->eraseFromParent();
         Changed = true;
         continue;
+      }
+      case Z80::LD8gg: {
+        auto GetPairAndLane = [&](MCRegister Reg, MCRegister &Pair,
+                                  bool &IsHigh) -> bool {
+          switch (Reg) {
+          case Z80::H:
+            Pair = Z80::HL;
+            IsHigh = true;
+            return true;
+          case Z80::L:
+            Pair = Z80::HL;
+            IsHigh = false;
+            return true;
+          case Z80::D:
+            Pair = Z80::DE;
+            IsHigh = true;
+            return true;
+          case Z80::E:
+            Pair = Z80::DE;
+            IsHigh = false;
+            return true;
+          default:
+            return false;
+          }
+        };
+
+        MachineBasicBlock::iterator CurIt = MIB->getIterator();
+        MachineBasicBlock::iterator PrevIt = CurIt;
+        while (PrevIt != MBB.begin()) {
+          --PrevIt;
+          if (!PrevIt->isDebugInstr())
+            break;
+        }
+
+        if (PrevIt == MBB.begin() && PrevIt->isDebugInstr())
+          break;
+        if (PrevIt == CurIt)
+          break;
+
+        MachineInstr &PrevMI = *PrevIt;
+        if (PrevMI.isDebugInstr() || PrevMI.getOpcode() != Z80::LD8gg)
+          break;
+
+        if (!MIB->getOperand(0).isReg() || !MIB->getOperand(1).isReg() ||
+            !PrevMI.getOperand(0).isReg() || !PrevMI.getOperand(1).isReg())
+          break;
+
+        MCRegister CurDstPair, CurSrcPair, PrevDstPair, PrevSrcPair;
+        bool CurDstHigh = false, CurSrcHigh = false;
+        bool PrevDstHigh = false, PrevSrcHigh = false;
+
+        if (!GetPairAndLane(MIB->getOperand(0).getReg(), CurDstPair,
+                             CurDstHigh) ||
+            !GetPairAndLane(MIB->getOperand(1).getReg(), CurSrcPair,
+                             CurSrcHigh) ||
+            !GetPairAndLane(PrevMI.getOperand(0).getReg(), PrevDstPair,
+                             PrevDstHigh) ||
+            !GetPairAndLane(PrevMI.getOperand(1).getReg(), PrevSrcPair,
+                             PrevSrcHigh))
+          break;
+
+        if (CurDstPair != PrevDstPair || CurSrcPair != PrevSrcPair)
+          break;
+
+        // Only handle exchanges between HL and DE.
+        if (!((CurDstPair == Z80::HL && CurSrcPair == Z80::DE) ||
+              (CurDstPair == Z80::DE && CurSrcPair == Z80::HL)))
+          break;
+
+        // Make sure we have one high and one low part for each pair and that
+        // lanes are matched (low<-low, high<-high).
+        if (CurDstHigh == PrevDstHigh || CurSrcHigh == PrevSrcHigh ||
+            CurDstHigh != CurSrcHigh || PrevDstHigh != PrevSrcHigh)
+          break;
+
+        MCRegister SrcPair = CurSrcPair;
+        if (!IsPairDead(SrcPair))
+          break;
+
+        LLVM_DEBUG(dbgs() << "Combining HL/DE copies into EX: ";
+                   PrevMI.dump(); MIB->dump());
+
+        PrevMI.eraseFromParent();
+
+        MIB->setDesc(TII.get(Z80::EX16DE));
+        MIB->removeOperand(1);
+        MIB->removeOperand(0);
+        MIB->addImplicitDefUseOperands(MF);
+
+        if (MachineOperand *SrcUse =
+                MIB->findRegisterUseOperand(SrcPair, false))
+          SrcUse->setIsKill(true);
+        if (MachineOperand *SrcDef =
+                MIB->findRegisterDefOperand(SrcPair, false))
+          SrcDef->setIsDead(true);
+        if (MachineOperand *DstUse =
+                MIB->findRegisterUseOperand(CurDstPair, false))
+          DstUse->setIsUndef(true);
+
+        LLVM_DEBUG(dbgs() << "     => "; MIB->dump());
+
+        DstReg = MCRegister();
+        DstVal = RegVal();
+        Changed = true;
+        break;
       }
       case Z80::LD8r0:
       case Z80::LD8ri:
