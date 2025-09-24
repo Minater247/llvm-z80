@@ -210,21 +210,19 @@ bool Z80StaticStackPass::runOnMachineFunction(MachineFunction &MF)
           continue;
         size_t address = fit->second;
         LLVM_DEBUG(dbgs() << "Z80StaticStackPass: TargetOpcode::LD8ro: " << frame_index << ": staticStack+" << address << "+" << offset << "\n");
-        if(MI.getOperand(0).getReg() != Z80::A) {
-          LLVM_DEBUG(dbgs() << "Z80StaticStackPass: MI.getOperand(0).getReg() != Z80::A\n");
-          assert(canTransformEverything);
-          BuildMI(MBB, MI, MI.getDebugLoc(), TII->get(Z80::LD8ro))
-            .addReg(MI.getOperand(0).getReg(), RegState::Define)
-            .addReg(Z80::IX)
-            .addImm(address + offset);
+        if (MI.getOperand(0).getReg() != Z80::A) {
+          BuildMI(MBB, MI, MI.getDebugLoc(), TII->get(Z80::LD8am))
+              .addGlobalAddress(GV, address + offset);
+          BuildMI(MBB, MI, MI.getDebugLoc(), TII->get(Z80::LD8gg))
+              .addReg(MI.getOperand(0).getReg(), RegState::Define)
+              .addReg(Z80::A);
           MI.eraseFromParent();
-          need_IX = true;
           continue;
+        } else {
+          BuildMI(MBB, MI, MI.getDebugLoc(), TII->get(Z80::LD8am))
+              .addGlobalAddress(GV, address + offset);
+          MI.eraseFromParent();
         }
-
-        BuildMI(MBB, MI, MI.getDebugLoc(), TII->get(Z80::LD8am))
-          .addGlobalAddress(GV, address + offset);
-        MI.eraseFromParent();
         continue;
       }
       if ((MI.getOpcode() == Z80::LD8or || MI.getOpcode() == Z80::LD8og) && MI.getOperand(0).isFI() && MI.getOperand(1).isImm()) {
@@ -235,21 +233,19 @@ bool Z80StaticStackPass::runOnMachineFunction(MachineFunction &MF)
           continue;
         size_t address = fit->second;
         LLVM_DEBUG(dbgs() << "Z80StaticStackPass: TargetOpcode::LD8or: " << frame_index << ": staticStack+" << address << "+" << offset << "\n");
-        if(MI.getOperand(2).getReg() != Z80::A) {
-          LLVM_DEBUG(dbgs() << "Z80StaticStackPass: MI.getOperand(2).getReg() != Z80::A\n");
-          assert(canTransformEverything);
-          // IX based
-          BuildMI(MBB, MI, MI.getDebugLoc(), TII->get(Z80::LD8or))
-            .addReg(Z80::IX)
-            .addImm(address + offset)
-            .addReg(MI.getOperand(2).getReg(), MI.getOperand(2).getTargetFlags());
-          need_IX = true;
+        if (MI.getOperand(2).getReg() != Z80::A) {
+          BuildMI(MBB, MI, MI.getDebugLoc(), TII->get(Z80::LD8gg))
+              .addReg(Z80::A, RegState::Define)
+              .addReg(MI.getOperand(2).getReg(), MI.getOperand(2).getTargetFlags());
+          BuildMI(MBB, MI, MI.getDebugLoc(), TII->get(Z80::LD8ma))
+              .addGlobalAddress(GV, address + offset);
           MI.eraseFromParent();
           continue;
+        } else {
+          BuildMI(MBB, MI, MI.getDebugLoc(), TII->get(Z80::LD8ma))
+              .addGlobalAddress(GV, address + offset);
+          MI.eraseFromParent();
         }
-        BuildMI(MBB, MI, MI.getDebugLoc(), TII->get(Z80::LD8ma))
-          .addGlobalAddress(GV, address + offset);
-        MI.eraseFromParent();
         continue;
       }
       // $hl = LEA16ro %stack.0.y, 0
