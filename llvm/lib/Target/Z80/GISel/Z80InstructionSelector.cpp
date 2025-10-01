@@ -595,9 +595,11 @@ bool Z80InstructionSelector::selectAnyExt(MachineInstr &I,
   }
 
   MachineIRBuilder MIB(I);
+  auto Zero = MIB.buildConstant(LLT::scalar(DstSize), 0);
+  if (!RBI.constrainGenericRegister(Zero.getReg(0), *DstRC, MRI))
+    return false;
   MIB.buildInstr(TargetOpcode::INSERT_SUBREG, {DstReg},
-                 {MIB.buildInstr(TargetOpcode::IMPLICIT_DEF, {DstRC}, {}),
-                  SrcReg, getSubRegIndex(SrcSize)});
+                 {Zero, SrcReg, getSubRegIndex(SrcSize)});
   I.eraseFromParent();
   return true;
 }

@@ -1,83 +1,61 @@
-# LLVM/Clang targetting Z80 / ZX Spectrum
+# LLVM/Clang targetting the Z80/EZ80
 
-This is a fork from https://github.com/jacobly0/llvm-project
+This is a fork of [harakas' version](https://github.com/harakas/llvm-z80), which is in turn a fork of [jacobly0's version](https://github.com/jacobly0/llvm-project).
 
-I've been hacking it for use with the ZX Spectrum. Most changes have been done with speed in mind but I'm in no way an expert on compilers or llvm. This is just for fun.
+The two main goals of this repository are to:
+- Optimize the code generation and update the calling convention to make the code more efficient and smaller
+- Stabilize the state of the patch to be more user-friendly and stable by:
+    - Fixing some major bugs that would crash the program
+    - Providing more informative error messages, since most developers would rather not dig through internal LLVM error messages for compile errors
 
-Aim is to use C++ to program toy games or demos for the ZX Spectrum. I treat Z80 as a "microcontroller with more memory than usual", so use of heap, standard library, exceptions or even stack/`alloca` is not really something I plan to support.
+## Tradeoffs to using this compiler
+Pros:
+- Function parameters are placed in registers. Almost every compiler other than harakas' patch uses the stack, which is incredibly inefficient. Keeping values in registers means that generated code is significantly less memory intensive for dense non-inlined function calls.
+- LLVM provides significantly improved code inlining over other Z80 compilers. There has been a lot of development since 1998, and a compiler based in 2022 is a big leap.
+- The compiler emits proper object files, meaning you can use standard linkers such as `binutils`, disassemblers, code analyzers, anything that reads ELF+Z80.
 
-Main changes:
-* function arguments are passed using registers instead of stack
-* inlining of various bit operations
-* spilled variables are placed into a static global variable instead of stack
-* functions that want to use recursion must have `__attribute__((reentrant))`
-* small memcopies are inlined a lot more
-* memcopies with known length are optimized to a `CALL` to `__memcpyNN` where `NN` is modulo 32 of the length
-* sequential batches of LDI statements are optimized to speed up sprite blitting
-* frame pointer setup is inlined (for reentrant functions)
+Cons:
+- The ABI is currently not fully standard, as I am currently tweaking it to optimize the generated code. If you plan to call out to assembly functions, be aware of this, otherwise it shouldn't affect you.
+- You have to use `__attribute__((reentrant))` on recursive functions, which is nonstandard. I am currently looking for a way around this so that existing recursive C remains portable.
+- This is my first foray into working with LLVM, so things may break a bit more than other compilers. *Please* make an issue if you do find anything wrong!
 
-How to build:
+## Installing
 
+### Dependencies
+Before installing, ensure you have the necessary dependencies.
+```bash
+# Ubuntu
+sudo apt-get update && sudo apt-get -y install build-essential cmake ninja-build lzip
 ```
-$ sudo apt-get update && sudo apt-get -y install cmake ninja-build lzip
-$ bash install.sh
-```
 
-This will download and install binutils and compile clang. The default installation directory is `/opt/local/z80-none-elf`.
+If your distro isn't listed here, the OSDev wiki has a great [guide](https://wiki.osdev.org/GCC_Cross-Compiler#Installing_Dependencies) on installing the dependencies. Just stop before the "Downloading the Source Code" section. I plan on expanding this more once I return home from university and have a spare laptop to run other distros on.
 
-There are some samples under [z80/samples](z80/samples). Here's how you'd compile and run one under the `fuse-gtk` emulator:
+### Actually Installing It
 
 ```bash
-$ cd z80/samples/hello_world/
-$ make
-/opt/local/z80-none-elf/bin/clang++ -target z80-none-elf -Wa,-march=z80+full -Wa,-sdcc -nostdinc -fno-rtti -fno-exceptions -ffunction-sections -fdata-sections -O3 -Wall -std=c++20   -c -o main.o main.cpp
-/tmp/main-72edfc.s: Assembler messages:
-/tmp/main-72edfc.s:92: Warning: unrecognized section type
-/opt/local/z80-none-elf/bin/z80-none-elf-ld -T memory.ld -Map=hello_world.map --oformat ihex main.o -o hello_world.hex
-python3 ../../utils/hex2tap.py hello_world.hex --include-loader
-$ fuse-gtk hello_world.tap
+# Optionally, you can set the PREFIX and BINUTILS_PREFIX environment variables to determine where the compiler and binutils are installed, respectively.
+
+bash ./install.sh
 ```
 
-The compiler is not really that stable. It breaks and crashes on lots of various code. But for some it works.
+## Example Code
+```cpp
+#include <stdint.h>
 
-Some TAP files:
- * [hello_world.tap](z80/samples/hello_world/hello_world.tap)
- * [hello_graphics.tap](z80/samples/hello_graphics/hello_graphics.tap)
- * [hello_keyboard.tap](z80/samples/hello_keyboard/hello_keyboard.tap)
- * [hello_blit.tap](z80/samples/hello_blit/hello_blit.tap)
- * [hello_bigletters.tap](z80/samples/hello_bigletters/hello_bigletters.tap)
- * [sallie_gardner.tap](z80/samples/sallie_gardner/sallie_gardner.tap) [RLE decoder in ASM]
- * [hello_blit2.tap](z80/samples/hello_blit2/hello_blit2.tap)
-
-This is all the help you'll get from me with this. Have fun.
-
-Some screenshots:
-
-<img width="323" alt="zx_hello_world" src="https://github.com/user-attachments/assets/6933252b-8e54-4606-98e1-158c67ca30f1" /><img width="322" alt="zx_hello_graphics" src="https://github.com/user-attachments/assets/20bdc17b-3fc0-40f8-a041-e7098a3fa28b" /><img width="323" alt="zx3" src="https://github.com/user-attachments/assets/fc9bd2ae-b9dd-402e-9939-d9a5028b0a59" /><img width="323" alt="zx4" src="https://github.com/user-attachments/assets/6b8d7993-52df-4940-9839-60b9e64c82e0" /><img width="321" alt="zx5" src="https://github.com/user-attachments/assets/1626717c-71f3-4f0f-b462-962dc0ecea1d" /><img width="322" alt="zx6" src="https://github.com/user-attachments/assets/c75cb4c3-08ff-4ba7-a7c6-dfb43bdf85de" />
-<img width="322" alt="zx7" src="https://github.com/user-attachments/assets/633919bb-fd4e-4f66-a208-8a0f1f3f3fec" />
-
-
-Example application:
-```c++
 namespace ZX {
-    using int8_t = char;
-    using uint8_t = unsigned char;
-    using int16_t = int;
-    using uint16_t = unsigned int;
-
     struct Console {
         static void putchar(char c) {
             uint16_t iy = 23610;
             __asm__ ("rst $10" : "=a"(c) : "a"(c), "iy"(iy) : "h", "l", "d", "e", "b", "c", "cc", "memory");
         }
 
-        static void at(uint8_t x, uint8_t y) __attribute__((noinline)) {
+        static void at(uint8_t x, uint8_t y) {
             putchar(22);
             putchar(y);
             putchar(x);
         }
 
-        static void print(const char *str) __attribute__((noinline)) {
+        static void print(const char *str) {
             while (*str)
                 putchar(*str++);
         }
@@ -92,39 +70,83 @@ int main()
 }
 ```
 
+### With Inlining
 Assembly produced for the `int main()` function:
-```gas
+
+```
 _main:
-        ld      l, 10
-        ld      h, 12
-        call    __ZN2ZX7Console2atEhh
-        ld      hl, _.str
-        call    __ZN2ZX7Console5printEPKc
-        ld      hl, 0
-        ret
+	ld	a, 22
+	ld	iy, 23610
+	rst $10
+	ld	a, 12
+	rst $10
+	ld	a, 10
+	rst $10
+	ld	a, 72
+	rst $10
+	ld	a, 101
+	rst $10
+	ld	a, 108
+	rst $10
+	ld	a, 108
+	rst $10
+	ld	a, 111
+	rst $10
+	ld	a, 44
+	rst $10
+	ld	a, 32
+	rst $10
+	ld	a, 119
+	rst $10
+	ld	a, 111
+	rst $10
+	ld	a, 114
+	rst $10
+	ld	a, 108
+	rst $10
+	ld	a, 100
+	rst $10
+	ld	a, 33
+	rst $10
+	ld	hl, 0
+	ld	de, 0
+	ret
+```
+
+### No Inlining
+
+Assembly produced for the `int main()` function:
+```asm
+_main:
+	ld	e, 10
+	ld	d, 12
+	call	__ZN2ZX7Console2atEhh
+	ld	de, _.str
+	call	__ZN2ZX7Console5printEPKc
+	ld	hl, 0
+	ld	de, 0
+	ret
 ```
 
 Assembly produced for the `ZX::Console::print(const char*)` function:
-```gas
+```asm
 __ZN2ZX7Console5printEPKc:
-        ld      a, (hl)
-        or      a, a
-        jr      z, .LBB2_3
-        ld      iy, 23610
-        inc     hl
-        .local  .LBB2_2
+	ex	de, hl
+	ld	a, (hl)
+	or	a
+	jr	z, .LBB2_3
+	ld	iy, 23610
+	inc	hl
+	.local	.LBB2_2
 .LBB2_2:
-        ld      (__ZN2ZX7Console5printEPKc__variables), hl
-        ;APP
-        rst $10
-        ;NO_APP
-        ld      hl, (__ZN2ZX7Console5printEPKc__variables)
-        ld      a, (hl)
-        inc     hl
-        or      a, a
-        jr      nz, .LBB2_2
-        .local  .LBB2_3
+	ld	(__ZN2ZX7Console5printEPKc__variables), hl
+	rst $10
+	ld	hl, (__ZN2ZX7Console5printEPKc__variables)
+	ld	a, (hl)
+	inc	hl
+	or	a
+	jr	nz, .LBB2_2
+	.local	.LBB2_3
 .LBB2_3:
-        ret
+	ret
 ```
-

@@ -7,12 +7,11 @@
         .global __memcpy32_jr
 
         ; non-C-standard: this memcpy does not return destination address
-        ; argments: dst=DE, src=HL, count=BC XXX not correct: need ex de, hl right now
+        ; arguments (Z80 libcall CC): dst=DE, src=HL, count=BC
         ; clobbers: af
         ; uses inline block of LDI-s (16 t-states per byte) and not LDIR (21 t-states per byte)
         ; self-modifying to jump to right place of LDI-s
 _memcpy:
-        ex      de, hl ; XXX still old libcall API
         ; first check if bc is 0 (zero copy)
         ld      a, b
         or      c
@@ -20,7 +19,7 @@ _memcpy:
 __memcpy_nonzero:
         ; self-modifying code, not ROM or multithreading compliant
         ld      a, c
-        and     a, 0x1f
+        and     0x1f
         jp      z, __memcpy32       ; already multiple of 32, jump to ldi-s
         add     a, a                ; ldi is two bytes, so must double the offset
         cpl
