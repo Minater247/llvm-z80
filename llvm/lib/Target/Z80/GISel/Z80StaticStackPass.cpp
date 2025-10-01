@@ -47,6 +47,8 @@ bool Z80StaticStackPass::runOnMachineFunction(MachineFunction &MF)
     return false;
   }
 
+  return false; // test with this off. it's a bother anyways
+
   // Idea is that instead of using stack for local variables that spill,
   // we use a global variable for spilled local variables.
   // This is a lot faster as 16 bit load from global is 20 t-states,
