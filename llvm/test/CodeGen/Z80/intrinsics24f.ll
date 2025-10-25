@@ -29,6 +29,10 @@ define float @powi.f32.i24(float, i24) {
 ; EZ80-NEXT:    ld sp, ix
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end0
+; EZ80-NEXT:  .Lfunc_end0:
+; EZ80-NEXT:    .size _powi.f32.i24, .Lfunc_end0-_powi.f32.i24
   call float @llvm.powi.f32.i24(float %0, i24 %1)
   ret float %3
 }
@@ -66,6 +70,10 @@ define double @powi.f64.i24(double, i24) {
 ; EZ80-NEXT:    ld sp, ix
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end1
+; EZ80-NEXT:  .Lfunc_end1:
+; EZ80-NEXT:    .size _powi.f64.i24, .Lfunc_end1-_powi.f64.i24
   call double @llvm.powi.f64.i24(double %0, i24 %1)
   ret double %3
 }

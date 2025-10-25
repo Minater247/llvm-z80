@@ -20,6 +20,10 @@ define i24 @abs.i24(i24) {
 ; EZ80-NEXT:    add hl, bc
 ; EZ80-NEXT:    call __ixor
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end0
+; EZ80-NEXT:  .Lfunc_end0:
+; EZ80-NEXT:    .size _abs.i24, .Lfunc_end0-_abs.i24
   call i24 @llvm.abs.i24(i24 %0, i1 false)
   ret i24 %2
 }
@@ -39,15 +43,20 @@ define i24 @smax.i24(i24, i24) {
 ; EZ80-NEXT:    add iy, bc
 ; EZ80-NEXT:    add hl, bc
 ; EZ80-NEXT:    lea bc, iy
-; EZ80-NEXT:    or a, a
+; EZ80-NEXT:    or a
 ; EZ80-NEXT:    sbc hl, bc
-; EZ80-NEXT:    jr c, BB1_2
+; EZ80-NEXT:    jr c, .LBB1_2
 ; EZ80-NEXT:  ; %bb.1:
 ; EZ80-NEXT:    ld de, (ix + 9)
-; EZ80-NEXT:  BB1_2:
+; EZ80-NEXT:    .local .LBB1_2
+; EZ80-NEXT:  .LBB1_2:
 ; EZ80-NEXT:    ex de, hl
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end1
+; EZ80-NEXT:  .Lfunc_end1:
+; EZ80-NEXT:    .size _smax.i24, .Lfunc_end1-_smax.i24
   call i24 @llvm.smax.i24(i24 %0, i24 %1)
   ret i24 %3
 }
@@ -67,15 +76,20 @@ define i24 @smin.i24(i24, i24) {
 ; EZ80-NEXT:    pop hl
 ; EZ80-NEXT:    add hl, bc
 ; EZ80-NEXT:    lea bc, iy
-; EZ80-NEXT:    or a, a
+; EZ80-NEXT:    or a
 ; EZ80-NEXT:    sbc hl, bc
-; EZ80-NEXT:    jr c, BB2_2
+; EZ80-NEXT:    jr c, .LBB2_2
 ; EZ80-NEXT:  ; %bb.1:
 ; EZ80-NEXT:    ld de, (ix + 9)
-; EZ80-NEXT:  BB2_2:
+; EZ80-NEXT:    .local .LBB2_2
+; EZ80-NEXT:  .LBB2_2:
 ; EZ80-NEXT:    ex de, hl
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end2
+; EZ80-NEXT:  .Lfunc_end2:
+; EZ80-NEXT:    .size _smin.i24, .Lfunc_end2-_smin.i24
   call i24 @llvm.smin.i24(i24 %0, i24 %1)
   ret i24 %3
 }
@@ -91,14 +105,19 @@ define i24 @umax.i24(i24, i24) {
 ; EZ80-NEXT:    push de
 ; EZ80-NEXT:    pop hl
 ; EZ80-NEXT:    sbc hl, bc
-; EZ80-NEXT:    jr c, BB3_2
+; EZ80-NEXT:    jr c, .LBB3_2
 ; EZ80-NEXT:  ; %bb.1:
 ; EZ80-NEXT:    push de
 ; EZ80-NEXT:    pop bc
-; EZ80-NEXT:  BB3_2:
+; EZ80-NEXT:    .local .LBB3_2
+; EZ80-NEXT:  .LBB3_2:
 ; EZ80-NEXT:    push bc
 ; EZ80-NEXT:    pop hl
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end3
+; EZ80-NEXT:  .Lfunc_end3:
+; EZ80-NEXT:    .size _umax.i24, .Lfunc_end3-_umax.i24
   call i24 @llvm.umax.i24(i24 %0, i24 %1)
   ret i24 %3
 }
@@ -114,13 +133,18 @@ define i24 @umin.i24(i24, i24) {
 ; EZ80-NEXT:    push de
 ; EZ80-NEXT:    pop hl
 ; EZ80-NEXT:    sbc hl, bc
-; EZ80-NEXT:    jr c, BB4_2
+; EZ80-NEXT:    jr c, .LBB4_2
 ; EZ80-NEXT:  ; %bb.1:
 ; EZ80-NEXT:    push bc
 ; EZ80-NEXT:    pop de
-; EZ80-NEXT:  BB4_2:
+; EZ80-NEXT:    .local .LBB4_2
+; EZ80-NEXT:  .LBB4_2:
 ; EZ80-NEXT:    ex de, hl
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end4
+; EZ80-NEXT:  .Lfunc_end4:
+; EZ80-NEXT:    .size _umin.i24, .Lfunc_end4-_umin.i24
   call i24 @llvm.umin.i24(i24 %0, i24 %1)
   ret i24 %3
 }
@@ -142,6 +166,10 @@ define void @memcpy.p0i8.p0i8.i24(i8*, i8*, i24) {
 ; EZ80-NEXT:    add hl, sp
 ; EZ80-NEXT:    ld sp, hl
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end5
+; EZ80-NEXT:  .Lfunc_end5:
+; EZ80-NEXT:    .size _memcpy.p0i8.p0i8.i24, .Lfunc_end5-_memcpy.p0i8.p0i8.i24
   call void @llvm.memcpy.p0i8.p0i8.i24(i8* %0, i8* %1, i24 %2, i1 false)
   ret void
 }
@@ -155,8 +183,12 @@ define void @memcpy.inline.p0i8.p0i8.i24(i8*, i8*) {
 ; EZ80-NEXT:    ld de, (iy + 3)
 ; EZ80-NEXT:    ld hl, (iy + 6)
 ; EZ80-NEXT:    ld bc, 32
-; EZ80-NEXT:    ldir
+; EZ80-NEXT:    call __memcpy32
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end6
+; EZ80-NEXT:  .Lfunc_end6:
+; EZ80-NEXT:    .size _memcpy.inline.p0i8.p0i8.i24, .Lfunc_end6-_memcpy.inline.p0i8.p0i8.i24
   call void @llvm.memcpy.inline.p0i8.p0i8.i24(i8* %0, i8* %1, i24 32, i1 false)
   ret void
 }
@@ -178,6 +210,10 @@ define void @memmove.p0i8.p0i8.i24(i8*, i8*, i24) {
 ; EZ80-NEXT:    add hl, sp
 ; EZ80-NEXT:    ld sp, hl
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end7
+; EZ80-NEXT:  .Lfunc_end7:
+; EZ80-NEXT:    .size _memmove.p0i8.p0i8.i24, .Lfunc_end7-_memmove.p0i8.p0i8.i24
   call void @llvm.memmove.p0i8.p0i8.i24(i8* %0, i8* %1, i24 %2, i1 false)
   ret void
 }
@@ -200,6 +236,10 @@ define void @memset.p0i8.i24(i8*, i8, i24) {
 ; EZ80-NEXT:    add hl, sp
 ; EZ80-NEXT:    ld sp, hl
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end8
+; EZ80-NEXT:  .Lfunc_end8:
+; EZ80-NEXT:    .size _memset.p0i8.i24, .Lfunc_end8-_memset.p0i8.i24
   call void @llvm.memset.p0i8.i24(i8* %0, i8 %1, i24 %2, i1 false)
   ret void
 }
@@ -213,6 +253,10 @@ define i24 @bitreverse.i24(i24) {
 ; EZ80-NEXT:    ld hl, (iy + 3)
 ; EZ80-NEXT:    call __ibitrev
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end9
+; EZ80-NEXT:  .Lfunc_end9:
+; EZ80-NEXT:    .size _bitreverse.i24, .Lfunc_end9-_bitreverse.i24
   call i24 @llvm.bitreverse.i24(i24 %0)
   ret i24 %2
 }
@@ -225,10 +269,14 @@ define i24 @ctpop.i24(i24) {
 ; EZ80-NEXT:    add iy, sp
 ; EZ80-NEXT:    ld hl, (iy + 3)
 ; EZ80-NEXT:    call __ipopcnt
-; EZ80-NEXT:    or a, a
+; EZ80-NEXT:    or a
 ; EZ80-NEXT:    sbc hl, hl
 ; EZ80-NEXT:    ld l, a
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end10
+; EZ80-NEXT:  .Lfunc_end10:
+; EZ80-NEXT:    .size _ctpop.i24, .Lfunc_end10-_ctpop.i24
   call i24 @llvm.ctpop.i24(i24 %0)
   ret i24 %2
 }
@@ -241,18 +289,23 @@ define i24 @ctlz.i24(i24) {
 ; EZ80-NEXT:    add iy, sp
 ; EZ80-NEXT:    ld hl, (iy + 3)
 ; EZ80-NEXT:    add hl, bc
-; EZ80-NEXT:    or a, a
+; EZ80-NEXT:    or a
 ; EZ80-NEXT:    sbc hl, bc
-; EZ80-NEXT:    jr nz, BB11_2
+; EZ80-NEXT:    jr nz, .LBB11_2
 ; EZ80-NEXT:  ; %bb.1:
 ; EZ80-NEXT:    ld hl, 24
 ; EZ80-NEXT:    ret
-; EZ80-NEXT:  BB11_2: ; %cond.false
+; EZ80-NEXT:    .local .LBB11_2
+; EZ80-NEXT:  .LBB11_2: ; %cond.false
 ; EZ80-NEXT:    call __ictlz
-; EZ80-NEXT:    or a, a
+; EZ80-NEXT:    or a
 ; EZ80-NEXT:    sbc hl, hl
 ; EZ80-NEXT:    ld l, a
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end11
+; EZ80-NEXT:  .Lfunc_end11:
+; EZ80-NEXT:    .size _ctlz.i24, .Lfunc_end11-_ctlz.i24
   call i24 @llvm.ctlz.i24(i24 %0)
   ret i24 %2
 }
@@ -267,24 +320,29 @@ define i24 @cttz.i24(i24) {
 ; EZ80-NEXT:    push bc
 ; EZ80-NEXT:    pop hl
 ; EZ80-NEXT:    add hl, bc
-; EZ80-NEXT:    or a, a
+; EZ80-NEXT:    or a
 ; EZ80-NEXT:    sbc hl, bc
-; EZ80-NEXT:    jr nz, BB12_2
+; EZ80-NEXT:    jr nz, .LBB12_2
 ; EZ80-NEXT:  ; %bb.1:
 ; EZ80-NEXT:    ld hl, 24
 ; EZ80-NEXT:    ret
-; EZ80-NEXT:  BB12_2: ; %cond.false
+; EZ80-NEXT:    .local .LBB12_2
+; EZ80-NEXT:  .LBB12_2: ; %cond.false
 ; EZ80-NEXT:    scf
 ; EZ80-NEXT:    sbc hl, hl
-; EZ80-NEXT:    or a, a
+; EZ80-NEXT:    or a
 ; EZ80-NEXT:    sbc hl, bc
 ; EZ80-NEXT:    dec bc
 ; EZ80-NEXT:    call __iand
 ; EZ80-NEXT:    call __ipopcnt
-; EZ80-NEXT:    or a, a
+; EZ80-NEXT:    or a
 ; EZ80-NEXT:    sbc hl, hl
 ; EZ80-NEXT:    ld l, a
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end12
+; EZ80-NEXT:  .Lfunc_end12:
+; EZ80-NEXT:    .size _cttz.i24, .Lfunc_end12-_cttz.i24
   call i24 @llvm.cttz.i24(i24 %0)
   ret i24 %2
 }
@@ -309,7 +367,7 @@ define i24 @fshl.i24(i24, i24, i24) {
 ; EZ80-NEXT:    call __ishl
 ; EZ80-NEXT:    push hl
 ; EZ80-NEXT:    pop iy
-; EZ80-NEXT:    or a, a
+; EZ80-NEXT:    or a
 ; EZ80-NEXT:    sbc hl, hl
 ; EZ80-NEXT:    sbc hl, de
 ; EZ80-NEXT:    ld bc, 23
@@ -325,6 +383,10 @@ define i24 @fshl.i24(i24, i24, i24) {
 ; EZ80-NEXT:    call __ior
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end13
+; EZ80-NEXT:  .Lfunc_end13:
+; EZ80-NEXT:    .size _fshl.i24, .Lfunc_end13-_fshl.i24
   call i24 @llvm.fshl.i24(i24 %0, i24 %1, i24 %2)
   ret i24 %4
 }
@@ -349,7 +411,7 @@ define i24 @fshr.i24(i24, i24, i24) {
 ; EZ80-NEXT:    call __ishru
 ; EZ80-NEXT:    push hl
 ; EZ80-NEXT:    pop iy
-; EZ80-NEXT:    or a, a
+; EZ80-NEXT:    or a
 ; EZ80-NEXT:    sbc hl, hl
 ; EZ80-NEXT:    sbc hl, de
 ; EZ80-NEXT:    ld bc, 23
@@ -365,6 +427,10 @@ define i24 @fshr.i24(i24, i24, i24) {
 ; EZ80-NEXT:    call __ior
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end14
+; EZ80-NEXT:  .Lfunc_end14:
+; EZ80-NEXT:    .size _fshr.i24, .Lfunc_end14-_fshr.i24
   call i24 @llvm.fshr.i24(i24 %0, i24 %1, i24 %2)
   ret i24 %4
 }
@@ -378,13 +444,18 @@ define i1 @sadd.with.overflow.i24(i24, i24) {
 ; EZ80-NEXT:    ld hl, (iy + 3)
 ; EZ80-NEXT:    ld de, (iy + 6)
 ; EZ80-NEXT:    add hl, de
-; EZ80-NEXT:    jp pe, BB15_2
+; EZ80-NEXT:    jp pe, .LBB15_2
 ; EZ80-NEXT:  ; %bb.1:
 ; EZ80-NEXT:    ld a, 0
 ; EZ80-NEXT:    ret
-; EZ80-NEXT:  BB15_2:
+; EZ80-NEXT:    .local .LBB15_2
+; EZ80-NEXT:  .LBB15_2:
 ; EZ80-NEXT:    ld a, -1
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end15
+; EZ80-NEXT:  .Lfunc_end15:
+; EZ80-NEXT:    .size _sadd.with.overflow.i24, .Lfunc_end15-_sadd.with.overflow.i24
   call {i24, i1} @llvm.sadd.with.overflow.i24(i24 %0, i24 %1)
   extractvalue {i24, i1} %3, 1
   ret i1 %4
@@ -402,6 +473,10 @@ define i1 @uadd.with.overflow.i24(i24, i24) {
 ; EZ80-NEXT:    ; kill: def $a killed $a
 ; EZ80-NEXT:    sbc a, a
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end16
+; EZ80-NEXT:  .Lfunc_end16:
+; EZ80-NEXT:    .size _uadd.with.overflow.i24, .Lfunc_end16-_uadd.with.overflow.i24
   call {i24, i1} @llvm.uadd.with.overflow.i24(i24 %0, i24 %1)
   extractvalue {i24, i1} %3, 1
   ret i1 %4
@@ -416,13 +491,18 @@ define i1 @ssub.with.overflow.i24(i24, i24) {
 ; EZ80-NEXT:    ld hl, (iy + 3)
 ; EZ80-NEXT:    ld de, (iy + 6)
 ; EZ80-NEXT:    sbc hl, de
-; EZ80-NEXT:    jp pe, BB17_2
+; EZ80-NEXT:    jp pe, .LBB17_2
 ; EZ80-NEXT:  ; %bb.1:
 ; EZ80-NEXT:    ld a, 0
 ; EZ80-NEXT:    ret
-; EZ80-NEXT:  BB17_2:
+; EZ80-NEXT:    .local .LBB17_2
+; EZ80-NEXT:  .LBB17_2:
 ; EZ80-NEXT:    ld a, -1
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end17
+; EZ80-NEXT:  .Lfunc_end17:
+; EZ80-NEXT:    .size _ssub.with.overflow.i24, .Lfunc_end17-_ssub.with.overflow.i24
   call {i24, i1} @llvm.ssub.with.overflow.i24(i24 %0, i24 %1)
   extractvalue {i24, i1} %3, 1
   ret i1 %4
@@ -440,6 +520,10 @@ define i1 @usub.with.overflow.i24(i24, i24) {
 ; EZ80-NEXT:    ; kill: def $a killed $a
 ; EZ80-NEXT:    sbc a, a
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end18
+; EZ80-NEXT:  .Lfunc_end18:
+; EZ80-NEXT:    .size _usub.with.overflow.i24, .Lfunc_end18-_usub.with.overflow.i24
   call {i24, i1} @llvm.usub.with.overflow.i24(i24 %0, i24 %1)
   extractvalue {i24, i1} %3, 1
   ret i1 %4
@@ -461,20 +545,24 @@ define i24 @sadd.sat.i24(i24, i24) {
 ; EZ80-NEXT:    pop de
 ; EZ80-NEXT:    push de
 ; EZ80-NEXT:    pop iy
-; EZ80-NEXT:    add iy, iy
 ; EZ80-NEXT:    sbc hl, hl
 ; EZ80-NEXT:    ld bc, -8388608
 ; EZ80-NEXT:    add hl, bc
 ; EZ80-NEXT:    ld iy, (ix - 3)
 ; EZ80-NEXT:    ld bc, (ix + 9)
 ; EZ80-NEXT:    add iy, bc
-; EZ80-NEXT:    jp pe, BB19_2
+; EZ80-NEXT:    jp pe, .LBB19_2
 ; EZ80-NEXT:  ; %bb.1:
 ; EZ80-NEXT:    ex de, hl
-; EZ80-NEXT:  BB19_2:
+; EZ80-NEXT:    .local .LBB19_2
+; EZ80-NEXT:  .LBB19_2:
 ; EZ80-NEXT:    ld sp, ix
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end19
+; EZ80-NEXT:  .Lfunc_end19:
+; EZ80-NEXT:    .size _sadd.sat.i24, .Lfunc_end19-_sadd.sat.i24
   call i24 @llvm.sadd.sat.i24(i24 %0, i24 %1)
   ret i24 %3
 }
@@ -492,13 +580,18 @@ define i24 @uadd.sat.i24(i24, i24) {
 ; EZ80-NEXT:    add hl, bc
 ; EZ80-NEXT:    ld de, -1
 ; EZ80-NEXT:    add iy, bc
-; EZ80-NEXT:    jr c, BB20_2
+; EZ80-NEXT:    jr c, .LBB20_2
 ; EZ80-NEXT:  ; %bb.1:
 ; EZ80-NEXT:    ex de, hl
-; EZ80-NEXT:  BB20_2:
+; EZ80-NEXT:    .local .LBB20_2
+; EZ80-NEXT:  .LBB20_2:
 ; EZ80-NEXT:    ex de, hl
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end20
+; EZ80-NEXT:  .Lfunc_end20:
+; EZ80-NEXT:    .size _uadd.sat.i24, .Lfunc_end20-_uadd.sat.i24
   call i24 @llvm.uadd.sat.i24(i24 %0, i24 %1)
   ret i24 %3
 }
@@ -519,24 +612,28 @@ define i24 @ssub.sat.i24(i24, i24) {
 ; EZ80-NEXT:    push hl
 ; EZ80-NEXT:    pop iy
 ; EZ80-NEXT:    ld (ix - 3), iy
-; EZ80-NEXT:    add iy, iy
 ; EZ80-NEXT:    sbc hl, hl
 ; EZ80-NEXT:    push hl
 ; EZ80-NEXT:    pop iy
 ; EZ80-NEXT:    ld bc, -8388608
 ; EZ80-NEXT:    add iy, bc
-; EZ80-NEXT:    or a, a
+; EZ80-NEXT:    or a
 ; EZ80-NEXT:    ex de, hl
 ; EZ80-NEXT:    ld de, (ix + 9)
 ; EZ80-NEXT:    sbc hl, de
-; EZ80-NEXT:    jp pe, BB21_2
+; EZ80-NEXT:    jp pe, .LBB21_2
 ; EZ80-NEXT:  ; %bb.1:
 ; EZ80-NEXT:    ld iy, (ix - 3)
-; EZ80-NEXT:  BB21_2:
+; EZ80-NEXT:    .local .LBB21_2
+; EZ80-NEXT:  .LBB21_2:
 ; EZ80-NEXT:    lea hl, iy
 ; EZ80-NEXT:    ld sp, ix
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end21
+; EZ80-NEXT:  .Lfunc_end21:
+; EZ80-NEXT:    .size _ssub.sat.i24, .Lfunc_end21-_ssub.sat.i24
   call i24 @llvm.ssub.sat.i24(i24 %0, i24 %1)
   ret i24 %3
 }
@@ -554,18 +651,23 @@ define i24 @usub.sat.i24(i24, i24) {
 ; EZ80-NEXT:    push hl
 ; EZ80-NEXT:    pop iy
 ; EZ80-NEXT:    ld bc, 0
-; EZ80-NEXT:    or a, a
+; EZ80-NEXT:    or a
 ; EZ80-NEXT:    ld hl, (ix + 6)
 ; EZ80-NEXT:    ld de, (ix + 9)
 ; EZ80-NEXT:    sbc hl, de
-; EZ80-NEXT:    jr c, BB22_2
+; EZ80-NEXT:    jr c, .LBB22_2
 ; EZ80-NEXT:  ; %bb.1:
 ; EZ80-NEXT:    lea bc, iy
-; EZ80-NEXT:  BB22_2:
+; EZ80-NEXT:    .local .LBB22_2
+; EZ80-NEXT:  .LBB22_2:
 ; EZ80-NEXT:    push bc
 ; EZ80-NEXT:    pop hl
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end22
+; EZ80-NEXT:  .Lfunc_end22:
+; EZ80-NEXT:    .size _usub.sat.i24, .Lfunc_end22-_usub.sat.i24
   call i24 @llvm.usub.sat.i24(i24 %0, i24 %1)
   ret i24 %3
 }
@@ -585,6 +687,10 @@ define i24 @smul.sat.i24(i24, i24) {
 ; EZ80-NEXT:    add iy, sp
 ; EZ80-NEXT:    ld sp, iy
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end23
+; EZ80-NEXT:  .Lfunc_end23:
+; EZ80-NEXT:    .size _smul.sat.i24, .Lfunc_end23-_smul.sat.i24
   call i24 @llvm.smul.sat.i24(i24 %0, i24 %1)
   ret i24 %3
 }
@@ -604,6 +710,10 @@ define i24 @umul.sat.i24(i24, i24) {
 ; EZ80-NEXT:    add iy, sp
 ; EZ80-NEXT:    ld sp, iy
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end24
+; EZ80-NEXT:  .Lfunc_end24:
+; EZ80-NEXT:    .size _umul.sat.i24, .Lfunc_end24-_umul.sat.i24
   call i24 @llvm.umul.sat.i24(i24 %0, i24 %1)
   ret i24 %3
 }
@@ -618,6 +728,10 @@ define i8* @ptrmask.p0i8.i24(i8*, i24) {
 ; EZ80-NEXT:    ld bc, (iy + 6)
 ; EZ80-NEXT:    call __iand
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end25
+; EZ80-NEXT:  .Lfunc_end25:
+; EZ80-NEXT:    .size _ptrmask.p0i8.i24, .Lfunc_end25-_ptrmask.p0i8.i24
   call i8* @llvm.ptrmask.p0i8.i24(i8* %0, i24 %1)
   ret i8* %3
 }
@@ -628,12 +742,19 @@ define i8 addrspace(1)* @ptrmask.p1i8.i16(i8 addrspace(1)*, i16) {
 ; EZ80:       ; %bb.0:
 ; EZ80-NEXT:    ld iy, 0
 ; EZ80-NEXT:    add iy, sp
-; EZ80-NEXT:    ld hl, (iy + 3)
+; EZ80-NEXT:    ld de, (iy + 3)
 ; EZ80-NEXT:    ld bc, (iy + 6)
-; EZ80-NEXT:    ; kill: def $hl killed $hl killed $uhl
-; EZ80-NEXT:    ; kill: def $bc killed $bc killed $ubc
-; EZ80-NEXT:    call __sand
+; EZ80-NEXT:    ld a, e
+; EZ80-NEXT:    and c
+; EZ80-NEXT:    ld l, a
+; EZ80-NEXT:    ld a, d
+; EZ80-NEXT:    and b
+; EZ80-NEXT:    ld h, a
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end26
+; EZ80-NEXT:  .Lfunc_end26:
+; EZ80-NEXT:    .size _ptrmask.p1i8.i16, .Lfunc_end26-_ptrmask.p1i8.i16
   call i8 addrspace(1)* @llvm.ptrmask.p1i8.i16(i8 addrspace(1)* %0, i16 %1)
   ret i8 addrspace(1)* %3
 }
@@ -648,6 +769,10 @@ define i8 addrspace(4)* @ptrmask.p4i8.i24(i8 addrspace(4)*, i24) {
 ; EZ80-NEXT:    ld bc, (iy + 6)
 ; EZ80-NEXT:    call __iand
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end27
+; EZ80-NEXT:  .Lfunc_end27:
+; EZ80-NEXT:    .size _ptrmask.p4i8.i24, .Lfunc_end27-_ptrmask.p4i8.i24
   call i8 addrspace(4)* @llvm.ptrmask.p4i8.i24(i8 addrspace(4)* %0, i24 %1)
   ret i8 addrspace(4)* %3
 }

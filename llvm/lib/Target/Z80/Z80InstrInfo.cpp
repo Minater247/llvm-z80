@@ -98,6 +98,23 @@ static bool isIndex(const MachineOperand &MO, const MCRegisterInfo &RI) {
   return false;
 }
 
+static bool hasMeaningfulHighLane(Register Reg,
+                                  const MachineRegisterInfo &MRI) {
+  if (!Reg.isVirtual())
+    return true;
+
+  for (const MachineOperand &MO : MRI.def_operands(Reg)) {
+    if (!MO.isReg() || !MO.isDef() || MO.isImplicit() || MO.isUndef())
+      continue;
+
+    unsigned SubIdx = MO.getSubReg();
+    if (!SubIdx || SubIdx == Z80::sub_high || SubIdx == Z80::sub_short)
+      return true;
+  }
+
+  return false;
+}
+
 unsigned Z80InstrInfo::getInstSizeInBytes(const MachineInstr &MI) const {
   unsigned Size = 0;
   auto TSFlags = MI.getDesc().TSFlags;
@@ -821,7 +838,24 @@ void Z80InstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
     Opc = Z80::LD8or;
     break;
   case 2:
-    Opc = Subtarget.has16BitEZ80Ops() ? Z80::LD16or : Z80::LD88or;
+    if (Subtarget.has16BitEZ80Ops()) {
+      Opc = Z80::LD16or;
+    } else {
+      MachineRegisterInfo &MRI = MBB.getParent()->getRegInfo();
+      if (!hasMeaningfulHighLane(SrcReg, MRI)) {
+        BuildMI(MBB, MI, DL, get(Z80::LD8or))
+            .addFrameIndex(FI)
+            .addImm(0)
+            .addReg(SrcReg, getKillRegState(IsKill), Z80::sub_low);
+
+        BuildMI(MBB, MI, DL, get(Z80::LD8oi))
+            .addFrameIndex(FI)
+            .addImm(1)
+            .addImm(0);
+        return;
+      }
+      Opc = Z80::LD88or;
+    }
     break;
   case 3:
     assert(Is24Bit && "Only 24-bit should have 3 byte stack slots");

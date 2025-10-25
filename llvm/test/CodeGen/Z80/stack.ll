@@ -10,22 +10,25 @@ define void @arg.addr.no.fpe(i8** %0) "frame-pointer"="all" {
 ; Z80:       ; %bb.0:
 ; Z80-NEXT:    push ix
 ; Z80-NEXT:    ld ix, 0
-; Z80-NEXT:    add ix, sp
-; Z80-NEXT:    ld l, (ix + 4)
-; Z80-NEXT:    ld h, (ix + 5)
-; Z80-NEXT:    ld (_global), hl
+; Z80-NEXT:    ld (_global), de
 ; Z80-NEXT:    pop ix
 ; Z80-NEXT:    ret
+; Z80-NEXT:    .section .text,"ax",@progbits
+; Z80-NEXT:    .local .Lfunc_end0
+; Z80-NEXT:  .Lfunc_end0:
+; Z80-NEXT:    .size _arg.addr.no.fpe, .Lfunc_end0-_arg.addr.no.fpe
 ;
 ; EZ80-CODE16-LABEL: arg.addr.no.fpe:
 ; EZ80-CODE16:       ; %bb.0:
 ; EZ80-CODE16-NEXT:    push ix
 ; EZ80-CODE16-NEXT:    ld ix, 0
-; EZ80-CODE16-NEXT:    add ix, sp
-; EZ80-CODE16-NEXT:    ld hl, (ix + 4)
-; EZ80-CODE16-NEXT:    ld (_global), hl
+; EZ80-CODE16-NEXT:    ld (_global), de
 ; EZ80-CODE16-NEXT:    pop ix
 ; EZ80-CODE16-NEXT:    ret
+; EZ80-CODE16-NEXT:    .section .text,"ax",@progbits
+; EZ80-CODE16-NEXT:    .local .Lfunc_end0
+; EZ80-CODE16-NEXT:  .Lfunc_end0:
+; EZ80-CODE16-NEXT:    .size _arg.addr.no.fpe, .Lfunc_end0-_arg.addr.no.fpe
 ;
 ; EZ80-LABEL: arg.addr.no.fpe:
 ; EZ80:       ; %bb.0:
@@ -36,6 +39,10 @@ define void @arg.addr.no.fpe(i8** %0) "frame-pointer"="all" {
 ; EZ80-NEXT:    ld (_global), hl
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end0
+; EZ80-NEXT:  .Lfunc_end0:
+; EZ80-NEXT:    .size _arg.addr.no.fpe, .Lfunc_end0-_arg.addr.no.fpe
 1:
   store i8** %0, i8*** @global
   ret void
@@ -44,20 +51,21 @@ define void @arg.addr.no.fpe(i8** %0) "frame-pointer"="all" {
 define void @arg.addr.fpe(i8** %0) "frame-pointer"="none" {
 ; Z80-LABEL: arg.addr.fpe:
 ; Z80:       ; %bb.0:
-; Z80-NEXT:    ld iy, 0
-; Z80-NEXT:    add iy, sp
-; Z80-NEXT:    ld l, (iy + 2)
-; Z80-NEXT:    ld h, (iy + 3)
-; Z80-NEXT:    ld (_global), hl
+; Z80-NEXT:    ld (_global), de
 ; Z80-NEXT:    ret
+; Z80-NEXT:    .section .text,"ax",@progbits
+; Z80-NEXT:    .local .Lfunc_end1
+; Z80-NEXT:  .Lfunc_end1:
+; Z80-NEXT:    .size _arg.addr.fpe, .Lfunc_end1-_arg.addr.fpe
 ;
 ; EZ80-CODE16-LABEL: arg.addr.fpe:
 ; EZ80-CODE16:       ; %bb.0:
-; EZ80-CODE16-NEXT:    ld iy, 0
-; EZ80-CODE16-NEXT:    add iy, sp
-; EZ80-CODE16-NEXT:    ld hl, (iy + 2)
-; EZ80-CODE16-NEXT:    ld (_global), hl
+; EZ80-CODE16-NEXT:    ld (_global), de
 ; EZ80-CODE16-NEXT:    ret
+; EZ80-CODE16-NEXT:    .section .text,"ax",@progbits
+; EZ80-CODE16-NEXT:    .local .Lfunc_end1
+; EZ80-CODE16-NEXT:  .Lfunc_end1:
+; EZ80-CODE16-NEXT:    .size _arg.addr.fpe, .Lfunc_end1-_arg.addr.fpe
 ;
 ; EZ80-LABEL: arg.addr.fpe:
 ; EZ80:       ; %bb.0:
@@ -66,6 +74,10 @@ define void @arg.addr.fpe(i8** %0) "frame-pointer"="none" {
 ; EZ80-NEXT:    ld hl, (iy + 3)
 ; EZ80-NEXT:    ld (_global), hl
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end1
+; EZ80-NEXT:  .Lfunc_end1:
+; EZ80-NEXT:    .size _arg.addr.fpe, .Lfunc_end1-_arg.addr.fpe
 1:
   store i8** %0, i8*** @global
   ret void
@@ -77,9 +89,9 @@ define void @local.addr.no.fpe() "frame-pointer"="all" {
 ; Z80-NEXT:    push ix
 ; Z80-NEXT:    ld ix, 0
 ; Z80-NEXT:    add ix, sp
-; Z80-NEXT:    ld hl, -6
-; Z80-NEXT:    add hl, sp
-; Z80-NEXT:    ld sp, hl
+; Z80-NEXT:    ld iy, -6
+; Z80-NEXT:    add iy, sp
+; Z80-NEXT:    ld sp, iy
 ; Z80-NEXT:    ld bc, -6
 ; Z80-NEXT:    ex de, hl
 ; Z80-NEXT:    ld e, ixl
@@ -90,18 +102,26 @@ define void @local.addr.no.fpe() "frame-pointer"="all" {
 ; Z80-NEXT:    ld sp, ix
 ; Z80-NEXT:    pop ix
 ; Z80-NEXT:    ret
+; Z80-NEXT:    .section .text,"ax",@progbits
+; Z80-NEXT:    .local .Lfunc_end2
+; Z80-NEXT:  .Lfunc_end2:
+; Z80-NEXT:    .size _local.addr.no.fpe, .Lfunc_end2-_local.addr.no.fpe
 ;
 ; EZ80-CODE16-LABEL: local.addr.no.fpe:
 ; EZ80-CODE16:       ; %bb.0:
 ; EZ80-CODE16-NEXT:    push ix
 ; EZ80-CODE16-NEXT:    ld ix, 0
 ; EZ80-CODE16-NEXT:    add ix, sp
-; EZ80-CODE16-NEXT:    push hl
+; EZ80-CODE16-NEXT:    push iy
 ; EZ80-CODE16-NEXT:    lea hl, ix - 2
 ; EZ80-CODE16-NEXT:    ld (_global), hl
 ; EZ80-CODE16-NEXT:    ld sp, ix
 ; EZ80-CODE16-NEXT:    pop ix
 ; EZ80-CODE16-NEXT:    ret
+; EZ80-CODE16-NEXT:    .section .text,"ax",@progbits
+; EZ80-CODE16-NEXT:    .local .Lfunc_end2
+; EZ80-CODE16-NEXT:  .Lfunc_end2:
+; EZ80-CODE16-NEXT:    .size _local.addr.no.fpe, .Lfunc_end2-_local.addr.no.fpe
 ;
 ; EZ80-LABEL: local.addr.no.fpe:
 ; EZ80:       ; %bb.0:
@@ -114,6 +134,10 @@ define void @local.addr.no.fpe() "frame-pointer"="all" {
 ; EZ80-NEXT:    ld sp, ix
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end2
+; EZ80-NEXT:  .Lfunc_end2:
+; EZ80-NEXT:    .size _local.addr.no.fpe, .Lfunc_end2-_local.addr.no.fpe
 0:
   %1 = alloca i8*
   store i8** %1, i8*** @global
@@ -125,8 +149,8 @@ define void @local.addr.fpe() "frame-pointer"="none" {
 ; Z80:       ; %bb.0:
 ; Z80-NEXT:    ld iy, 0
 ; Z80-NEXT:    add iy, sp
-; Z80-NEXT:    push hl
-; Z80-NEXT:    push hl
+; Z80-NEXT:    push iy
+; Z80-NEXT:    push iy
 ; Z80-NEXT:    ld bc, -4
 ; Z80-NEXT:    ex de, hl
 ; Z80-NEXT:    ld e, iyl
@@ -135,18 +159,26 @@ define void @local.addr.fpe() "frame-pointer"="none" {
 ; Z80-NEXT:    add hl, bc
 ; Z80-NEXT:    ld (_global), hl
 ; Z80-NEXT:    pop hl
-; Z80-NEXT:    pop hl
+; Z80-NEXT:    ld sp, iy
 ; Z80-NEXT:    ret
+; Z80-NEXT:    .section .text,"ax",@progbits
+; Z80-NEXT:    .local .Lfunc_end3
+; Z80-NEXT:  .Lfunc_end3:
+; Z80-NEXT:    .size _local.addr.fpe, .Lfunc_end3-_local.addr.fpe
 ;
 ; EZ80-CODE16-LABEL: local.addr.fpe:
 ; EZ80-CODE16:       ; %bb.0:
 ; EZ80-CODE16-NEXT:    ld iy, 0
 ; EZ80-CODE16-NEXT:    add iy, sp
-; EZ80-CODE16-NEXT:    push hl
+; EZ80-CODE16-NEXT:    push iy
 ; EZ80-CODE16-NEXT:    lea hl, iy - 2
 ; EZ80-CODE16-NEXT:    ld (_global), hl
 ; EZ80-CODE16-NEXT:    pop hl
 ; EZ80-CODE16-NEXT:    ret
+; EZ80-CODE16-NEXT:    .section .text,"ax",@progbits
+; EZ80-CODE16-NEXT:    .local .Lfunc_end3
+; EZ80-CODE16-NEXT:  .Lfunc_end3:
+; EZ80-CODE16-NEXT:    .size _local.addr.fpe, .Lfunc_end3-_local.addr.fpe
 ;
 ; EZ80-LABEL: local.addr.fpe:
 ; EZ80:       ; %bb.0:
@@ -157,6 +189,10 @@ define void @local.addr.fpe() "frame-pointer"="none" {
 ; EZ80-NEXT:    ld (_global), hl
 ; EZ80-NEXT:    pop hl
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end3
+; EZ80-NEXT:  .Lfunc_end3:
+; EZ80-NEXT:    .size _local.addr.fpe, .Lfunc_end3-_local.addr.fpe
 0:
   %1 = alloca i8*
   store i8** %1, i8*** @global

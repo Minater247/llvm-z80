@@ -8,29 +8,27 @@ declare void @external()
 define void @icmp.eq.i16(i16, i16) {
 ; Z80-LABEL: icmp.eq.i16:
 ; Z80:       ; %bb.0:
-; Z80-NEXT:    push ix
-; Z80-NEXT:    ld ix, 0
-; Z80-NEXT:    add ix, sp
-; Z80-NEXT:    ld l, (ix + 4)
-; Z80-NEXT:    ld h, (ix + 5)
-; Z80-NEXT:    ld e, (ix + 6)
-; Z80-NEXT:    ld d, (ix + 7)
-; Z80-NEXT:    sbc hl, de
+; Z80-NEXT:    ex de, hl
+; Z80-NEXT:    or a
+; Z80-NEXT:    sbc hl, bc
 ; Z80-NEXT:    call z, _external
-; Z80-NEXT:    pop ix
 ; Z80-NEXT:    ret
+; Z80-NEXT:    .section .text,"ax",@progbits
+; Z80-NEXT:    .local .Lfunc_end0
+; Z80-NEXT:  .Lfunc_end0:
+; Z80-NEXT:    .size _icmp.eq.i16, .Lfunc_end0-_icmp.eq.i16
 ;
 ; EZ80-CODE16-LABEL: icmp.eq.i16:
 ; EZ80-CODE16:       ; %bb.0:
-; EZ80-CODE16-NEXT:    push ix
-; EZ80-CODE16-NEXT:    ld ix, 0
-; EZ80-CODE16-NEXT:    add ix, sp
-; EZ80-CODE16-NEXT:    ld hl, (ix + 4)
-; EZ80-CODE16-NEXT:    ld de, (ix + 6)
-; EZ80-CODE16-NEXT:    sbc hl, de
+; EZ80-CODE16-NEXT:    ex de, hl
+; EZ80-CODE16-NEXT:    or a
+; EZ80-CODE16-NEXT:    sbc hl, bc
 ; EZ80-CODE16-NEXT:    call z, _external
-; EZ80-CODE16-NEXT:    pop ix
 ; EZ80-CODE16-NEXT:    ret
+; EZ80-CODE16-NEXT:    .section .text,"ax",@progbits
+; EZ80-CODE16-NEXT:    .local .Lfunc_end0
+; EZ80-CODE16-NEXT:  .Lfunc_end0:
+; EZ80-CODE16-NEXT:    .size _icmp.eq.i16, .Lfunc_end0-_icmp.eq.i16
 ;
 ; EZ80-LABEL: icmp.eq.i16:
 ; EZ80:       ; %bb.0:
@@ -44,6 +42,10 @@ define void @icmp.eq.i16(i16, i16) {
 ; EZ80-NEXT:    call z, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end0
+; EZ80-NEXT:  .Lfunc_end0:
+; EZ80-NEXT:    .size _icmp.eq.i16, .Lfunc_end0-_icmp.eq.i16
   icmp eq i16 %0, %1
   br i1 %3, label %4, label %5
   call void @external()
@@ -54,30 +56,25 @@ define void @icmp.eq.i16(i16, i16) {
 define void @icmp.eq.i16.0(i16) {
 ; Z80-LABEL: icmp.eq.i16.0:
 ; Z80:       ; %bb.0:
-; Z80-NEXT:    push ix
-; Z80-NEXT:    ld ix, 0
-; Z80-NEXT:    add ix, sp
-; Z80-NEXT:    ld l, (ix + 4)
-; Z80-NEXT:    ld h, (ix + 5)
-; Z80-NEXT:    add hl, bc
-; Z80-NEXT:    or a, a
-; Z80-NEXT:    sbc hl, bc
+; Z80-NEXT:    ld a, d
+; Z80-NEXT:    or e
 ; Z80-NEXT:    call z, _external
-; Z80-NEXT:    pop ix
 ; Z80-NEXT:    ret
+; Z80-NEXT:    .section .text,"ax",@progbits
+; Z80-NEXT:    .local .Lfunc_end1
+; Z80-NEXT:  .Lfunc_end1:
+; Z80-NEXT:    .size _icmp.eq.i16.0, .Lfunc_end1-_icmp.eq.i16.0
 ;
 ; EZ80-CODE16-LABEL: icmp.eq.i16.0:
 ; EZ80-CODE16:       ; %bb.0:
-; EZ80-CODE16-NEXT:    push ix
-; EZ80-CODE16-NEXT:    ld ix, 0
-; EZ80-CODE16-NEXT:    add ix, sp
-; EZ80-CODE16-NEXT:    ld hl, (ix + 4)
-; EZ80-CODE16-NEXT:    add hl, bc
-; EZ80-CODE16-NEXT:    or a, a
-; EZ80-CODE16-NEXT:    sbc hl, bc
+; EZ80-CODE16-NEXT:    ld a, d
+; EZ80-CODE16-NEXT:    or e
 ; EZ80-CODE16-NEXT:    call z, _external
-; EZ80-CODE16-NEXT:    pop ix
 ; EZ80-CODE16-NEXT:    ret
+; EZ80-CODE16-NEXT:    .section .text,"ax",@progbits
+; EZ80-CODE16-NEXT:    .local .Lfunc_end1
+; EZ80-CODE16-NEXT:  .Lfunc_end1:
+; EZ80-CODE16-NEXT:    .size _icmp.eq.i16.0, .Lfunc_end1-_icmp.eq.i16.0
 ;
 ; EZ80-LABEL: icmp.eq.i16.0:
 ; EZ80:       ; %bb.0:
@@ -85,13 +82,15 @@ define void @icmp.eq.i16.0(i16) {
 ; EZ80-NEXT:    ld ix, 0
 ; EZ80-NEXT:    add ix, sp
 ; EZ80-NEXT:    ld hl, (ix + 6)
-; EZ80-NEXT:    ; kill: def $hl killed $hl killed $uhl
-; EZ80-NEXT:    add.sis hl, bc
-; EZ80-NEXT:    or a, a
-; EZ80-NEXT:    sbc.sis hl, bc
+; EZ80-NEXT:    ld a, h
+; EZ80-NEXT:    or l
 ; EZ80-NEXT:    call z, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end1
+; EZ80-NEXT:  .Lfunc_end1:
+; EZ80-NEXT:    .size _icmp.eq.i16.0, .Lfunc_end1-_icmp.eq.i16.0
   icmp eq i16 %0, 0
   br i1 %2, label %3, label %4
   call void @external()
@@ -102,28 +101,29 @@ define void @icmp.eq.i16.0(i16) {
 define void @icmp.eq.i16.64(i16) {
 ; Z80-LABEL: icmp.eq.i16.64:
 ; Z80:       ; %bb.0:
-; Z80-NEXT:    push ix
-; Z80-NEXT:    ld ix, 0
-; Z80-NEXT:    add ix, sp
-; Z80-NEXT:    ld l, (ix + 4)
-; Z80-NEXT:    ld h, (ix + 5)
-; Z80-NEXT:    ld de, 64
-; Z80-NEXT:    sbc hl, de
+; Z80-NEXT:    ld bc, 64
+; Z80-NEXT:    ex de, hl
+; Z80-NEXT:    or a
+; Z80-NEXT:    sbc hl, bc
 ; Z80-NEXT:    call z, _external
-; Z80-NEXT:    pop ix
 ; Z80-NEXT:    ret
+; Z80-NEXT:    .section .text,"ax",@progbits
+; Z80-NEXT:    .local .Lfunc_end2
+; Z80-NEXT:  .Lfunc_end2:
+; Z80-NEXT:    .size _icmp.eq.i16.64, .Lfunc_end2-_icmp.eq.i16.64
 ;
 ; EZ80-CODE16-LABEL: icmp.eq.i16.64:
 ; EZ80-CODE16:       ; %bb.0:
-; EZ80-CODE16-NEXT:    push ix
-; EZ80-CODE16-NEXT:    ld ix, 0
-; EZ80-CODE16-NEXT:    add ix, sp
-; EZ80-CODE16-NEXT:    ld hl, (ix + 4)
-; EZ80-CODE16-NEXT:    ld de, 64
-; EZ80-CODE16-NEXT:    sbc hl, de
+; EZ80-CODE16-NEXT:    ld bc, 64
+; EZ80-CODE16-NEXT:    ex de, hl
+; EZ80-CODE16-NEXT:    or a
+; EZ80-CODE16-NEXT:    sbc hl, bc
 ; EZ80-CODE16-NEXT:    call z, _external
-; EZ80-CODE16-NEXT:    pop ix
 ; EZ80-CODE16-NEXT:    ret
+; EZ80-CODE16-NEXT:    .section .text,"ax",@progbits
+; EZ80-CODE16-NEXT:    .local .Lfunc_end2
+; EZ80-CODE16-NEXT:  .Lfunc_end2:
+; EZ80-CODE16-NEXT:    .size _icmp.eq.i16.64, .Lfunc_end2-_icmp.eq.i16.64
 ;
 ; EZ80-LABEL: icmp.eq.i16.64:
 ; EZ80:       ; %bb.0:
@@ -137,6 +137,10 @@ define void @icmp.eq.i16.64(i16) {
 ; EZ80-NEXT:    call z, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end2
+; EZ80-NEXT:  .Lfunc_end2:
+; EZ80-NEXT:    .size _icmp.eq.i16.64, .Lfunc_end2-_icmp.eq.i16.64
   icmp eq i16 %0, 64
   br i1 %2, label %3, label %4
   call void @external()
@@ -147,29 +151,27 @@ define void @icmp.eq.i16.64(i16) {
 define void @icmp.ne.i16(i16, i16) {
 ; Z80-LABEL: icmp.ne.i16:
 ; Z80:       ; %bb.0:
-; Z80-NEXT:    push ix
-; Z80-NEXT:    ld ix, 0
-; Z80-NEXT:    add ix, sp
-; Z80-NEXT:    ld l, (ix + 4)
-; Z80-NEXT:    ld h, (ix + 5)
-; Z80-NEXT:    ld e, (ix + 6)
-; Z80-NEXT:    ld d, (ix + 7)
-; Z80-NEXT:    sbc hl, de
+; Z80-NEXT:    ex de, hl
+; Z80-NEXT:    or a
+; Z80-NEXT:    sbc hl, bc
 ; Z80-NEXT:    call nz, _external
-; Z80-NEXT:    pop ix
 ; Z80-NEXT:    ret
+; Z80-NEXT:    .section .text,"ax",@progbits
+; Z80-NEXT:    .local .Lfunc_end3
+; Z80-NEXT:  .Lfunc_end3:
+; Z80-NEXT:    .size _icmp.ne.i16, .Lfunc_end3-_icmp.ne.i16
 ;
 ; EZ80-CODE16-LABEL: icmp.ne.i16:
 ; EZ80-CODE16:       ; %bb.0:
-; EZ80-CODE16-NEXT:    push ix
-; EZ80-CODE16-NEXT:    ld ix, 0
-; EZ80-CODE16-NEXT:    add ix, sp
-; EZ80-CODE16-NEXT:    ld hl, (ix + 4)
-; EZ80-CODE16-NEXT:    ld de, (ix + 6)
-; EZ80-CODE16-NEXT:    sbc hl, de
+; EZ80-CODE16-NEXT:    ex de, hl
+; EZ80-CODE16-NEXT:    or a
+; EZ80-CODE16-NEXT:    sbc hl, bc
 ; EZ80-CODE16-NEXT:    call nz, _external
-; EZ80-CODE16-NEXT:    pop ix
 ; EZ80-CODE16-NEXT:    ret
+; EZ80-CODE16-NEXT:    .section .text,"ax",@progbits
+; EZ80-CODE16-NEXT:    .local .Lfunc_end3
+; EZ80-CODE16-NEXT:  .Lfunc_end3:
+; EZ80-CODE16-NEXT:    .size _icmp.ne.i16, .Lfunc_end3-_icmp.ne.i16
 ;
 ; EZ80-LABEL: icmp.ne.i16:
 ; EZ80:       ; %bb.0:
@@ -183,6 +185,10 @@ define void @icmp.ne.i16(i16, i16) {
 ; EZ80-NEXT:    call nz, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end3
+; EZ80-NEXT:  .Lfunc_end3:
+; EZ80-NEXT:    .size _icmp.ne.i16, .Lfunc_end3-_icmp.ne.i16
   icmp ne i16 %0, %1
   br i1 %3, label %4, label %5
   call void @external()
@@ -193,30 +199,25 @@ define void @icmp.ne.i16(i16, i16) {
 define void @icmp.ne.i16.0(i16) {
 ; Z80-LABEL: icmp.ne.i16.0:
 ; Z80:       ; %bb.0:
-; Z80-NEXT:    push ix
-; Z80-NEXT:    ld ix, 0
-; Z80-NEXT:    add ix, sp
-; Z80-NEXT:    ld l, (ix + 4)
-; Z80-NEXT:    ld h, (ix + 5)
-; Z80-NEXT:    add hl, bc
-; Z80-NEXT:    or a, a
-; Z80-NEXT:    sbc hl, bc
+; Z80-NEXT:    ld a, d
+; Z80-NEXT:    or e
 ; Z80-NEXT:    call nz, _external
-; Z80-NEXT:    pop ix
 ; Z80-NEXT:    ret
+; Z80-NEXT:    .section .text,"ax",@progbits
+; Z80-NEXT:    .local .Lfunc_end4
+; Z80-NEXT:  .Lfunc_end4:
+; Z80-NEXT:    .size _icmp.ne.i16.0, .Lfunc_end4-_icmp.ne.i16.0
 ;
 ; EZ80-CODE16-LABEL: icmp.ne.i16.0:
 ; EZ80-CODE16:       ; %bb.0:
-; EZ80-CODE16-NEXT:    push ix
-; EZ80-CODE16-NEXT:    ld ix, 0
-; EZ80-CODE16-NEXT:    add ix, sp
-; EZ80-CODE16-NEXT:    ld hl, (ix + 4)
-; EZ80-CODE16-NEXT:    add hl, bc
-; EZ80-CODE16-NEXT:    or a, a
-; EZ80-CODE16-NEXT:    sbc hl, bc
+; EZ80-CODE16-NEXT:    ld a, d
+; EZ80-CODE16-NEXT:    or e
 ; EZ80-CODE16-NEXT:    call nz, _external
-; EZ80-CODE16-NEXT:    pop ix
 ; EZ80-CODE16-NEXT:    ret
+; EZ80-CODE16-NEXT:    .section .text,"ax",@progbits
+; EZ80-CODE16-NEXT:    .local .Lfunc_end4
+; EZ80-CODE16-NEXT:  .Lfunc_end4:
+; EZ80-CODE16-NEXT:    .size _icmp.ne.i16.0, .Lfunc_end4-_icmp.ne.i16.0
 ;
 ; EZ80-LABEL: icmp.ne.i16.0:
 ; EZ80:       ; %bb.0:
@@ -224,13 +225,15 @@ define void @icmp.ne.i16.0(i16) {
 ; EZ80-NEXT:    ld ix, 0
 ; EZ80-NEXT:    add ix, sp
 ; EZ80-NEXT:    ld hl, (ix + 6)
-; EZ80-NEXT:    ; kill: def $hl killed $hl killed $uhl
-; EZ80-NEXT:    add.sis hl, bc
-; EZ80-NEXT:    or a, a
-; EZ80-NEXT:    sbc.sis hl, bc
+; EZ80-NEXT:    ld a, h
+; EZ80-NEXT:    or l
 ; EZ80-NEXT:    call nz, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end4
+; EZ80-NEXT:  .Lfunc_end4:
+; EZ80-NEXT:    .size _icmp.ne.i16.0, .Lfunc_end4-_icmp.ne.i16.0
   icmp ne i16 %0, 0
   br i1 %2, label %3, label %4
   call void @external()
@@ -241,28 +244,29 @@ define void @icmp.ne.i16.0(i16) {
 define void @icmp.ne.i16.64(i16) {
 ; Z80-LABEL: icmp.ne.i16.64:
 ; Z80:       ; %bb.0:
-; Z80-NEXT:    push ix
-; Z80-NEXT:    ld ix, 0
-; Z80-NEXT:    add ix, sp
-; Z80-NEXT:    ld l, (ix + 4)
-; Z80-NEXT:    ld h, (ix + 5)
-; Z80-NEXT:    ld de, 64
-; Z80-NEXT:    sbc hl, de
+; Z80-NEXT:    ld bc, 64
+; Z80-NEXT:    ex de, hl
+; Z80-NEXT:    or a
+; Z80-NEXT:    sbc hl, bc
 ; Z80-NEXT:    call nz, _external
-; Z80-NEXT:    pop ix
 ; Z80-NEXT:    ret
+; Z80-NEXT:    .section .text,"ax",@progbits
+; Z80-NEXT:    .local .Lfunc_end5
+; Z80-NEXT:  .Lfunc_end5:
+; Z80-NEXT:    .size _icmp.ne.i16.64, .Lfunc_end5-_icmp.ne.i16.64
 ;
 ; EZ80-CODE16-LABEL: icmp.ne.i16.64:
 ; EZ80-CODE16:       ; %bb.0:
-; EZ80-CODE16-NEXT:    push ix
-; EZ80-CODE16-NEXT:    ld ix, 0
-; EZ80-CODE16-NEXT:    add ix, sp
-; EZ80-CODE16-NEXT:    ld hl, (ix + 4)
-; EZ80-CODE16-NEXT:    ld de, 64
-; EZ80-CODE16-NEXT:    sbc hl, de
+; EZ80-CODE16-NEXT:    ld bc, 64
+; EZ80-CODE16-NEXT:    ex de, hl
+; EZ80-CODE16-NEXT:    or a
+; EZ80-CODE16-NEXT:    sbc hl, bc
 ; EZ80-CODE16-NEXT:    call nz, _external
-; EZ80-CODE16-NEXT:    pop ix
 ; EZ80-CODE16-NEXT:    ret
+; EZ80-CODE16-NEXT:    .section .text,"ax",@progbits
+; EZ80-CODE16-NEXT:    .local .Lfunc_end5
+; EZ80-CODE16-NEXT:  .Lfunc_end5:
+; EZ80-CODE16-NEXT:    .size _icmp.ne.i16.64, .Lfunc_end5-_icmp.ne.i16.64
 ;
 ; EZ80-LABEL: icmp.ne.i16.64:
 ; EZ80:       ; %bb.0:
@@ -276,6 +280,10 @@ define void @icmp.ne.i16.64(i16) {
 ; EZ80-NEXT:    call nz, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end5
+; EZ80-NEXT:  .Lfunc_end5:
+; EZ80-NEXT:    .size _icmp.ne.i16.64, .Lfunc_end5-_icmp.ne.i16.64
   icmp ne i16 %0, 64
   br i1 %2, label %3, label %4
   call void @external()
@@ -286,29 +294,27 @@ define void @icmp.ne.i16.64(i16) {
 define void @icmp.ult.i16(i16, i16) {
 ; Z80-LABEL: icmp.ult.i16:
 ; Z80:       ; %bb.0:
-; Z80-NEXT:    push ix
-; Z80-NEXT:    ld ix, 0
-; Z80-NEXT:    add ix, sp
-; Z80-NEXT:    ld l, (ix + 4)
-; Z80-NEXT:    ld h, (ix + 5)
-; Z80-NEXT:    ld e, (ix + 6)
-; Z80-NEXT:    ld d, (ix + 7)
-; Z80-NEXT:    sbc hl, de
+; Z80-NEXT:    ex de, hl
+; Z80-NEXT:    or a
+; Z80-NEXT:    sbc hl, bc
 ; Z80-NEXT:    call c, _external
-; Z80-NEXT:    pop ix
 ; Z80-NEXT:    ret
+; Z80-NEXT:    .section .text,"ax",@progbits
+; Z80-NEXT:    .local .Lfunc_end6
+; Z80-NEXT:  .Lfunc_end6:
+; Z80-NEXT:    .size _icmp.ult.i16, .Lfunc_end6-_icmp.ult.i16
 ;
 ; EZ80-CODE16-LABEL: icmp.ult.i16:
 ; EZ80-CODE16:       ; %bb.0:
-; EZ80-CODE16-NEXT:    push ix
-; EZ80-CODE16-NEXT:    ld ix, 0
-; EZ80-CODE16-NEXT:    add ix, sp
-; EZ80-CODE16-NEXT:    ld hl, (ix + 4)
-; EZ80-CODE16-NEXT:    ld de, (ix + 6)
-; EZ80-CODE16-NEXT:    sbc hl, de
+; EZ80-CODE16-NEXT:    ex de, hl
+; EZ80-CODE16-NEXT:    or a
+; EZ80-CODE16-NEXT:    sbc hl, bc
 ; EZ80-CODE16-NEXT:    call c, _external
-; EZ80-CODE16-NEXT:    pop ix
 ; EZ80-CODE16-NEXT:    ret
+; EZ80-CODE16-NEXT:    .section .text,"ax",@progbits
+; EZ80-CODE16-NEXT:    .local .Lfunc_end6
+; EZ80-CODE16-NEXT:  .Lfunc_end6:
+; EZ80-CODE16-NEXT:    .size _icmp.ult.i16, .Lfunc_end6-_icmp.ult.i16
 ;
 ; EZ80-LABEL: icmp.ult.i16:
 ; EZ80:       ; %bb.0:
@@ -322,6 +328,10 @@ define void @icmp.ult.i16(i16, i16) {
 ; EZ80-NEXT:    call c, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end6
+; EZ80-NEXT:  .Lfunc_end6:
+; EZ80-NEXT:    .size _icmp.ult.i16, .Lfunc_end6-_icmp.ult.i16
   icmp ult i16 %0, %1
   br i1 %3, label %4, label %5
   call void @external()
@@ -332,25 +342,25 @@ define void @icmp.ult.i16(i16, i16) {
 define void @icmp.ult.i16.0(i16) {
 ; Z80-LABEL: icmp.ult.i16.0:
 ; Z80:       ; %bb.0:
-; Z80-NEXT:    push ix
-; Z80-NEXT:    ld ix, 0
-; Z80-NEXT:    add ix, sp
 ; Z80-NEXT:    ld a, 1
 ; Z80-NEXT:    bit 0, a
 ; Z80-NEXT:    call z, _external
-; Z80-NEXT:    pop ix
 ; Z80-NEXT:    ret
+; Z80-NEXT:    .section .text,"ax",@progbits
+; Z80-NEXT:    .local .Lfunc_end7
+; Z80-NEXT:  .Lfunc_end7:
+; Z80-NEXT:    .size _icmp.ult.i16.0, .Lfunc_end7-_icmp.ult.i16.0
 ;
 ; EZ80-CODE16-LABEL: icmp.ult.i16.0:
 ; EZ80-CODE16:       ; %bb.0:
-; EZ80-CODE16-NEXT:    push ix
-; EZ80-CODE16-NEXT:    ld ix, 0
-; EZ80-CODE16-NEXT:    add ix, sp
 ; EZ80-CODE16-NEXT:    ld a, 1
 ; EZ80-CODE16-NEXT:    bit 0, a
 ; EZ80-CODE16-NEXT:    call z, _external
-; EZ80-CODE16-NEXT:    pop ix
 ; EZ80-CODE16-NEXT:    ret
+; EZ80-CODE16-NEXT:    .section .text,"ax",@progbits
+; EZ80-CODE16-NEXT:    .local .Lfunc_end7
+; EZ80-CODE16-NEXT:  .Lfunc_end7:
+; EZ80-CODE16-NEXT:    .size _icmp.ult.i16.0, .Lfunc_end7-_icmp.ult.i16.0
 ;
 ; EZ80-LABEL: icmp.ult.i16.0:
 ; EZ80:       ; %bb.0:
@@ -362,6 +372,10 @@ define void @icmp.ult.i16.0(i16) {
 ; EZ80-NEXT:    call z, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end7
+; EZ80-NEXT:  .Lfunc_end7:
+; EZ80-NEXT:    .size _icmp.ult.i16.0, .Lfunc_end7-_icmp.ult.i16.0
   icmp ult i16 %0, 0
   br i1 %2, label %3, label %4
   call void @external()
@@ -372,28 +386,29 @@ define void @icmp.ult.i16.0(i16) {
 define void @icmp.ult.i16.64(i16) {
 ; Z80-LABEL: icmp.ult.i16.64:
 ; Z80:       ; %bb.0:
-; Z80-NEXT:    push ix
-; Z80-NEXT:    ld ix, 0
-; Z80-NEXT:    add ix, sp
-; Z80-NEXT:    ld l, (ix + 4)
-; Z80-NEXT:    ld h, (ix + 5)
-; Z80-NEXT:    ld de, 64
-; Z80-NEXT:    sbc hl, de
+; Z80-NEXT:    ld bc, 64
+; Z80-NEXT:    ex de, hl
+; Z80-NEXT:    or a
+; Z80-NEXT:    sbc hl, bc
 ; Z80-NEXT:    call c, _external
-; Z80-NEXT:    pop ix
 ; Z80-NEXT:    ret
+; Z80-NEXT:    .section .text,"ax",@progbits
+; Z80-NEXT:    .local .Lfunc_end8
+; Z80-NEXT:  .Lfunc_end8:
+; Z80-NEXT:    .size _icmp.ult.i16.64, .Lfunc_end8-_icmp.ult.i16.64
 ;
 ; EZ80-CODE16-LABEL: icmp.ult.i16.64:
 ; EZ80-CODE16:       ; %bb.0:
-; EZ80-CODE16-NEXT:    push ix
-; EZ80-CODE16-NEXT:    ld ix, 0
-; EZ80-CODE16-NEXT:    add ix, sp
-; EZ80-CODE16-NEXT:    ld hl, (ix + 4)
-; EZ80-CODE16-NEXT:    ld de, 64
-; EZ80-CODE16-NEXT:    sbc hl, de
+; EZ80-CODE16-NEXT:    ld bc, 64
+; EZ80-CODE16-NEXT:    ex de, hl
+; EZ80-CODE16-NEXT:    or a
+; EZ80-CODE16-NEXT:    sbc hl, bc
 ; EZ80-CODE16-NEXT:    call c, _external
-; EZ80-CODE16-NEXT:    pop ix
 ; EZ80-CODE16-NEXT:    ret
+; EZ80-CODE16-NEXT:    .section .text,"ax",@progbits
+; EZ80-CODE16-NEXT:    .local .Lfunc_end8
+; EZ80-CODE16-NEXT:  .Lfunc_end8:
+; EZ80-CODE16-NEXT:    .size _icmp.ult.i16.64, .Lfunc_end8-_icmp.ult.i16.64
 ;
 ; EZ80-LABEL: icmp.ult.i16.64:
 ; EZ80:       ; %bb.0:
@@ -407,6 +422,10 @@ define void @icmp.ult.i16.64(i16) {
 ; EZ80-NEXT:    call c, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end8
+; EZ80-NEXT:  .Lfunc_end8:
+; EZ80-NEXT:    .size _icmp.ult.i16.64, .Lfunc_end8-_icmp.ult.i16.64
   icmp ult i16 %0, 64
   br i1 %2, label %3, label %4
   call void @external()
@@ -417,29 +436,29 @@ define void @icmp.ult.i16.64(i16) {
 define void @icmp.ule.i16(i16, i16) {
 ; Z80-LABEL: icmp.ule.i16:
 ; Z80:       ; %bb.0:
-; Z80-NEXT:    push ix
-; Z80-NEXT:    ld ix, 0
-; Z80-NEXT:    add ix, sp
-; Z80-NEXT:    ld e, (ix + 4)
-; Z80-NEXT:    ld d, (ix + 5)
-; Z80-NEXT:    ld l, (ix + 6)
-; Z80-NEXT:    ld h, (ix + 7)
+; Z80-NEXT:    ld l, c
+; Z80-NEXT:    ld h, b
+; Z80-NEXT:    or a
 ; Z80-NEXT:    sbc hl, de
 ; Z80-NEXT:    call nc, _external
-; Z80-NEXT:    pop ix
 ; Z80-NEXT:    ret
+; Z80-NEXT:    .section .text,"ax",@progbits
+; Z80-NEXT:    .local .Lfunc_end9
+; Z80-NEXT:  .Lfunc_end9:
+; Z80-NEXT:    .size _icmp.ule.i16, .Lfunc_end9-_icmp.ule.i16
 ;
 ; EZ80-CODE16-LABEL: icmp.ule.i16:
 ; EZ80-CODE16:       ; %bb.0:
-; EZ80-CODE16-NEXT:    push ix
-; EZ80-CODE16-NEXT:    ld ix, 0
-; EZ80-CODE16-NEXT:    add ix, sp
-; EZ80-CODE16-NEXT:    ld de, (ix + 4)
-; EZ80-CODE16-NEXT:    ld hl, (ix + 6)
+; EZ80-CODE16-NEXT:    ld l, c
+; EZ80-CODE16-NEXT:    ld h, b
+; EZ80-CODE16-NEXT:    or a
 ; EZ80-CODE16-NEXT:    sbc hl, de
 ; EZ80-CODE16-NEXT:    call nc, _external
-; EZ80-CODE16-NEXT:    pop ix
 ; EZ80-CODE16-NEXT:    ret
+; EZ80-CODE16-NEXT:    .section .text,"ax",@progbits
+; EZ80-CODE16-NEXT:    .local .Lfunc_end9
+; EZ80-CODE16-NEXT:  .Lfunc_end9:
+; EZ80-CODE16-NEXT:    .size _icmp.ule.i16, .Lfunc_end9-_icmp.ule.i16
 ;
 ; EZ80-LABEL: icmp.ule.i16:
 ; EZ80:       ; %bb.0:
@@ -453,6 +472,10 @@ define void @icmp.ule.i16(i16, i16) {
 ; EZ80-NEXT:    call nc, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end9
+; EZ80-NEXT:  .Lfunc_end9:
+; EZ80-NEXT:    .size _icmp.ule.i16, .Lfunc_end9-_icmp.ule.i16
   icmp ule i16 %0, %1
   br i1 %3, label %4, label %5
   call void @external()
@@ -463,28 +486,29 @@ define void @icmp.ule.i16(i16, i16) {
 define void @icmp.ule.i16.0(i16) {
 ; Z80-LABEL: icmp.ule.i16.0:
 ; Z80:       ; %bb.0:
-; Z80-NEXT:    push ix
-; Z80-NEXT:    ld ix, 0
-; Z80-NEXT:    add ix, sp
-; Z80-NEXT:    ld l, (ix + 4)
-; Z80-NEXT:    ld h, (ix + 5)
-; Z80-NEXT:    ld de, 1
-; Z80-NEXT:    sbc hl, de
+; Z80-NEXT:    ld bc, 1
+; Z80-NEXT:    ex de, hl
+; Z80-NEXT:    or a
+; Z80-NEXT:    sbc hl, bc
 ; Z80-NEXT:    call c, _external
-; Z80-NEXT:    pop ix
 ; Z80-NEXT:    ret
+; Z80-NEXT:    .section .text,"ax",@progbits
+; Z80-NEXT:    .local .Lfunc_end10
+; Z80-NEXT:  .Lfunc_end10:
+; Z80-NEXT:    .size _icmp.ule.i16.0, .Lfunc_end10-_icmp.ule.i16.0
 ;
 ; EZ80-CODE16-LABEL: icmp.ule.i16.0:
 ; EZ80-CODE16:       ; %bb.0:
-; EZ80-CODE16-NEXT:    push ix
-; EZ80-CODE16-NEXT:    ld ix, 0
-; EZ80-CODE16-NEXT:    add ix, sp
-; EZ80-CODE16-NEXT:    ld hl, (ix + 4)
-; EZ80-CODE16-NEXT:    ld de, 1
-; EZ80-CODE16-NEXT:    sbc hl, de
+; EZ80-CODE16-NEXT:    ld bc, 1
+; EZ80-CODE16-NEXT:    ex de, hl
+; EZ80-CODE16-NEXT:    or a
+; EZ80-CODE16-NEXT:    sbc hl, bc
 ; EZ80-CODE16-NEXT:    call c, _external
-; EZ80-CODE16-NEXT:    pop ix
 ; EZ80-CODE16-NEXT:    ret
+; EZ80-CODE16-NEXT:    .section .text,"ax",@progbits
+; EZ80-CODE16-NEXT:    .local .Lfunc_end10
+; EZ80-CODE16-NEXT:  .Lfunc_end10:
+; EZ80-CODE16-NEXT:    .size _icmp.ule.i16.0, .Lfunc_end10-_icmp.ule.i16.0
 ;
 ; EZ80-LABEL: icmp.ule.i16.0:
 ; EZ80:       ; %bb.0:
@@ -498,6 +522,10 @@ define void @icmp.ule.i16.0(i16) {
 ; EZ80-NEXT:    call c, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end10
+; EZ80-NEXT:  .Lfunc_end10:
+; EZ80-NEXT:    .size _icmp.ule.i16.0, .Lfunc_end10-_icmp.ule.i16.0
   icmp ule i16 %0, 0
   br i1 %2, label %3, label %4
   call void @external()
@@ -508,28 +536,29 @@ define void @icmp.ule.i16.0(i16) {
 define void @icmp.ule.i16.64(i16) {
 ; Z80-LABEL: icmp.ule.i16.64:
 ; Z80:       ; %bb.0:
-; Z80-NEXT:    push ix
-; Z80-NEXT:    ld ix, 0
-; Z80-NEXT:    add ix, sp
-; Z80-NEXT:    ld l, (ix + 4)
-; Z80-NEXT:    ld h, (ix + 5)
-; Z80-NEXT:    ld de, 65
-; Z80-NEXT:    sbc hl, de
+; Z80-NEXT:    ld bc, 65
+; Z80-NEXT:    ex de, hl
+; Z80-NEXT:    or a
+; Z80-NEXT:    sbc hl, bc
 ; Z80-NEXT:    call c, _external
-; Z80-NEXT:    pop ix
 ; Z80-NEXT:    ret
+; Z80-NEXT:    .section .text,"ax",@progbits
+; Z80-NEXT:    .local .Lfunc_end11
+; Z80-NEXT:  .Lfunc_end11:
+; Z80-NEXT:    .size _icmp.ule.i16.64, .Lfunc_end11-_icmp.ule.i16.64
 ;
 ; EZ80-CODE16-LABEL: icmp.ule.i16.64:
 ; EZ80-CODE16:       ; %bb.0:
-; EZ80-CODE16-NEXT:    push ix
-; EZ80-CODE16-NEXT:    ld ix, 0
-; EZ80-CODE16-NEXT:    add ix, sp
-; EZ80-CODE16-NEXT:    ld hl, (ix + 4)
-; EZ80-CODE16-NEXT:    ld de, 65
-; EZ80-CODE16-NEXT:    sbc hl, de
+; EZ80-CODE16-NEXT:    ld bc, 65
+; EZ80-CODE16-NEXT:    ex de, hl
+; EZ80-CODE16-NEXT:    or a
+; EZ80-CODE16-NEXT:    sbc hl, bc
 ; EZ80-CODE16-NEXT:    call c, _external
-; EZ80-CODE16-NEXT:    pop ix
 ; EZ80-CODE16-NEXT:    ret
+; EZ80-CODE16-NEXT:    .section .text,"ax",@progbits
+; EZ80-CODE16-NEXT:    .local .Lfunc_end11
+; EZ80-CODE16-NEXT:  .Lfunc_end11:
+; EZ80-CODE16-NEXT:    .size _icmp.ule.i16.64, .Lfunc_end11-_icmp.ule.i16.64
 ;
 ; EZ80-LABEL: icmp.ule.i16.64:
 ; EZ80:       ; %bb.0:
@@ -543,6 +572,10 @@ define void @icmp.ule.i16.64(i16) {
 ; EZ80-NEXT:    call c, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end11
+; EZ80-NEXT:  .Lfunc_end11:
+; EZ80-NEXT:    .size _icmp.ule.i16.64, .Lfunc_end11-_icmp.ule.i16.64
   icmp ule i16 %0, 64
   br i1 %2, label %3, label %4
   call void @external()
@@ -553,29 +586,29 @@ define void @icmp.ule.i16.64(i16) {
 define void @icmp.ugt.i16(i16, i16) {
 ; Z80-LABEL: icmp.ugt.i16:
 ; Z80:       ; %bb.0:
-; Z80-NEXT:    push ix
-; Z80-NEXT:    ld ix, 0
-; Z80-NEXT:    add ix, sp
-; Z80-NEXT:    ld e, (ix + 4)
-; Z80-NEXT:    ld d, (ix + 5)
-; Z80-NEXT:    ld l, (ix + 6)
-; Z80-NEXT:    ld h, (ix + 7)
+; Z80-NEXT:    ld l, c
+; Z80-NEXT:    ld h, b
+; Z80-NEXT:    or a
 ; Z80-NEXT:    sbc hl, de
 ; Z80-NEXT:    call c, _external
-; Z80-NEXT:    pop ix
 ; Z80-NEXT:    ret
+; Z80-NEXT:    .section .text,"ax",@progbits
+; Z80-NEXT:    .local .Lfunc_end12
+; Z80-NEXT:  .Lfunc_end12:
+; Z80-NEXT:    .size _icmp.ugt.i16, .Lfunc_end12-_icmp.ugt.i16
 ;
 ; EZ80-CODE16-LABEL: icmp.ugt.i16:
 ; EZ80-CODE16:       ; %bb.0:
-; EZ80-CODE16-NEXT:    push ix
-; EZ80-CODE16-NEXT:    ld ix, 0
-; EZ80-CODE16-NEXT:    add ix, sp
-; EZ80-CODE16-NEXT:    ld de, (ix + 4)
-; EZ80-CODE16-NEXT:    ld hl, (ix + 6)
+; EZ80-CODE16-NEXT:    ld l, c
+; EZ80-CODE16-NEXT:    ld h, b
+; EZ80-CODE16-NEXT:    or a
 ; EZ80-CODE16-NEXT:    sbc hl, de
 ; EZ80-CODE16-NEXT:    call c, _external
-; EZ80-CODE16-NEXT:    pop ix
 ; EZ80-CODE16-NEXT:    ret
+; EZ80-CODE16-NEXT:    .section .text,"ax",@progbits
+; EZ80-CODE16-NEXT:    .local .Lfunc_end12
+; EZ80-CODE16-NEXT:  .Lfunc_end12:
+; EZ80-CODE16-NEXT:    .size _icmp.ugt.i16, .Lfunc_end12-_icmp.ugt.i16
 ;
 ; EZ80-LABEL: icmp.ugt.i16:
 ; EZ80:       ; %bb.0:
@@ -589,6 +622,10 @@ define void @icmp.ugt.i16(i16, i16) {
 ; EZ80-NEXT:    call c, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end12
+; EZ80-NEXT:  .Lfunc_end12:
+; EZ80-NEXT:    .size _icmp.ugt.i16, .Lfunc_end12-_icmp.ugt.i16
   icmp ugt i16 %0, %1
   br i1 %3, label %4, label %5
   call void @external()
@@ -599,28 +636,29 @@ define void @icmp.ugt.i16(i16, i16) {
 define void @icmp.ugt.i16.0(i16) {
 ; Z80-LABEL: icmp.ugt.i16.0:
 ; Z80:       ; %bb.0:
-; Z80-NEXT:    push ix
-; Z80-NEXT:    ld ix, 0
-; Z80-NEXT:    add ix, sp
-; Z80-NEXT:    ld l, (ix + 4)
-; Z80-NEXT:    ld h, (ix + 5)
-; Z80-NEXT:    ld de, 1
-; Z80-NEXT:    sbc hl, de
+; Z80-NEXT:    ld bc, 1
+; Z80-NEXT:    ex de, hl
+; Z80-NEXT:    or a
+; Z80-NEXT:    sbc hl, bc
 ; Z80-NEXT:    call nc, _external
-; Z80-NEXT:    pop ix
 ; Z80-NEXT:    ret
+; Z80-NEXT:    .section .text,"ax",@progbits
+; Z80-NEXT:    .local .Lfunc_end13
+; Z80-NEXT:  .Lfunc_end13:
+; Z80-NEXT:    .size _icmp.ugt.i16.0, .Lfunc_end13-_icmp.ugt.i16.0
 ;
 ; EZ80-CODE16-LABEL: icmp.ugt.i16.0:
 ; EZ80-CODE16:       ; %bb.0:
-; EZ80-CODE16-NEXT:    push ix
-; EZ80-CODE16-NEXT:    ld ix, 0
-; EZ80-CODE16-NEXT:    add ix, sp
-; EZ80-CODE16-NEXT:    ld hl, (ix + 4)
-; EZ80-CODE16-NEXT:    ld de, 1
-; EZ80-CODE16-NEXT:    sbc hl, de
+; EZ80-CODE16-NEXT:    ld bc, 1
+; EZ80-CODE16-NEXT:    ex de, hl
+; EZ80-CODE16-NEXT:    or a
+; EZ80-CODE16-NEXT:    sbc hl, bc
 ; EZ80-CODE16-NEXT:    call nc, _external
-; EZ80-CODE16-NEXT:    pop ix
 ; EZ80-CODE16-NEXT:    ret
+; EZ80-CODE16-NEXT:    .section .text,"ax",@progbits
+; EZ80-CODE16-NEXT:    .local .Lfunc_end13
+; EZ80-CODE16-NEXT:  .Lfunc_end13:
+; EZ80-CODE16-NEXT:    .size _icmp.ugt.i16.0, .Lfunc_end13-_icmp.ugt.i16.0
 ;
 ; EZ80-LABEL: icmp.ugt.i16.0:
 ; EZ80:       ; %bb.0:
@@ -634,6 +672,10 @@ define void @icmp.ugt.i16.0(i16) {
 ; EZ80-NEXT:    call nc, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end13
+; EZ80-NEXT:  .Lfunc_end13:
+; EZ80-NEXT:    .size _icmp.ugt.i16.0, .Lfunc_end13-_icmp.ugt.i16.0
   icmp ugt i16 %0, 0
   br i1 %2, label %3, label %4
   call void @external()
@@ -644,28 +686,29 @@ define void @icmp.ugt.i16.0(i16) {
 define void @icmp.ugt.i16.64(i16) {
 ; Z80-LABEL: icmp.ugt.i16.64:
 ; Z80:       ; %bb.0:
-; Z80-NEXT:    push ix
-; Z80-NEXT:    ld ix, 0
-; Z80-NEXT:    add ix, sp
-; Z80-NEXT:    ld l, (ix + 4)
-; Z80-NEXT:    ld h, (ix + 5)
-; Z80-NEXT:    ld de, 65
-; Z80-NEXT:    sbc hl, de
+; Z80-NEXT:    ld bc, 65
+; Z80-NEXT:    ex de, hl
+; Z80-NEXT:    or a
+; Z80-NEXT:    sbc hl, bc
 ; Z80-NEXT:    call nc, _external
-; Z80-NEXT:    pop ix
 ; Z80-NEXT:    ret
+; Z80-NEXT:    .section .text,"ax",@progbits
+; Z80-NEXT:    .local .Lfunc_end14
+; Z80-NEXT:  .Lfunc_end14:
+; Z80-NEXT:    .size _icmp.ugt.i16.64, .Lfunc_end14-_icmp.ugt.i16.64
 ;
 ; EZ80-CODE16-LABEL: icmp.ugt.i16.64:
 ; EZ80-CODE16:       ; %bb.0:
-; EZ80-CODE16-NEXT:    push ix
-; EZ80-CODE16-NEXT:    ld ix, 0
-; EZ80-CODE16-NEXT:    add ix, sp
-; EZ80-CODE16-NEXT:    ld hl, (ix + 4)
-; EZ80-CODE16-NEXT:    ld de, 65
-; EZ80-CODE16-NEXT:    sbc hl, de
+; EZ80-CODE16-NEXT:    ld bc, 65
+; EZ80-CODE16-NEXT:    ex de, hl
+; EZ80-CODE16-NEXT:    or a
+; EZ80-CODE16-NEXT:    sbc hl, bc
 ; EZ80-CODE16-NEXT:    call nc, _external
-; EZ80-CODE16-NEXT:    pop ix
 ; EZ80-CODE16-NEXT:    ret
+; EZ80-CODE16-NEXT:    .section .text,"ax",@progbits
+; EZ80-CODE16-NEXT:    .local .Lfunc_end14
+; EZ80-CODE16-NEXT:  .Lfunc_end14:
+; EZ80-CODE16-NEXT:    .size _icmp.ugt.i16.64, .Lfunc_end14-_icmp.ugt.i16.64
 ;
 ; EZ80-LABEL: icmp.ugt.i16.64:
 ; EZ80:       ; %bb.0:
@@ -679,6 +722,10 @@ define void @icmp.ugt.i16.64(i16) {
 ; EZ80-NEXT:    call nc, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end14
+; EZ80-NEXT:  .Lfunc_end14:
+; EZ80-NEXT:    .size _icmp.ugt.i16.64, .Lfunc_end14-_icmp.ugt.i16.64
   icmp ugt i16 %0, 64
   br i1 %2, label %3, label %4
   call void @external()
@@ -689,29 +736,27 @@ define void @icmp.ugt.i16.64(i16) {
 define void @icmp.uge.i16(i16, i16) {
 ; Z80-LABEL: icmp.uge.i16:
 ; Z80:       ; %bb.0:
-; Z80-NEXT:    push ix
-; Z80-NEXT:    ld ix, 0
-; Z80-NEXT:    add ix, sp
-; Z80-NEXT:    ld l, (ix + 4)
-; Z80-NEXT:    ld h, (ix + 5)
-; Z80-NEXT:    ld e, (ix + 6)
-; Z80-NEXT:    ld d, (ix + 7)
-; Z80-NEXT:    sbc hl, de
+; Z80-NEXT:    ex de, hl
+; Z80-NEXT:    or a
+; Z80-NEXT:    sbc hl, bc
 ; Z80-NEXT:    call nc, _external
-; Z80-NEXT:    pop ix
 ; Z80-NEXT:    ret
+; Z80-NEXT:    .section .text,"ax",@progbits
+; Z80-NEXT:    .local .Lfunc_end15
+; Z80-NEXT:  .Lfunc_end15:
+; Z80-NEXT:    .size _icmp.uge.i16, .Lfunc_end15-_icmp.uge.i16
 ;
 ; EZ80-CODE16-LABEL: icmp.uge.i16:
 ; EZ80-CODE16:       ; %bb.0:
-; EZ80-CODE16-NEXT:    push ix
-; EZ80-CODE16-NEXT:    ld ix, 0
-; EZ80-CODE16-NEXT:    add ix, sp
-; EZ80-CODE16-NEXT:    ld hl, (ix + 4)
-; EZ80-CODE16-NEXT:    ld de, (ix + 6)
-; EZ80-CODE16-NEXT:    sbc hl, de
+; EZ80-CODE16-NEXT:    ex de, hl
+; EZ80-CODE16-NEXT:    or a
+; EZ80-CODE16-NEXT:    sbc hl, bc
 ; EZ80-CODE16-NEXT:    call nc, _external
-; EZ80-CODE16-NEXT:    pop ix
 ; EZ80-CODE16-NEXT:    ret
+; EZ80-CODE16-NEXT:    .section .text,"ax",@progbits
+; EZ80-CODE16-NEXT:    .local .Lfunc_end15
+; EZ80-CODE16-NEXT:  .Lfunc_end15:
+; EZ80-CODE16-NEXT:    .size _icmp.uge.i16, .Lfunc_end15-_icmp.uge.i16
 ;
 ; EZ80-LABEL: icmp.uge.i16:
 ; EZ80:       ; %bb.0:
@@ -725,6 +770,10 @@ define void @icmp.uge.i16(i16, i16) {
 ; EZ80-NEXT:    call nc, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end15
+; EZ80-NEXT:  .Lfunc_end15:
+; EZ80-NEXT:    .size _icmp.uge.i16, .Lfunc_end15-_icmp.uge.i16
   icmp uge i16 %0, %1
   br i1 %3, label %4, label %5
   call void @external()
@@ -735,36 +784,40 @@ define void @icmp.uge.i16(i16, i16) {
 define void @icmp.uge.i16.0(i16) {
 ; Z80-LABEL: icmp.uge.i16.0:
 ; Z80:       ; %bb.0:
-; Z80-NEXT:    push ix
-; Z80-NEXT:    ld ix, 0
-; Z80-NEXT:    add ix, sp
-; Z80-NEXT:    xor a, a
+; Z80-NEXT:    xor a
 ; Z80-NEXT:    bit 0, a
 ; Z80-NEXT:    call z, _external
-; Z80-NEXT:    pop ix
 ; Z80-NEXT:    ret
+; Z80-NEXT:    .section .text,"ax",@progbits
+; Z80-NEXT:    .local .Lfunc_end16
+; Z80-NEXT:  .Lfunc_end16:
+; Z80-NEXT:    .size _icmp.uge.i16.0, .Lfunc_end16-_icmp.uge.i16.0
 ;
 ; EZ80-CODE16-LABEL: icmp.uge.i16.0:
 ; EZ80-CODE16:       ; %bb.0:
-; EZ80-CODE16-NEXT:    push ix
-; EZ80-CODE16-NEXT:    ld ix, 0
-; EZ80-CODE16-NEXT:    add ix, sp
-; EZ80-CODE16-NEXT:    xor a, a
+; EZ80-CODE16-NEXT:    xor a
 ; EZ80-CODE16-NEXT:    bit 0, a
 ; EZ80-CODE16-NEXT:    call z, _external
-; EZ80-CODE16-NEXT:    pop ix
 ; EZ80-CODE16-NEXT:    ret
+; EZ80-CODE16-NEXT:    .section .text,"ax",@progbits
+; EZ80-CODE16-NEXT:    .local .Lfunc_end16
+; EZ80-CODE16-NEXT:  .Lfunc_end16:
+; EZ80-CODE16-NEXT:    .size _icmp.uge.i16.0, .Lfunc_end16-_icmp.uge.i16.0
 ;
 ; EZ80-LABEL: icmp.uge.i16.0:
 ; EZ80:       ; %bb.0:
 ; EZ80-NEXT:    push ix
 ; EZ80-NEXT:    ld ix, 0
 ; EZ80-NEXT:    add ix, sp
-; EZ80-NEXT:    xor a, a
+; EZ80-NEXT:    xor a
 ; EZ80-NEXT:    bit 0, a
 ; EZ80-NEXT:    call z, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end16
+; EZ80-NEXT:  .Lfunc_end16:
+; EZ80-NEXT:    .size _icmp.uge.i16.0, .Lfunc_end16-_icmp.uge.i16.0
   icmp uge i16 %0, 0
   br i1 %2, label %3, label %4
   call void @external()
@@ -775,28 +828,29 @@ define void @icmp.uge.i16.0(i16) {
 define void @icmp.uge.i16.64(i16) {
 ; Z80-LABEL: icmp.uge.i16.64:
 ; Z80:       ; %bb.0:
-; Z80-NEXT:    push ix
-; Z80-NEXT:    ld ix, 0
-; Z80-NEXT:    add ix, sp
-; Z80-NEXT:    ld l, (ix + 4)
-; Z80-NEXT:    ld h, (ix + 5)
-; Z80-NEXT:    ld de, 64
-; Z80-NEXT:    sbc hl, de
+; Z80-NEXT:    ld bc, 64
+; Z80-NEXT:    ex de, hl
+; Z80-NEXT:    or a
+; Z80-NEXT:    sbc hl, bc
 ; Z80-NEXT:    call nc, _external
-; Z80-NEXT:    pop ix
 ; Z80-NEXT:    ret
+; Z80-NEXT:    .section .text,"ax",@progbits
+; Z80-NEXT:    .local .Lfunc_end17
+; Z80-NEXT:  .Lfunc_end17:
+; Z80-NEXT:    .size _icmp.uge.i16.64, .Lfunc_end17-_icmp.uge.i16.64
 ;
 ; EZ80-CODE16-LABEL: icmp.uge.i16.64:
 ; EZ80-CODE16:       ; %bb.0:
-; EZ80-CODE16-NEXT:    push ix
-; EZ80-CODE16-NEXT:    ld ix, 0
-; EZ80-CODE16-NEXT:    add ix, sp
-; EZ80-CODE16-NEXT:    ld hl, (ix + 4)
-; EZ80-CODE16-NEXT:    ld de, 64
-; EZ80-CODE16-NEXT:    sbc hl, de
+; EZ80-CODE16-NEXT:    ld bc, 64
+; EZ80-CODE16-NEXT:    ex de, hl
+; EZ80-CODE16-NEXT:    or a
+; EZ80-CODE16-NEXT:    sbc hl, bc
 ; EZ80-CODE16-NEXT:    call nc, _external
-; EZ80-CODE16-NEXT:    pop ix
 ; EZ80-CODE16-NEXT:    ret
+; EZ80-CODE16-NEXT:    .section .text,"ax",@progbits
+; EZ80-CODE16-NEXT:    .local .Lfunc_end17
+; EZ80-CODE16-NEXT:  .Lfunc_end17:
+; EZ80-CODE16-NEXT:    .size _icmp.uge.i16.64, .Lfunc_end17-_icmp.uge.i16.64
 ;
 ; EZ80-LABEL: icmp.uge.i16.64:
 ; EZ80:       ; %bb.0:
@@ -810,6 +864,10 @@ define void @icmp.uge.i16.64(i16) {
 ; EZ80-NEXT:    call nc, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end17
+; EZ80-NEXT:  .Lfunc_end17:
+; EZ80-NEXT:    .size _icmp.uge.i16.64, .Lfunc_end17-_icmp.uge.i16.64
   icmp uge i16 %0, 64
   br i1 %2, label %3, label %4
   call void @external()
@@ -820,43 +878,42 @@ define void @icmp.uge.i16.64(i16) {
 define void @icmp.slt.i16(i16, i16) {
 ; Z80-LABEL: icmp.slt.i16:
 ; Z80:       ; %bb.0:
-; Z80-NEXT:    push ix
-; Z80-NEXT:    ld ix, 0
-; Z80-NEXT:    add ix, sp
-; Z80-NEXT:    ld l, (ix + 4)
-; Z80-NEXT:    ld h, (ix + 5)
-; Z80-NEXT:    push hl
-; Z80-NEXT:    ld l, (ix + 6)
-; Z80-NEXT:    ld h, (ix + 7)
-; Z80-NEXT:    ex (sp), hl
-; Z80-NEXT:    pop iy
+; Z80-NEXT:    ld l, e
+; Z80-NEXT:    ld h, d
+; Z80-NEXT:    ld iyl, c
+; Z80-NEXT:    ld iyh, b
 ; Z80-NEXT:    ld de, -32768
 ; Z80-NEXT:    add iy, de
 ; Z80-NEXT:    add hl, de
 ; Z80-NEXT:    ld e, iyl
 ; Z80-NEXT:    ld d, iyh
-; Z80-NEXT:    or a, a
+; Z80-NEXT:    or a
 ; Z80-NEXT:    sbc hl, de
 ; Z80-NEXT:    call c, _external
-; Z80-NEXT:    pop ix
 ; Z80-NEXT:    ret
+; Z80-NEXT:    .section .text,"ax",@progbits
+; Z80-NEXT:    .local .Lfunc_end18
+; Z80-NEXT:  .Lfunc_end18:
+; Z80-NEXT:    .size _icmp.slt.i16, .Lfunc_end18-_icmp.slt.i16
 ;
 ; EZ80-CODE16-LABEL: icmp.slt.i16:
 ; EZ80-CODE16:       ; %bb.0:
-; EZ80-CODE16-NEXT:    push ix
-; EZ80-CODE16-NEXT:    ld ix, 0
-; EZ80-CODE16-NEXT:    add ix, sp
-; EZ80-CODE16-NEXT:    ld hl, (ix + 4)
-; EZ80-CODE16-NEXT:    ld iy, (ix + 6)
+; EZ80-CODE16-NEXT:    ld l, e
+; EZ80-CODE16-NEXT:    ld h, d
+; EZ80-CODE16-NEXT:    ld iyl, c
+; EZ80-CODE16-NEXT:    ld iyh, b
 ; EZ80-CODE16-NEXT:    ld de, -32768
 ; EZ80-CODE16-NEXT:    add iy, de
 ; EZ80-CODE16-NEXT:    add hl, de
 ; EZ80-CODE16-NEXT:    lea de, iy
-; EZ80-CODE16-NEXT:    or a, a
+; EZ80-CODE16-NEXT:    or a
 ; EZ80-CODE16-NEXT:    sbc hl, de
 ; EZ80-CODE16-NEXT:    call c, _external
-; EZ80-CODE16-NEXT:    pop ix
 ; EZ80-CODE16-NEXT:    ret
+; EZ80-CODE16-NEXT:    .section .text,"ax",@progbits
+; EZ80-CODE16-NEXT:    .local .Lfunc_end18
+; EZ80-CODE16-NEXT:  .Lfunc_end18:
+; EZ80-CODE16-NEXT:    .size _icmp.slt.i16, .Lfunc_end18-_icmp.slt.i16
 ;
 ; EZ80-LABEL: icmp.slt.i16:
 ; EZ80:       ; %bb.0:
@@ -871,11 +928,15 @@ define void @icmp.slt.i16(i16, i16) {
 ; EZ80-NEXT:    ; kill: def $hl killed $hl killed $uhl
 ; EZ80-NEXT:    ld e, iyl
 ; EZ80-NEXT:    ld d, iyh
-; EZ80-NEXT:    or a, a
+; EZ80-NEXT:    or a
 ; EZ80-NEXT:    sbc.sis hl, de
 ; EZ80-NEXT:    call c, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end18
+; EZ80-NEXT:  .Lfunc_end18:
+; EZ80-NEXT:    .size _icmp.slt.i16, .Lfunc_end18-_icmp.slt.i16
   icmp slt i16 %0, %1
   br i1 %3, label %4, label %5
   call void @external()
@@ -886,32 +947,33 @@ define void @icmp.slt.i16(i16, i16) {
 define void @icmp.slt.i16.0(i16) {
 ; Z80-LABEL: icmp.slt.i16.0:
 ; Z80:       ; %bb.0:
-; Z80-NEXT:    push ix
-; Z80-NEXT:    ld ix, 0
-; Z80-NEXT:    add ix, sp
-; Z80-NEXT:    ld l, (ix + 4)
-; Z80-NEXT:    ld h, (ix + 5)
+; Z80-NEXT:    ld l, e
+; Z80-NEXT:    ld h, d
 ; Z80-NEXT:    ld de, -32768
 ; Z80-NEXT:    add hl, de
-; Z80-NEXT:    or a, a
+; Z80-NEXT:    or a
 ; Z80-NEXT:    sbc hl, de
 ; Z80-NEXT:    call c, _external
-; Z80-NEXT:    pop ix
 ; Z80-NEXT:    ret
+; Z80-NEXT:    .section .text,"ax",@progbits
+; Z80-NEXT:    .local .Lfunc_end19
+; Z80-NEXT:  .Lfunc_end19:
+; Z80-NEXT:    .size _icmp.slt.i16.0, .Lfunc_end19-_icmp.slt.i16.0
 ;
 ; EZ80-CODE16-LABEL: icmp.slt.i16.0:
 ; EZ80-CODE16:       ; %bb.0:
-; EZ80-CODE16-NEXT:    push ix
-; EZ80-CODE16-NEXT:    ld ix, 0
-; EZ80-CODE16-NEXT:    add ix, sp
-; EZ80-CODE16-NEXT:    ld hl, (ix + 4)
+; EZ80-CODE16-NEXT:    ld l, e
+; EZ80-CODE16-NEXT:    ld h, d
 ; EZ80-CODE16-NEXT:    ld de, -32768
 ; EZ80-CODE16-NEXT:    add hl, de
-; EZ80-CODE16-NEXT:    or a, a
+; EZ80-CODE16-NEXT:    or a
 ; EZ80-CODE16-NEXT:    sbc hl, de
 ; EZ80-CODE16-NEXT:    call c, _external
-; EZ80-CODE16-NEXT:    pop ix
 ; EZ80-CODE16-NEXT:    ret
+; EZ80-CODE16-NEXT:    .section .text,"ax",@progbits
+; EZ80-CODE16-NEXT:    .local .Lfunc_end19
+; EZ80-CODE16-NEXT:  .Lfunc_end19:
+; EZ80-CODE16-NEXT:    .size _icmp.slt.i16.0, .Lfunc_end19-_icmp.slt.i16.0
 ;
 ; EZ80-LABEL: icmp.slt.i16.0:
 ; EZ80:       ; %bb.0:
@@ -922,11 +984,15 @@ define void @icmp.slt.i16.0(i16) {
 ; EZ80-NEXT:    ld.sis de, -32768
 ; EZ80-NEXT:    add.sis hl, de
 ; EZ80-NEXT:    ; kill: def $hl killed $hl killed $uhl
-; EZ80-NEXT:    or a, a
+; EZ80-NEXT:    or a
 ; EZ80-NEXT:    sbc.sis hl, de
 ; EZ80-NEXT:    call c, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end19
+; EZ80-NEXT:  .Lfunc_end19:
+; EZ80-NEXT:    .size _icmp.slt.i16.0, .Lfunc_end19-_icmp.slt.i16.0
   icmp slt i16 %0, 0
   br i1 %2, label %3, label %4
   call void @external()
@@ -937,34 +1003,35 @@ define void @icmp.slt.i16.0(i16) {
 define void @icmp.slt.i16.64(i16) {
 ; Z80-LABEL: icmp.slt.i16.64:
 ; Z80:       ; %bb.0:
-; Z80-NEXT:    push ix
-; Z80-NEXT:    ld ix, 0
-; Z80-NEXT:    add ix, sp
-; Z80-NEXT:    ld l, (ix + 4)
-; Z80-NEXT:    ld h, (ix + 5)
+; Z80-NEXT:    ld l, e
+; Z80-NEXT:    ld h, d
 ; Z80-NEXT:    ld de, -32768
 ; Z80-NEXT:    add hl, de
 ; Z80-NEXT:    ld de, -32704
-; Z80-NEXT:    or a, a
+; Z80-NEXT:    or a
 ; Z80-NEXT:    sbc hl, de
 ; Z80-NEXT:    call c, _external
-; Z80-NEXT:    pop ix
 ; Z80-NEXT:    ret
+; Z80-NEXT:    .section .text,"ax",@progbits
+; Z80-NEXT:    .local .Lfunc_end20
+; Z80-NEXT:  .Lfunc_end20:
+; Z80-NEXT:    .size _icmp.slt.i16.64, .Lfunc_end20-_icmp.slt.i16.64
 ;
 ; EZ80-CODE16-LABEL: icmp.slt.i16.64:
 ; EZ80-CODE16:       ; %bb.0:
-; EZ80-CODE16-NEXT:    push ix
-; EZ80-CODE16-NEXT:    ld ix, 0
-; EZ80-CODE16-NEXT:    add ix, sp
-; EZ80-CODE16-NEXT:    ld hl, (ix + 4)
+; EZ80-CODE16-NEXT:    ld l, e
+; EZ80-CODE16-NEXT:    ld h, d
 ; EZ80-CODE16-NEXT:    ld de, -32768
 ; EZ80-CODE16-NEXT:    add hl, de
 ; EZ80-CODE16-NEXT:    ld de, -32704
-; EZ80-CODE16-NEXT:    or a, a
+; EZ80-CODE16-NEXT:    or a
 ; EZ80-CODE16-NEXT:    sbc hl, de
 ; EZ80-CODE16-NEXT:    call c, _external
-; EZ80-CODE16-NEXT:    pop ix
 ; EZ80-CODE16-NEXT:    ret
+; EZ80-CODE16-NEXT:    .section .text,"ax",@progbits
+; EZ80-CODE16-NEXT:    .local .Lfunc_end20
+; EZ80-CODE16-NEXT:  .Lfunc_end20:
+; EZ80-CODE16-NEXT:    .size _icmp.slt.i16.64, .Lfunc_end20-_icmp.slt.i16.64
 ;
 ; EZ80-LABEL: icmp.slt.i16.64:
 ; EZ80:       ; %bb.0:
@@ -976,11 +1043,15 @@ define void @icmp.slt.i16.64(i16) {
 ; EZ80-NEXT:    add.sis hl, de
 ; EZ80-NEXT:    ld.sis de, -32704
 ; EZ80-NEXT:    ; kill: def $hl killed $hl killed $uhl
-; EZ80-NEXT:    or a, a
+; EZ80-NEXT:    or a
 ; EZ80-NEXT:    sbc.sis hl, de
 ; EZ80-NEXT:    call c, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end20
+; EZ80-NEXT:  .Lfunc_end20:
+; EZ80-NEXT:    .size _icmp.slt.i16.64, .Lfunc_end20-_icmp.slt.i16.64
   icmp slt i16 %0, 64
   br i1 %2, label %3, label %4
   call void @external()
@@ -991,43 +1062,42 @@ define void @icmp.slt.i16.64(i16) {
 define void @icmp.sle.i16(i16, i16) {
 ; Z80-LABEL: icmp.sle.i16:
 ; Z80:       ; %bb.0:
-; Z80-NEXT:    push ix
-; Z80-NEXT:    ld ix, 0
-; Z80-NEXT:    add ix, sp
-; Z80-NEXT:    push hl
-; Z80-NEXT:    ld l, (ix + 4)
-; Z80-NEXT:    ld h, (ix + 5)
-; Z80-NEXT:    ex (sp), hl
-; Z80-NEXT:    pop iy
-; Z80-NEXT:    ld l, (ix + 6)
-; Z80-NEXT:    ld h, (ix + 7)
+; Z80-NEXT:    ld iyl, e
+; Z80-NEXT:    ld iyh, d
+; Z80-NEXT:    ld l, c
+; Z80-NEXT:    ld h, b
 ; Z80-NEXT:    ld de, -32768
 ; Z80-NEXT:    add iy, de
 ; Z80-NEXT:    add hl, de
 ; Z80-NEXT:    ld e, iyl
 ; Z80-NEXT:    ld d, iyh
-; Z80-NEXT:    or a, a
+; Z80-NEXT:    or a
 ; Z80-NEXT:    sbc hl, de
 ; Z80-NEXT:    call nc, _external
-; Z80-NEXT:    pop ix
 ; Z80-NEXT:    ret
+; Z80-NEXT:    .section .text,"ax",@progbits
+; Z80-NEXT:    .local .Lfunc_end21
+; Z80-NEXT:  .Lfunc_end21:
+; Z80-NEXT:    .size _icmp.sle.i16, .Lfunc_end21-_icmp.sle.i16
 ;
 ; EZ80-CODE16-LABEL: icmp.sle.i16:
 ; EZ80-CODE16:       ; %bb.0:
-; EZ80-CODE16-NEXT:    push ix
-; EZ80-CODE16-NEXT:    ld ix, 0
-; EZ80-CODE16-NEXT:    add ix, sp
-; EZ80-CODE16-NEXT:    ld iy, (ix + 4)
-; EZ80-CODE16-NEXT:    ld hl, (ix + 6)
+; EZ80-CODE16-NEXT:    ld iyl, e
+; EZ80-CODE16-NEXT:    ld iyh, d
+; EZ80-CODE16-NEXT:    ld l, c
+; EZ80-CODE16-NEXT:    ld h, b
 ; EZ80-CODE16-NEXT:    ld de, -32768
 ; EZ80-CODE16-NEXT:    add iy, de
 ; EZ80-CODE16-NEXT:    add hl, de
 ; EZ80-CODE16-NEXT:    lea de, iy
-; EZ80-CODE16-NEXT:    or a, a
+; EZ80-CODE16-NEXT:    or a
 ; EZ80-CODE16-NEXT:    sbc hl, de
 ; EZ80-CODE16-NEXT:    call nc, _external
-; EZ80-CODE16-NEXT:    pop ix
 ; EZ80-CODE16-NEXT:    ret
+; EZ80-CODE16-NEXT:    .section .text,"ax",@progbits
+; EZ80-CODE16-NEXT:    .local .Lfunc_end21
+; EZ80-CODE16-NEXT:  .Lfunc_end21:
+; EZ80-CODE16-NEXT:    .size _icmp.sle.i16, .Lfunc_end21-_icmp.sle.i16
 ;
 ; EZ80-LABEL: icmp.sle.i16:
 ; EZ80:       ; %bb.0:
@@ -1042,11 +1112,15 @@ define void @icmp.sle.i16(i16, i16) {
 ; EZ80-NEXT:    ; kill: def $hl killed $hl killed $uhl
 ; EZ80-NEXT:    ld e, iyl
 ; EZ80-NEXT:    ld d, iyh
-; EZ80-NEXT:    or a, a
+; EZ80-NEXT:    or a
 ; EZ80-NEXT:    sbc.sis hl, de
 ; EZ80-NEXT:    call nc, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end21
+; EZ80-NEXT:  .Lfunc_end21:
+; EZ80-NEXT:    .size _icmp.sle.i16, .Lfunc_end21-_icmp.sle.i16
   icmp sle i16 %0, %1
   br i1 %3, label %4, label %5
   call void @external()
@@ -1057,34 +1131,35 @@ define void @icmp.sle.i16(i16, i16) {
 define void @icmp.sle.i16.0(i16) {
 ; Z80-LABEL: icmp.sle.i16.0:
 ; Z80:       ; %bb.0:
-; Z80-NEXT:    push ix
-; Z80-NEXT:    ld ix, 0
-; Z80-NEXT:    add ix, sp
-; Z80-NEXT:    ld l, (ix + 4)
-; Z80-NEXT:    ld h, (ix + 5)
+; Z80-NEXT:    ld l, e
+; Z80-NEXT:    ld h, d
 ; Z80-NEXT:    ld de, -32768
 ; Z80-NEXT:    add hl, de
 ; Z80-NEXT:    inc de
-; Z80-NEXT:    or a, a
+; Z80-NEXT:    or a
 ; Z80-NEXT:    sbc hl, de
 ; Z80-NEXT:    call c, _external
-; Z80-NEXT:    pop ix
 ; Z80-NEXT:    ret
+; Z80-NEXT:    .section .text,"ax",@progbits
+; Z80-NEXT:    .local .Lfunc_end22
+; Z80-NEXT:  .Lfunc_end22:
+; Z80-NEXT:    .size _icmp.sle.i16.0, .Lfunc_end22-_icmp.sle.i16.0
 ;
 ; EZ80-CODE16-LABEL: icmp.sle.i16.0:
 ; EZ80-CODE16:       ; %bb.0:
-; EZ80-CODE16-NEXT:    push ix
-; EZ80-CODE16-NEXT:    ld ix, 0
-; EZ80-CODE16-NEXT:    add ix, sp
-; EZ80-CODE16-NEXT:    ld hl, (ix + 4)
+; EZ80-CODE16-NEXT:    ld l, e
+; EZ80-CODE16-NEXT:    ld h, d
 ; EZ80-CODE16-NEXT:    ld de, -32768
 ; EZ80-CODE16-NEXT:    add hl, de
 ; EZ80-CODE16-NEXT:    inc de
-; EZ80-CODE16-NEXT:    or a, a
+; EZ80-CODE16-NEXT:    or a
 ; EZ80-CODE16-NEXT:    sbc hl, de
 ; EZ80-CODE16-NEXT:    call c, _external
-; EZ80-CODE16-NEXT:    pop ix
 ; EZ80-CODE16-NEXT:    ret
+; EZ80-CODE16-NEXT:    .section .text,"ax",@progbits
+; EZ80-CODE16-NEXT:    .local .Lfunc_end22
+; EZ80-CODE16-NEXT:  .Lfunc_end22:
+; EZ80-CODE16-NEXT:    .size _icmp.sle.i16.0, .Lfunc_end22-_icmp.sle.i16.0
 ;
 ; EZ80-LABEL: icmp.sle.i16.0:
 ; EZ80:       ; %bb.0:
@@ -1096,11 +1171,15 @@ define void @icmp.sle.i16.0(i16) {
 ; EZ80-NEXT:    add.sis hl, de
 ; EZ80-NEXT:    inc.sis de
 ; EZ80-NEXT:    ; kill: def $hl killed $hl killed $uhl
-; EZ80-NEXT:    or a, a
+; EZ80-NEXT:    or a
 ; EZ80-NEXT:    sbc.sis hl, de
 ; EZ80-NEXT:    call c, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end22
+; EZ80-NEXT:  .Lfunc_end22:
+; EZ80-NEXT:    .size _icmp.sle.i16.0, .Lfunc_end22-_icmp.sle.i16.0
   icmp sle i16 %0, 0
   br i1 %2, label %3, label %4
   call void @external()
@@ -1111,34 +1190,35 @@ define void @icmp.sle.i16.0(i16) {
 define void @icmp.sle.i16.64(i16) {
 ; Z80-LABEL: icmp.sle.i16.64:
 ; Z80:       ; %bb.0:
-; Z80-NEXT:    push ix
-; Z80-NEXT:    ld ix, 0
-; Z80-NEXT:    add ix, sp
-; Z80-NEXT:    ld l, (ix + 4)
-; Z80-NEXT:    ld h, (ix + 5)
+; Z80-NEXT:    ld l, e
+; Z80-NEXT:    ld h, d
 ; Z80-NEXT:    ld de, -32768
 ; Z80-NEXT:    add hl, de
 ; Z80-NEXT:    ld de, -32703
-; Z80-NEXT:    or a, a
+; Z80-NEXT:    or a
 ; Z80-NEXT:    sbc hl, de
 ; Z80-NEXT:    call c, _external
-; Z80-NEXT:    pop ix
 ; Z80-NEXT:    ret
+; Z80-NEXT:    .section .text,"ax",@progbits
+; Z80-NEXT:    .local .Lfunc_end23
+; Z80-NEXT:  .Lfunc_end23:
+; Z80-NEXT:    .size _icmp.sle.i16.64, .Lfunc_end23-_icmp.sle.i16.64
 ;
 ; EZ80-CODE16-LABEL: icmp.sle.i16.64:
 ; EZ80-CODE16:       ; %bb.0:
-; EZ80-CODE16-NEXT:    push ix
-; EZ80-CODE16-NEXT:    ld ix, 0
-; EZ80-CODE16-NEXT:    add ix, sp
-; EZ80-CODE16-NEXT:    ld hl, (ix + 4)
+; EZ80-CODE16-NEXT:    ld l, e
+; EZ80-CODE16-NEXT:    ld h, d
 ; EZ80-CODE16-NEXT:    ld de, -32768
 ; EZ80-CODE16-NEXT:    add hl, de
 ; EZ80-CODE16-NEXT:    ld de, -32703
-; EZ80-CODE16-NEXT:    or a, a
+; EZ80-CODE16-NEXT:    or a
 ; EZ80-CODE16-NEXT:    sbc hl, de
 ; EZ80-CODE16-NEXT:    call c, _external
-; EZ80-CODE16-NEXT:    pop ix
 ; EZ80-CODE16-NEXT:    ret
+; EZ80-CODE16-NEXT:    .section .text,"ax",@progbits
+; EZ80-CODE16-NEXT:    .local .Lfunc_end23
+; EZ80-CODE16-NEXT:  .Lfunc_end23:
+; EZ80-CODE16-NEXT:    .size _icmp.sle.i16.64, .Lfunc_end23-_icmp.sle.i16.64
 ;
 ; EZ80-LABEL: icmp.sle.i16.64:
 ; EZ80:       ; %bb.0:
@@ -1150,11 +1230,15 @@ define void @icmp.sle.i16.64(i16) {
 ; EZ80-NEXT:    add.sis hl, de
 ; EZ80-NEXT:    ld.sis de, -32703
 ; EZ80-NEXT:    ; kill: def $hl killed $hl killed $uhl
-; EZ80-NEXT:    or a, a
+; EZ80-NEXT:    or a
 ; EZ80-NEXT:    sbc.sis hl, de
 ; EZ80-NEXT:    call c, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end23
+; EZ80-NEXT:  .Lfunc_end23:
+; EZ80-NEXT:    .size _icmp.sle.i16.64, .Lfunc_end23-_icmp.sle.i16.64
   icmp sle i16 %0, 64
   br i1 %2, label %3, label %4
   call void @external()
@@ -1165,43 +1249,42 @@ define void @icmp.sle.i16.64(i16) {
 define void @icmp.sgt.i16(i16, i16) {
 ; Z80-LABEL: icmp.sgt.i16:
 ; Z80:       ; %bb.0:
-; Z80-NEXT:    push ix
-; Z80-NEXT:    ld ix, 0
-; Z80-NEXT:    add ix, sp
-; Z80-NEXT:    push hl
-; Z80-NEXT:    ld l, (ix + 4)
-; Z80-NEXT:    ld h, (ix + 5)
-; Z80-NEXT:    ex (sp), hl
-; Z80-NEXT:    pop iy
-; Z80-NEXT:    ld l, (ix + 6)
-; Z80-NEXT:    ld h, (ix + 7)
+; Z80-NEXT:    ld iyl, e
+; Z80-NEXT:    ld iyh, d
+; Z80-NEXT:    ld l, c
+; Z80-NEXT:    ld h, b
 ; Z80-NEXT:    ld de, -32768
 ; Z80-NEXT:    add iy, de
 ; Z80-NEXT:    add hl, de
 ; Z80-NEXT:    ld e, iyl
 ; Z80-NEXT:    ld d, iyh
-; Z80-NEXT:    or a, a
+; Z80-NEXT:    or a
 ; Z80-NEXT:    sbc hl, de
 ; Z80-NEXT:    call c, _external
-; Z80-NEXT:    pop ix
 ; Z80-NEXT:    ret
+; Z80-NEXT:    .section .text,"ax",@progbits
+; Z80-NEXT:    .local .Lfunc_end24
+; Z80-NEXT:  .Lfunc_end24:
+; Z80-NEXT:    .size _icmp.sgt.i16, .Lfunc_end24-_icmp.sgt.i16
 ;
 ; EZ80-CODE16-LABEL: icmp.sgt.i16:
 ; EZ80-CODE16:       ; %bb.0:
-; EZ80-CODE16-NEXT:    push ix
-; EZ80-CODE16-NEXT:    ld ix, 0
-; EZ80-CODE16-NEXT:    add ix, sp
-; EZ80-CODE16-NEXT:    ld iy, (ix + 4)
-; EZ80-CODE16-NEXT:    ld hl, (ix + 6)
+; EZ80-CODE16-NEXT:    ld iyl, e
+; EZ80-CODE16-NEXT:    ld iyh, d
+; EZ80-CODE16-NEXT:    ld l, c
+; EZ80-CODE16-NEXT:    ld h, b
 ; EZ80-CODE16-NEXT:    ld de, -32768
 ; EZ80-CODE16-NEXT:    add iy, de
 ; EZ80-CODE16-NEXT:    add hl, de
 ; EZ80-CODE16-NEXT:    lea de, iy
-; EZ80-CODE16-NEXT:    or a, a
+; EZ80-CODE16-NEXT:    or a
 ; EZ80-CODE16-NEXT:    sbc hl, de
 ; EZ80-CODE16-NEXT:    call c, _external
-; EZ80-CODE16-NEXT:    pop ix
 ; EZ80-CODE16-NEXT:    ret
+; EZ80-CODE16-NEXT:    .section .text,"ax",@progbits
+; EZ80-CODE16-NEXT:    .local .Lfunc_end24
+; EZ80-CODE16-NEXT:  .Lfunc_end24:
+; EZ80-CODE16-NEXT:    .size _icmp.sgt.i16, .Lfunc_end24-_icmp.sgt.i16
 ;
 ; EZ80-LABEL: icmp.sgt.i16:
 ; EZ80:       ; %bb.0:
@@ -1216,11 +1299,15 @@ define void @icmp.sgt.i16(i16, i16) {
 ; EZ80-NEXT:    ; kill: def $hl killed $hl killed $uhl
 ; EZ80-NEXT:    ld e, iyl
 ; EZ80-NEXT:    ld d, iyh
-; EZ80-NEXT:    or a, a
+; EZ80-NEXT:    or a
 ; EZ80-NEXT:    sbc.sis hl, de
 ; EZ80-NEXT:    call c, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end24
+; EZ80-NEXT:  .Lfunc_end24:
+; EZ80-NEXT:    .size _icmp.sgt.i16, .Lfunc_end24-_icmp.sgt.i16
   icmp sgt i16 %0, %1
   br i1 %3, label %4, label %5
   call void @external()
@@ -1231,34 +1318,35 @@ define void @icmp.sgt.i16(i16, i16) {
 define void @icmp.sgt.i16.0(i16) {
 ; Z80-LABEL: icmp.sgt.i16.0:
 ; Z80:       ; %bb.0:
-; Z80-NEXT:    push ix
-; Z80-NEXT:    ld ix, 0
-; Z80-NEXT:    add ix, sp
-; Z80-NEXT:    ld l, (ix + 4)
-; Z80-NEXT:    ld h, (ix + 5)
+; Z80-NEXT:    ld l, e
+; Z80-NEXT:    ld h, d
 ; Z80-NEXT:    ld de, -32768
 ; Z80-NEXT:    add hl, de
 ; Z80-NEXT:    inc de
-; Z80-NEXT:    or a, a
+; Z80-NEXT:    or a
 ; Z80-NEXT:    sbc hl, de
 ; Z80-NEXT:    call nc, _external
-; Z80-NEXT:    pop ix
 ; Z80-NEXT:    ret
+; Z80-NEXT:    .section .text,"ax",@progbits
+; Z80-NEXT:    .local .Lfunc_end25
+; Z80-NEXT:  .Lfunc_end25:
+; Z80-NEXT:    .size _icmp.sgt.i16.0, .Lfunc_end25-_icmp.sgt.i16.0
 ;
 ; EZ80-CODE16-LABEL: icmp.sgt.i16.0:
 ; EZ80-CODE16:       ; %bb.0:
-; EZ80-CODE16-NEXT:    push ix
-; EZ80-CODE16-NEXT:    ld ix, 0
-; EZ80-CODE16-NEXT:    add ix, sp
-; EZ80-CODE16-NEXT:    ld hl, (ix + 4)
+; EZ80-CODE16-NEXT:    ld l, e
+; EZ80-CODE16-NEXT:    ld h, d
 ; EZ80-CODE16-NEXT:    ld de, -32768
 ; EZ80-CODE16-NEXT:    add hl, de
 ; EZ80-CODE16-NEXT:    inc de
-; EZ80-CODE16-NEXT:    or a, a
+; EZ80-CODE16-NEXT:    or a
 ; EZ80-CODE16-NEXT:    sbc hl, de
 ; EZ80-CODE16-NEXT:    call nc, _external
-; EZ80-CODE16-NEXT:    pop ix
 ; EZ80-CODE16-NEXT:    ret
+; EZ80-CODE16-NEXT:    .section .text,"ax",@progbits
+; EZ80-CODE16-NEXT:    .local .Lfunc_end25
+; EZ80-CODE16-NEXT:  .Lfunc_end25:
+; EZ80-CODE16-NEXT:    .size _icmp.sgt.i16.0, .Lfunc_end25-_icmp.sgt.i16.0
 ;
 ; EZ80-LABEL: icmp.sgt.i16.0:
 ; EZ80:       ; %bb.0:
@@ -1270,11 +1358,15 @@ define void @icmp.sgt.i16.0(i16) {
 ; EZ80-NEXT:    add.sis hl, de
 ; EZ80-NEXT:    inc.sis de
 ; EZ80-NEXT:    ; kill: def $hl killed $hl killed $uhl
-; EZ80-NEXT:    or a, a
+; EZ80-NEXT:    or a
 ; EZ80-NEXT:    sbc.sis hl, de
 ; EZ80-NEXT:    call nc, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end25
+; EZ80-NEXT:  .Lfunc_end25:
+; EZ80-NEXT:    .size _icmp.sgt.i16.0, .Lfunc_end25-_icmp.sgt.i16.0
   icmp sgt i16 %0, 0
   br i1 %2, label %3, label %4
   call void @external()
@@ -1285,34 +1377,35 @@ define void @icmp.sgt.i16.0(i16) {
 define void @icmp.sgt.i16.64(i16) {
 ; Z80-LABEL: icmp.sgt.i16.64:
 ; Z80:       ; %bb.0:
-; Z80-NEXT:    push ix
-; Z80-NEXT:    ld ix, 0
-; Z80-NEXT:    add ix, sp
-; Z80-NEXT:    ld l, (ix + 4)
-; Z80-NEXT:    ld h, (ix + 5)
+; Z80-NEXT:    ld l, e
+; Z80-NEXT:    ld h, d
 ; Z80-NEXT:    ld de, -32768
 ; Z80-NEXT:    add hl, de
 ; Z80-NEXT:    ld de, -32703
-; Z80-NEXT:    or a, a
+; Z80-NEXT:    or a
 ; Z80-NEXT:    sbc hl, de
 ; Z80-NEXT:    call nc, _external
-; Z80-NEXT:    pop ix
 ; Z80-NEXT:    ret
+; Z80-NEXT:    .section .text,"ax",@progbits
+; Z80-NEXT:    .local .Lfunc_end26
+; Z80-NEXT:  .Lfunc_end26:
+; Z80-NEXT:    .size _icmp.sgt.i16.64, .Lfunc_end26-_icmp.sgt.i16.64
 ;
 ; EZ80-CODE16-LABEL: icmp.sgt.i16.64:
 ; EZ80-CODE16:       ; %bb.0:
-; EZ80-CODE16-NEXT:    push ix
-; EZ80-CODE16-NEXT:    ld ix, 0
-; EZ80-CODE16-NEXT:    add ix, sp
-; EZ80-CODE16-NEXT:    ld hl, (ix + 4)
+; EZ80-CODE16-NEXT:    ld l, e
+; EZ80-CODE16-NEXT:    ld h, d
 ; EZ80-CODE16-NEXT:    ld de, -32768
 ; EZ80-CODE16-NEXT:    add hl, de
 ; EZ80-CODE16-NEXT:    ld de, -32703
-; EZ80-CODE16-NEXT:    or a, a
+; EZ80-CODE16-NEXT:    or a
 ; EZ80-CODE16-NEXT:    sbc hl, de
 ; EZ80-CODE16-NEXT:    call nc, _external
-; EZ80-CODE16-NEXT:    pop ix
 ; EZ80-CODE16-NEXT:    ret
+; EZ80-CODE16-NEXT:    .section .text,"ax",@progbits
+; EZ80-CODE16-NEXT:    .local .Lfunc_end26
+; EZ80-CODE16-NEXT:  .Lfunc_end26:
+; EZ80-CODE16-NEXT:    .size _icmp.sgt.i16.64, .Lfunc_end26-_icmp.sgt.i16.64
 ;
 ; EZ80-LABEL: icmp.sgt.i16.64:
 ; EZ80:       ; %bb.0:
@@ -1324,11 +1417,15 @@ define void @icmp.sgt.i16.64(i16) {
 ; EZ80-NEXT:    add.sis hl, de
 ; EZ80-NEXT:    ld.sis de, -32703
 ; EZ80-NEXT:    ; kill: def $hl killed $hl killed $uhl
-; EZ80-NEXT:    or a, a
+; EZ80-NEXT:    or a
 ; EZ80-NEXT:    sbc.sis hl, de
 ; EZ80-NEXT:    call nc, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end26
+; EZ80-NEXT:  .Lfunc_end26:
+; EZ80-NEXT:    .size _icmp.sgt.i16.64, .Lfunc_end26-_icmp.sgt.i16.64
   icmp sgt i16 %0, 64
   br i1 %2, label %3, label %4
   call void @external()
@@ -1339,43 +1436,42 @@ define void @icmp.sgt.i16.64(i16) {
 define void @icmp.sge.i16(i16, i16) {
 ; Z80-LABEL: icmp.sge.i16:
 ; Z80:       ; %bb.0:
-; Z80-NEXT:    push ix
-; Z80-NEXT:    ld ix, 0
-; Z80-NEXT:    add ix, sp
-; Z80-NEXT:    ld l, (ix + 4)
-; Z80-NEXT:    ld h, (ix + 5)
-; Z80-NEXT:    push hl
-; Z80-NEXT:    ld l, (ix + 6)
-; Z80-NEXT:    ld h, (ix + 7)
-; Z80-NEXT:    ex (sp), hl
-; Z80-NEXT:    pop iy
+; Z80-NEXT:    ld l, e
+; Z80-NEXT:    ld h, d
+; Z80-NEXT:    ld iyl, c
+; Z80-NEXT:    ld iyh, b
 ; Z80-NEXT:    ld de, -32768
 ; Z80-NEXT:    add iy, de
 ; Z80-NEXT:    add hl, de
 ; Z80-NEXT:    ld e, iyl
 ; Z80-NEXT:    ld d, iyh
-; Z80-NEXT:    or a, a
+; Z80-NEXT:    or a
 ; Z80-NEXT:    sbc hl, de
 ; Z80-NEXT:    call nc, _external
-; Z80-NEXT:    pop ix
 ; Z80-NEXT:    ret
+; Z80-NEXT:    .section .text,"ax",@progbits
+; Z80-NEXT:    .local .Lfunc_end27
+; Z80-NEXT:  .Lfunc_end27:
+; Z80-NEXT:    .size _icmp.sge.i16, .Lfunc_end27-_icmp.sge.i16
 ;
 ; EZ80-CODE16-LABEL: icmp.sge.i16:
 ; EZ80-CODE16:       ; %bb.0:
-; EZ80-CODE16-NEXT:    push ix
-; EZ80-CODE16-NEXT:    ld ix, 0
-; EZ80-CODE16-NEXT:    add ix, sp
-; EZ80-CODE16-NEXT:    ld hl, (ix + 4)
-; EZ80-CODE16-NEXT:    ld iy, (ix + 6)
+; EZ80-CODE16-NEXT:    ld l, e
+; EZ80-CODE16-NEXT:    ld h, d
+; EZ80-CODE16-NEXT:    ld iyl, c
+; EZ80-CODE16-NEXT:    ld iyh, b
 ; EZ80-CODE16-NEXT:    ld de, -32768
 ; EZ80-CODE16-NEXT:    add iy, de
 ; EZ80-CODE16-NEXT:    add hl, de
 ; EZ80-CODE16-NEXT:    lea de, iy
-; EZ80-CODE16-NEXT:    or a, a
+; EZ80-CODE16-NEXT:    or a
 ; EZ80-CODE16-NEXT:    sbc hl, de
 ; EZ80-CODE16-NEXT:    call nc, _external
-; EZ80-CODE16-NEXT:    pop ix
 ; EZ80-CODE16-NEXT:    ret
+; EZ80-CODE16-NEXT:    .section .text,"ax",@progbits
+; EZ80-CODE16-NEXT:    .local .Lfunc_end27
+; EZ80-CODE16-NEXT:  .Lfunc_end27:
+; EZ80-CODE16-NEXT:    .size _icmp.sge.i16, .Lfunc_end27-_icmp.sge.i16
 ;
 ; EZ80-LABEL: icmp.sge.i16:
 ; EZ80:       ; %bb.0:
@@ -1390,11 +1486,15 @@ define void @icmp.sge.i16(i16, i16) {
 ; EZ80-NEXT:    ; kill: def $hl killed $hl killed $uhl
 ; EZ80-NEXT:    ld e, iyl
 ; EZ80-NEXT:    ld d, iyh
-; EZ80-NEXT:    or a, a
+; EZ80-NEXT:    or a
 ; EZ80-NEXT:    sbc.sis hl, de
 ; EZ80-NEXT:    call nc, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end27
+; EZ80-NEXT:  .Lfunc_end27:
+; EZ80-NEXT:    .size _icmp.sge.i16, .Lfunc_end27-_icmp.sge.i16
   icmp sge i16 %0, %1
   br i1 %3, label %4, label %5
   call void @external()
@@ -1405,32 +1505,33 @@ define void @icmp.sge.i16(i16, i16) {
 define void @icmp.sge.i16.0(i16) {
 ; Z80-LABEL: icmp.sge.i16.0:
 ; Z80:       ; %bb.0:
-; Z80-NEXT:    push ix
-; Z80-NEXT:    ld ix, 0
-; Z80-NEXT:    add ix, sp
-; Z80-NEXT:    ld l, (ix + 4)
-; Z80-NEXT:    ld h, (ix + 5)
+; Z80-NEXT:    ld l, e
+; Z80-NEXT:    ld h, d
 ; Z80-NEXT:    ld de, -32768
 ; Z80-NEXT:    add hl, de
-; Z80-NEXT:    or a, a
+; Z80-NEXT:    or a
 ; Z80-NEXT:    sbc hl, de
 ; Z80-NEXT:    call nc, _external
-; Z80-NEXT:    pop ix
 ; Z80-NEXT:    ret
+; Z80-NEXT:    .section .text,"ax",@progbits
+; Z80-NEXT:    .local .Lfunc_end28
+; Z80-NEXT:  .Lfunc_end28:
+; Z80-NEXT:    .size _icmp.sge.i16.0, .Lfunc_end28-_icmp.sge.i16.0
 ;
 ; EZ80-CODE16-LABEL: icmp.sge.i16.0:
 ; EZ80-CODE16:       ; %bb.0:
-; EZ80-CODE16-NEXT:    push ix
-; EZ80-CODE16-NEXT:    ld ix, 0
-; EZ80-CODE16-NEXT:    add ix, sp
-; EZ80-CODE16-NEXT:    ld hl, (ix + 4)
+; EZ80-CODE16-NEXT:    ld l, e
+; EZ80-CODE16-NEXT:    ld h, d
 ; EZ80-CODE16-NEXT:    ld de, -32768
 ; EZ80-CODE16-NEXT:    add hl, de
-; EZ80-CODE16-NEXT:    or a, a
+; EZ80-CODE16-NEXT:    or a
 ; EZ80-CODE16-NEXT:    sbc hl, de
 ; EZ80-CODE16-NEXT:    call nc, _external
-; EZ80-CODE16-NEXT:    pop ix
 ; EZ80-CODE16-NEXT:    ret
+; EZ80-CODE16-NEXT:    .section .text,"ax",@progbits
+; EZ80-CODE16-NEXT:    .local .Lfunc_end28
+; EZ80-CODE16-NEXT:  .Lfunc_end28:
+; EZ80-CODE16-NEXT:    .size _icmp.sge.i16.0, .Lfunc_end28-_icmp.sge.i16.0
 ;
 ; EZ80-LABEL: icmp.sge.i16.0:
 ; EZ80:       ; %bb.0:
@@ -1441,11 +1542,15 @@ define void @icmp.sge.i16.0(i16) {
 ; EZ80-NEXT:    ld.sis de, -32768
 ; EZ80-NEXT:    add.sis hl, de
 ; EZ80-NEXT:    ; kill: def $hl killed $hl killed $uhl
-; EZ80-NEXT:    or a, a
+; EZ80-NEXT:    or a
 ; EZ80-NEXT:    sbc.sis hl, de
 ; EZ80-NEXT:    call nc, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end28
+; EZ80-NEXT:  .Lfunc_end28:
+; EZ80-NEXT:    .size _icmp.sge.i16.0, .Lfunc_end28-_icmp.sge.i16.0
   icmp sge i16 %0, 0
   br i1 %2, label %3, label %4
   call void @external()
@@ -1456,34 +1561,35 @@ define void @icmp.sge.i16.0(i16) {
 define void @icmp.sge.i16.64(i16) {
 ; Z80-LABEL: icmp.sge.i16.64:
 ; Z80:       ; %bb.0:
-; Z80-NEXT:    push ix
-; Z80-NEXT:    ld ix, 0
-; Z80-NEXT:    add ix, sp
-; Z80-NEXT:    ld l, (ix + 4)
-; Z80-NEXT:    ld h, (ix + 5)
+; Z80-NEXT:    ld l, e
+; Z80-NEXT:    ld h, d
 ; Z80-NEXT:    ld de, -32768
 ; Z80-NEXT:    add hl, de
 ; Z80-NEXT:    ld de, -32704
-; Z80-NEXT:    or a, a
+; Z80-NEXT:    or a
 ; Z80-NEXT:    sbc hl, de
 ; Z80-NEXT:    call nc, _external
-; Z80-NEXT:    pop ix
 ; Z80-NEXT:    ret
+; Z80-NEXT:    .section .text,"ax",@progbits
+; Z80-NEXT:    .local .Lfunc_end29
+; Z80-NEXT:  .Lfunc_end29:
+; Z80-NEXT:    .size _icmp.sge.i16.64, .Lfunc_end29-_icmp.sge.i16.64
 ;
 ; EZ80-CODE16-LABEL: icmp.sge.i16.64:
 ; EZ80-CODE16:       ; %bb.0:
-; EZ80-CODE16-NEXT:    push ix
-; EZ80-CODE16-NEXT:    ld ix, 0
-; EZ80-CODE16-NEXT:    add ix, sp
-; EZ80-CODE16-NEXT:    ld hl, (ix + 4)
+; EZ80-CODE16-NEXT:    ld l, e
+; EZ80-CODE16-NEXT:    ld h, d
 ; EZ80-CODE16-NEXT:    ld de, -32768
 ; EZ80-CODE16-NEXT:    add hl, de
 ; EZ80-CODE16-NEXT:    ld de, -32704
-; EZ80-CODE16-NEXT:    or a, a
+; EZ80-CODE16-NEXT:    or a
 ; EZ80-CODE16-NEXT:    sbc hl, de
 ; EZ80-CODE16-NEXT:    call nc, _external
-; EZ80-CODE16-NEXT:    pop ix
 ; EZ80-CODE16-NEXT:    ret
+; EZ80-CODE16-NEXT:    .section .text,"ax",@progbits
+; EZ80-CODE16-NEXT:    .local .Lfunc_end29
+; EZ80-CODE16-NEXT:  .Lfunc_end29:
+; EZ80-CODE16-NEXT:    .size _icmp.sge.i16.64, .Lfunc_end29-_icmp.sge.i16.64
 ;
 ; EZ80-LABEL: icmp.sge.i16.64:
 ; EZ80:       ; %bb.0:
@@ -1495,11 +1601,15 @@ define void @icmp.sge.i16.64(i16) {
 ; EZ80-NEXT:    add.sis hl, de
 ; EZ80-NEXT:    ld.sis de, -32704
 ; EZ80-NEXT:    ; kill: def $hl killed $hl killed $uhl
-; EZ80-NEXT:    or a, a
+; EZ80-NEXT:    or a
 ; EZ80-NEXT:    sbc.sis hl, de
 ; EZ80-NEXT:    call nc, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end29
+; EZ80-NEXT:  .Lfunc_end29:
+; EZ80-NEXT:    .size _icmp.sge.i16.64, .Lfunc_end29-_icmp.sge.i16.64
   icmp sge i16 %0, 64
   br i1 %2, label %3, label %4
   call void @external()

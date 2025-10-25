@@ -11,6 +11,10 @@ define i24 @shl.i24(i24, i24) {
 ; EZ80-NEXT:    ; kill: def $c killed $c killed $ubc
 ; EZ80-NEXT:    call __ishl
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end0
+; EZ80-NEXT:  .Lfunc_end0:
+; EZ80-NEXT:    .size _shl.i24, .Lfunc_end0-_shl.i24
   shl i24 %0, %1
   ret i24 %3
 }
@@ -24,6 +28,10 @@ define i24 @lshr.i24(i24, i24) {
 ; EZ80-NEXT:    ; kill: def $c killed $c killed $ubc
 ; EZ80-NEXT:    call __ishru
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end1
+; EZ80-NEXT:  .Lfunc_end1:
+; EZ80-NEXT:    .size _lshr.i24, .Lfunc_end1-_lshr.i24
   lshr i24 %0, %1
   ret i24 %3
 }
@@ -37,6 +45,10 @@ define i24 @ashr.i24(i24, i24) {
 ; EZ80-NEXT:    ; kill: def $c killed $c killed $ubc
 ; EZ80-NEXT:    call __ishrs
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end2
+; EZ80-NEXT:  .Lfunc_end2:
+; EZ80-NEXT:    .size _ashr.i24, .Lfunc_end2-_ashr.i24
   ashr i24 %0, %1
   ret i24 %3
 }
@@ -49,6 +61,10 @@ define i24 @and.i24(i24, i24) {
 ; EZ80-NEXT:    ld bc, (iy + 6)
 ; EZ80-NEXT:    call __iand
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end3
+; EZ80-NEXT:  .Lfunc_end3:
+; EZ80-NEXT:    .size _and.i24, .Lfunc_end3-_and.i24
   and i24 %0, %1
   ret i24 %3
 }
@@ -61,6 +77,10 @@ define i24 @or.i24(i24, i24) {
 ; EZ80-NEXT:    ld bc, (iy + 6)
 ; EZ80-NEXT:    call __ior
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end4
+; EZ80-NEXT:  .Lfunc_end4:
+; EZ80-NEXT:    .size _or.i24, .Lfunc_end4-_or.i24
   or i24 %0, %1
   ret i24 %3
 }
@@ -73,6 +93,10 @@ define i24 @xor.i24(i24, i24) {
 ; EZ80-NEXT:    ld bc, (iy + 6)
 ; EZ80-NEXT:    call __ixor
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end5
+; EZ80-NEXT:  .Lfunc_end5:
+; EZ80-NEXT:    .size _xor.i24, .Lfunc_end5-_xor.i24
   xor i24 %0, %1
   ret i24 %3
 }
@@ -85,6 +109,10 @@ define i24 @add.i24(i24, i24) {
 ; EZ80-NEXT:    ld de, (iy + 6)
 ; EZ80-NEXT:    add hl, de
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end6
+; EZ80-NEXT:  .Lfunc_end6:
+; EZ80-NEXT:    .size _add.i24, .Lfunc_end6-_add.i24
   add i24 %0, %1
   ret i24 %3
 }
@@ -97,6 +125,10 @@ define i24 @sub.i24(i24, i24) {
 ; EZ80-NEXT:    ld de, (iy + 6)
 ; EZ80-NEXT:    sbc hl, de
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end7
+; EZ80-NEXT:  .Lfunc_end7:
+; EZ80-NEXT:    .size _sub.i24, .Lfunc_end7-_sub.i24
   sub i24 %0, %1
   ret i24 %3
 }
@@ -109,6 +141,10 @@ define i24 @mul.i24(i24, i24) {
 ; EZ80-NEXT:    ld bc, (iy + 6)
 ; EZ80-NEXT:    call __imulu
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end8
+; EZ80-NEXT:  .Lfunc_end8:
+; EZ80-NEXT:    .size _mul.i24, .Lfunc_end8-_mul.i24
   mul i24 %0, %1
   ret i24 %3
 }
@@ -121,6 +157,10 @@ define i24 @udiv.i24(i24, i24) {
 ; EZ80-NEXT:    ld bc, (iy + 6)
 ; EZ80-NEXT:    call __idivu
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end9
+; EZ80-NEXT:  .Lfunc_end9:
+; EZ80-NEXT:    .size _udiv.i24, .Lfunc_end9-_udiv.i24
   udiv i24 %0, %1
   ret i24 %3
 }
@@ -133,6 +173,10 @@ define i24 @sdiv.i24(i24, i24) {
 ; EZ80-NEXT:    ld bc, (iy + 6)
 ; EZ80-NEXT:    call __idivs
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end10
+; EZ80-NEXT:  .Lfunc_end10:
+; EZ80-NEXT:    .size _sdiv.i24, .Lfunc_end10-_sdiv.i24
   sdiv i24 %0, %1
   ret i24 %3
 }
@@ -145,6 +189,10 @@ define i24 @urem.i24(i24, i24) {
 ; EZ80-NEXT:    ld bc, (iy + 6)
 ; EZ80-NEXT:    call __iremu
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end11
+; EZ80-NEXT:  .Lfunc_end11:
+; EZ80-NEXT:    .size _urem.i24, .Lfunc_end11-_urem.i24
   urem i24 %0, %1
   ret i24 %3
 }
@@ -157,6 +205,10 @@ define i24 @srem.i24(i24, i24) {
 ; EZ80-NEXT:    ld bc, (iy + 6)
 ; EZ80-NEXT:    call __irems
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end12
+; EZ80-NEXT:  .Lfunc_end12:
+; EZ80-NEXT:    .size _srem.i24, .Lfunc_end12-_srem.i24
   srem i24 %0, %1
   ret i24 %3
 }

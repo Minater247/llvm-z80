@@ -15,6 +15,10 @@ define void @icmp.eq.i24(i24, i24) {
 ; EZ80-NEXT:    call z, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end0
+; EZ80-NEXT:  .Lfunc_end0:
+; EZ80-NEXT:    .size _icmp.eq.i24, .Lfunc_end0-_icmp.eq.i24
   icmp eq i24 %0, %1
   br i1 %3, label %4, label %5
   call void @external()
@@ -30,11 +34,15 @@ define void @icmp.eq.i24.0(i24) {
 ; EZ80-NEXT:    add ix, sp
 ; EZ80-NEXT:    ld hl, (ix + 6)
 ; EZ80-NEXT:    add hl, bc
-; EZ80-NEXT:    or a, a
+; EZ80-NEXT:    or a
 ; EZ80-NEXT:    sbc hl, bc
 ; EZ80-NEXT:    call z, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end1
+; EZ80-NEXT:  .Lfunc_end1:
+; EZ80-NEXT:    .size _icmp.eq.i24.0, .Lfunc_end1-_icmp.eq.i24.0
   icmp eq i24 %0, 0
   br i1 %2, label %3, label %4
   call void @external()
@@ -54,6 +62,10 @@ define void @icmp.eq.i24.64(i24) {
 ; EZ80-NEXT:    call z, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end2
+; EZ80-NEXT:  .Lfunc_end2:
+; EZ80-NEXT:    .size _icmp.eq.i24.64, .Lfunc_end2-_icmp.eq.i24.64
   icmp eq i24 %0, 64
   br i1 %2, label %3, label %4
   call void @external()
@@ -73,6 +85,10 @@ define void @icmp.ne.i24(i24, i24) {
 ; EZ80-NEXT:    call nz, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end3
+; EZ80-NEXT:  .Lfunc_end3:
+; EZ80-NEXT:    .size _icmp.ne.i24, .Lfunc_end3-_icmp.ne.i24
   icmp ne i24 %0, %1
   br i1 %3, label %4, label %5
   call void @external()
@@ -88,11 +104,15 @@ define void @icmp.ne.i24.0(i24) {
 ; EZ80-NEXT:    add ix, sp
 ; EZ80-NEXT:    ld hl, (ix + 6)
 ; EZ80-NEXT:    add hl, bc
-; EZ80-NEXT:    or a, a
+; EZ80-NEXT:    or a
 ; EZ80-NEXT:    sbc hl, bc
 ; EZ80-NEXT:    call nz, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end4
+; EZ80-NEXT:  .Lfunc_end4:
+; EZ80-NEXT:    .size _icmp.ne.i24.0, .Lfunc_end4-_icmp.ne.i24.0
   icmp ne i24 %0, 0
   br i1 %2, label %3, label %4
   call void @external()
@@ -112,6 +132,10 @@ define void @icmp.ne.i24.64(i24) {
 ; EZ80-NEXT:    call nz, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end5
+; EZ80-NEXT:  .Lfunc_end5:
+; EZ80-NEXT:    .size _icmp.ne.i24.64, .Lfunc_end5-_icmp.ne.i24.64
   icmp ne i24 %0, 64
   br i1 %2, label %3, label %4
   call void @external()
@@ -131,6 +155,10 @@ define void @icmp.ult.i24(i24, i24) {
 ; EZ80-NEXT:    call c, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end6
+; EZ80-NEXT:  .Lfunc_end6:
+; EZ80-NEXT:    .size _icmp.ult.i24, .Lfunc_end6-_icmp.ult.i24
   icmp ult i24 %0, %1
   br i1 %3, label %4, label %5
   call void @external()
@@ -149,6 +177,10 @@ define void @icmp.ult.i24.0(i24) {
 ; EZ80-NEXT:    call z, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end7
+; EZ80-NEXT:  .Lfunc_end7:
+; EZ80-NEXT:    .size _icmp.ult.i24.0, .Lfunc_end7-_icmp.ult.i24.0
   icmp ult i24 %0, 0
   br i1 %2, label %3, label %4
   call void @external()
@@ -168,6 +200,10 @@ define void @icmp.ult.i24.64(i24) {
 ; EZ80-NEXT:    call c, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end8
+; EZ80-NEXT:  .Lfunc_end8:
+; EZ80-NEXT:    .size _icmp.ult.i24.64, .Lfunc_end8-_icmp.ult.i24.64
   icmp ult i24 %0, 64
   br i1 %2, label %3, label %4
   call void @external()
@@ -187,6 +223,10 @@ define void @icmp.ule.i24(i24, i24) {
 ; EZ80-NEXT:    call nc, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end9
+; EZ80-NEXT:  .Lfunc_end9:
+; EZ80-NEXT:    .size _icmp.ule.i24, .Lfunc_end9-_icmp.ule.i24
   icmp ule i24 %0, %1
   br i1 %3, label %4, label %5
   call void @external()
@@ -206,6 +246,10 @@ define void @icmp.ule.i24.0(i24) {
 ; EZ80-NEXT:    call c, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end10
+; EZ80-NEXT:  .Lfunc_end10:
+; EZ80-NEXT:    .size _icmp.ule.i24.0, .Lfunc_end10-_icmp.ule.i24.0
   icmp ule i24 %0, 0
   br i1 %2, label %3, label %4
   call void @external()
@@ -225,6 +269,10 @@ define void @icmp.ule.i24.64(i24) {
 ; EZ80-NEXT:    call c, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end11
+; EZ80-NEXT:  .Lfunc_end11:
+; EZ80-NEXT:    .size _icmp.ule.i24.64, .Lfunc_end11-_icmp.ule.i24.64
   icmp ule i24 %0, 64
   br i1 %2, label %3, label %4
   call void @external()
@@ -244,6 +292,10 @@ define void @icmp.ugt.i24(i24, i24) {
 ; EZ80-NEXT:    call c, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end12
+; EZ80-NEXT:  .Lfunc_end12:
+; EZ80-NEXT:    .size _icmp.ugt.i24, .Lfunc_end12-_icmp.ugt.i24
   icmp ugt i24 %0, %1
   br i1 %3, label %4, label %5
   call void @external()
@@ -263,6 +315,10 @@ define void @icmp.ugt.i24.0(i24) {
 ; EZ80-NEXT:    call nc, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end13
+; EZ80-NEXT:  .Lfunc_end13:
+; EZ80-NEXT:    .size _icmp.ugt.i24.0, .Lfunc_end13-_icmp.ugt.i24.0
   icmp ugt i24 %0, 0
   br i1 %2, label %3, label %4
   call void @external()
@@ -282,6 +338,10 @@ define void @icmp.ugt.i24.64(i24) {
 ; EZ80-NEXT:    call nc, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end14
+; EZ80-NEXT:  .Lfunc_end14:
+; EZ80-NEXT:    .size _icmp.ugt.i24.64, .Lfunc_end14-_icmp.ugt.i24.64
   icmp ugt i24 %0, 64
   br i1 %2, label %3, label %4
   call void @external()
@@ -301,6 +361,10 @@ define void @icmp.uge.i24(i24, i24) {
 ; EZ80-NEXT:    call nc, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end15
+; EZ80-NEXT:  .Lfunc_end15:
+; EZ80-NEXT:    .size _icmp.uge.i24, .Lfunc_end15-_icmp.uge.i24
   icmp uge i24 %0, %1
   br i1 %3, label %4, label %5
   call void @external()
@@ -314,11 +378,15 @@ define void @icmp.uge.i24.0(i24) {
 ; EZ80-NEXT:    push ix
 ; EZ80-NEXT:    ld ix, 0
 ; EZ80-NEXT:    add ix, sp
-; EZ80-NEXT:    xor a, a
+; EZ80-NEXT:    xor a
 ; EZ80-NEXT:    bit 0, a
 ; EZ80-NEXT:    call z, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end16
+; EZ80-NEXT:  .Lfunc_end16:
+; EZ80-NEXT:    .size _icmp.uge.i24.0, .Lfunc_end16-_icmp.uge.i24.0
   icmp uge i24 %0, 0
   br i1 %2, label %3, label %4
   call void @external()
@@ -338,6 +406,10 @@ define void @icmp.uge.i24.64(i24) {
 ; EZ80-NEXT:    call nc, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end17
+; EZ80-NEXT:  .Lfunc_end17:
+; EZ80-NEXT:    .size _icmp.uge.i24.64, .Lfunc_end17-_icmp.uge.i24.64
   icmp uge i24 %0, 64
   br i1 %2, label %3, label %4
   call void @external()
@@ -357,11 +429,15 @@ define void @icmp.slt.i24(i24, i24) {
 ; EZ80-NEXT:    add iy, de
 ; EZ80-NEXT:    add hl, de
 ; EZ80-NEXT:    lea de, iy
-; EZ80-NEXT:    or a, a
+; EZ80-NEXT:    or a
 ; EZ80-NEXT:    sbc hl, de
 ; EZ80-NEXT:    call c, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end18
+; EZ80-NEXT:  .Lfunc_end18:
+; EZ80-NEXT:    .size _icmp.slt.i24, .Lfunc_end18-_icmp.slt.i24
   icmp slt i24 %0, %1
   br i1 %3, label %4, label %5
   call void @external()
@@ -378,11 +454,15 @@ define void @icmp.slt.i24.0(i24) {
 ; EZ80-NEXT:    ld hl, (ix + 6)
 ; EZ80-NEXT:    ld de, -8388608
 ; EZ80-NEXT:    add hl, de
-; EZ80-NEXT:    or a, a
+; EZ80-NEXT:    or a
 ; EZ80-NEXT:    sbc hl, de
 ; EZ80-NEXT:    call c, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end19
+; EZ80-NEXT:  .Lfunc_end19:
+; EZ80-NEXT:    .size _icmp.slt.i24.0, .Lfunc_end19-_icmp.slt.i24.0
   icmp slt i24 %0, 0
   br i1 %2, label %3, label %4
   call void @external()
@@ -400,11 +480,15 @@ define void @icmp.slt.i24.64(i24) {
 ; EZ80-NEXT:    ld de, -8388608
 ; EZ80-NEXT:    add hl, de
 ; EZ80-NEXT:    ld de, -8388544
-; EZ80-NEXT:    or a, a
+; EZ80-NEXT:    or a
 ; EZ80-NEXT:    sbc hl, de
 ; EZ80-NEXT:    call c, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end20
+; EZ80-NEXT:  .Lfunc_end20:
+; EZ80-NEXT:    .size _icmp.slt.i24.64, .Lfunc_end20-_icmp.slt.i24.64
   icmp slt i24 %0, 64
   br i1 %2, label %3, label %4
   call void @external()
@@ -424,11 +508,15 @@ define void @icmp.sle.i24(i24, i24) {
 ; EZ80-NEXT:    add iy, de
 ; EZ80-NEXT:    add hl, de
 ; EZ80-NEXT:    lea de, iy
-; EZ80-NEXT:    or a, a
+; EZ80-NEXT:    or a
 ; EZ80-NEXT:    sbc hl, de
 ; EZ80-NEXT:    call nc, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end21
+; EZ80-NEXT:  .Lfunc_end21:
+; EZ80-NEXT:    .size _icmp.sle.i24, .Lfunc_end21-_icmp.sle.i24
   icmp sle i24 %0, %1
   br i1 %3, label %4, label %5
   call void @external()
@@ -446,11 +534,15 @@ define void @icmp.sle.i24.0(i24) {
 ; EZ80-NEXT:    ld de, -8388608
 ; EZ80-NEXT:    add hl, de
 ; EZ80-NEXT:    inc de
-; EZ80-NEXT:    or a, a
+; EZ80-NEXT:    or a
 ; EZ80-NEXT:    sbc hl, de
 ; EZ80-NEXT:    call c, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end22
+; EZ80-NEXT:  .Lfunc_end22:
+; EZ80-NEXT:    .size _icmp.sle.i24.0, .Lfunc_end22-_icmp.sle.i24.0
   icmp sle i24 %0, 0
   br i1 %2, label %3, label %4
   call void @external()
@@ -468,11 +560,15 @@ define void @icmp.sle.i24.64(i24) {
 ; EZ80-NEXT:    ld de, -8388608
 ; EZ80-NEXT:    add hl, de
 ; EZ80-NEXT:    ld de, -8388543
-; EZ80-NEXT:    or a, a
+; EZ80-NEXT:    or a
 ; EZ80-NEXT:    sbc hl, de
 ; EZ80-NEXT:    call c, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end23
+; EZ80-NEXT:  .Lfunc_end23:
+; EZ80-NEXT:    .size _icmp.sle.i24.64, .Lfunc_end23-_icmp.sle.i24.64
   icmp sle i24 %0, 64
   br i1 %2, label %3, label %4
   call void @external()
@@ -492,11 +588,15 @@ define void @icmp.sgt.i24(i24, i24) {
 ; EZ80-NEXT:    add iy, de
 ; EZ80-NEXT:    add hl, de
 ; EZ80-NEXT:    lea de, iy
-; EZ80-NEXT:    or a, a
+; EZ80-NEXT:    or a
 ; EZ80-NEXT:    sbc hl, de
 ; EZ80-NEXT:    call c, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end24
+; EZ80-NEXT:  .Lfunc_end24:
+; EZ80-NEXT:    .size _icmp.sgt.i24, .Lfunc_end24-_icmp.sgt.i24
   icmp sgt i24 %0, %1
   br i1 %3, label %4, label %5
   call void @external()
@@ -514,11 +614,15 @@ define void @icmp.sgt.i24.0(i24) {
 ; EZ80-NEXT:    ld de, -8388608
 ; EZ80-NEXT:    add hl, de
 ; EZ80-NEXT:    inc de
-; EZ80-NEXT:    or a, a
+; EZ80-NEXT:    or a
 ; EZ80-NEXT:    sbc hl, de
 ; EZ80-NEXT:    call nc, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end25
+; EZ80-NEXT:  .Lfunc_end25:
+; EZ80-NEXT:    .size _icmp.sgt.i24.0, .Lfunc_end25-_icmp.sgt.i24.0
   icmp sgt i24 %0, 0
   br i1 %2, label %3, label %4
   call void @external()
@@ -536,11 +640,15 @@ define void @icmp.sgt.i24.64(i24) {
 ; EZ80-NEXT:    ld de, -8388608
 ; EZ80-NEXT:    add hl, de
 ; EZ80-NEXT:    ld de, -8388543
-; EZ80-NEXT:    or a, a
+; EZ80-NEXT:    or a
 ; EZ80-NEXT:    sbc hl, de
 ; EZ80-NEXT:    call nc, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end26
+; EZ80-NEXT:  .Lfunc_end26:
+; EZ80-NEXT:    .size _icmp.sgt.i24.64, .Lfunc_end26-_icmp.sgt.i24.64
   icmp sgt i24 %0, 64
   br i1 %2, label %3, label %4
   call void @external()
@@ -560,11 +668,15 @@ define void @icmp.sge.i24(i24, i24) {
 ; EZ80-NEXT:    add iy, de
 ; EZ80-NEXT:    add hl, de
 ; EZ80-NEXT:    lea de, iy
-; EZ80-NEXT:    or a, a
+; EZ80-NEXT:    or a
 ; EZ80-NEXT:    sbc hl, de
 ; EZ80-NEXT:    call nc, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end27
+; EZ80-NEXT:  .Lfunc_end27:
+; EZ80-NEXT:    .size _icmp.sge.i24, .Lfunc_end27-_icmp.sge.i24
   icmp sge i24 %0, %1
   br i1 %3, label %4, label %5
   call void @external()
@@ -581,11 +693,15 @@ define void @icmp.sge.i24.0(i24) {
 ; EZ80-NEXT:    ld hl, (ix + 6)
 ; EZ80-NEXT:    ld de, -8388608
 ; EZ80-NEXT:    add hl, de
-; EZ80-NEXT:    or a, a
+; EZ80-NEXT:    or a
 ; EZ80-NEXT:    sbc hl, de
 ; EZ80-NEXT:    call nc, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end28
+; EZ80-NEXT:  .Lfunc_end28:
+; EZ80-NEXT:    .size _icmp.sge.i24.0, .Lfunc_end28-_icmp.sge.i24.0
   icmp sge i24 %0, 0
   br i1 %2, label %3, label %4
   call void @external()
@@ -603,11 +719,15 @@ define void @icmp.sge.i24.64(i24) {
 ; EZ80-NEXT:    ld de, -8388608
 ; EZ80-NEXT:    add hl, de
 ; EZ80-NEXT:    ld de, -8388544
-; EZ80-NEXT:    or a, a
+; EZ80-NEXT:    or a
 ; EZ80-NEXT:    sbc hl, de
 ; EZ80-NEXT:    call nc, _external
 ; EZ80-NEXT:    pop ix
 ; EZ80-NEXT:    ret
+; EZ80-NEXT:    .section .text,"ax",@progbits
+; EZ80-NEXT:    .local .Lfunc_end29
+; EZ80-NEXT:  .Lfunc_end29:
+; EZ80-NEXT:    .size _icmp.sge.i24.64, .Lfunc_end29-_icmp.sge.i24.64
   icmp sge i24 %0, 64
   br i1 %2, label %3, label %4
   call void @external()

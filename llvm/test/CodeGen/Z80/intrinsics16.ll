@@ -6,38 +6,21 @@ declare void @llvm.memcpy.p0i8.p0i8.i16(i8*, i8*, i16, i1)
 define void @memcpy.p0i8.p0i8.i16(i8*, i8*, i16) {
 ; Z80-LABEL: memcpy.p0i8.p0i8.i16:
 ; Z80:       ; %bb.0:
-; Z80-NEXT:    ld iy, 0
-; Z80-NEXT:    add iy, sp
-; Z80-NEXT:    ld l, (iy + 2)
-; Z80-NEXT:    ld h, (iy + 3)
-; Z80-NEXT:    ld e, (iy + 4)
-; Z80-NEXT:    ld d, (iy + 5)
-; Z80-NEXT:    ld c, (iy + 6)
-; Z80-NEXT:    ld b, (iy + 7)
-; Z80-NEXT:    push bc
-; Z80-NEXT:    push de
-; Z80-NEXT:    push hl
 ; Z80-NEXT:    call _memcpy
-; Z80-NEXT:    ld hl, 6
-; Z80-NEXT:    add hl, sp
-; Z80-NEXT:    ld sp, hl
 ; Z80-NEXT:    ret
+; Z80-NEXT:    .section .text,"ax",@progbits
+; Z80-NEXT:    .local .Lfunc_end0
+; Z80-NEXT:  .Lfunc_end0:
+; Z80-NEXT:    .size _memcpy.p0i8.p0i8.i16, .Lfunc_end0-_memcpy.p0i8.p0i8.i16
 ;
 ; EZ80-CODE16-LABEL: memcpy.p0i8.p0i8.i16:
 ; EZ80-CODE16:       ; %bb.0:
-; EZ80-CODE16-NEXT:    ld iy, 0
-; EZ80-CODE16-NEXT:    add iy, sp
-; EZ80-CODE16-NEXT:    ld hl, (iy + 2)
-; EZ80-CODE16-NEXT:    ld de, (iy + 4)
-; EZ80-CODE16-NEXT:    ld bc, (iy + 6)
-; EZ80-CODE16-NEXT:    push bc
-; EZ80-CODE16-NEXT:    push de
-; EZ80-CODE16-NEXT:    push hl
 ; EZ80-CODE16-NEXT:    call _memcpy
-; EZ80-CODE16-NEXT:    ld hl, 6
-; EZ80-CODE16-NEXT:    add hl, sp
-; EZ80-CODE16-NEXT:    ld sp, hl
 ; EZ80-CODE16-NEXT:    ret
+; EZ80-CODE16-NEXT:    .section .text,"ax",@progbits
+; EZ80-CODE16-NEXT:    .local .Lfunc_end0
+; EZ80-CODE16-NEXT:  .Lfunc_end0:
+; EZ80-CODE16-NEXT:    .size _memcpy.p0i8.p0i8.i16, .Lfunc_end0-_memcpy.p0i8.p0i8.i16
   call void @llvm.memcpy.p0i8.p0i8.i16(i8* %0, i8* %1, i16 %2, i1 false)
   ret void
 }
@@ -46,25 +29,30 @@ declare void @llvm.memcpy.inline.p0i8.p0i8.i16(i8*, i8*, i16, i1)
 define void @memcpy.inline.p0i8.p0i8.i16(i8*, i8*) {
 ; Z80-LABEL: memcpy.inline.p0i8.p0i8.i16:
 ; Z80:       ; %bb.0:
-; Z80-NEXT:    ld iy, 0
-; Z80-NEXT:    add iy, sp
-; Z80-NEXT:    ld e, (iy + 2)
-; Z80-NEXT:    ld d, (iy + 3)
-; Z80-NEXT:    ld l, (iy + 4)
-; Z80-NEXT:    ld h, (iy + 5)
-; Z80-NEXT:    ld bc, 32
-; Z80-NEXT:    ldir
+; Z80-NEXT:    ld iy, 32
+; Z80-NEXT:    ld l, c
+; Z80-NEXT:    ld h, b
+; Z80-NEXT:    ld c, iyl
+; Z80-NEXT:    ld b, iyh
+; Z80-NEXT:    call __memcpy32
 ; Z80-NEXT:    ret
+; Z80-NEXT:    .section .text,"ax",@progbits
+; Z80-NEXT:    .local .Lfunc_end1
+; Z80-NEXT:  .Lfunc_end1:
+; Z80-NEXT:    .size _memcpy.inline.p0i8.p0i8.i16, .Lfunc_end1-_memcpy.inline.p0i8.p0i8.i16
 ;
 ; EZ80-CODE16-LABEL: memcpy.inline.p0i8.p0i8.i16:
 ; EZ80-CODE16:       ; %bb.0:
-; EZ80-CODE16-NEXT:    ld iy, 0
-; EZ80-CODE16-NEXT:    add iy, sp
-; EZ80-CODE16-NEXT:    ld de, (iy + 2)
-; EZ80-CODE16-NEXT:    ld hl, (iy + 4)
-; EZ80-CODE16-NEXT:    ld bc, 32
-; EZ80-CODE16-NEXT:    ldir
+; EZ80-CODE16-NEXT:    ld iy, 32
+; EZ80-CODE16-NEXT:    ld l, c
+; EZ80-CODE16-NEXT:    ld h, b
+; EZ80-CODE16-NEXT:    lea bc, iy
+; EZ80-CODE16-NEXT:    call __memcpy32
 ; EZ80-CODE16-NEXT:    ret
+; EZ80-CODE16-NEXT:    .section .text,"ax",@progbits
+; EZ80-CODE16-NEXT:    .local .Lfunc_end1
+; EZ80-CODE16-NEXT:  .Lfunc_end1:
+; EZ80-CODE16-NEXT:    .size _memcpy.inline.p0i8.p0i8.i16, .Lfunc_end1-_memcpy.inline.p0i8.p0i8.i16
   call void @llvm.memcpy.inline.p0i8.p0i8.i16(i8* %0, i8* %1, i16 32, i1 false)
   ret void
 }
@@ -73,38 +61,21 @@ declare void @llvm.memmove.p0i8.p0i8.i16(i8*, i8*, i16, i1)
 define void @memmove.p0i8.p0i8.i16(i8*, i8*, i16) {
 ; Z80-LABEL: memmove.p0i8.p0i8.i16:
 ; Z80:       ; %bb.0:
-; Z80-NEXT:    ld iy, 0
-; Z80-NEXT:    add iy, sp
-; Z80-NEXT:    ld l, (iy + 2)
-; Z80-NEXT:    ld h, (iy + 3)
-; Z80-NEXT:    ld e, (iy + 4)
-; Z80-NEXT:    ld d, (iy + 5)
-; Z80-NEXT:    ld c, (iy + 6)
-; Z80-NEXT:    ld b, (iy + 7)
-; Z80-NEXT:    push bc
-; Z80-NEXT:    push de
-; Z80-NEXT:    push hl
 ; Z80-NEXT:    call _memmove
-; Z80-NEXT:    ld hl, 6
-; Z80-NEXT:    add hl, sp
-; Z80-NEXT:    ld sp, hl
 ; Z80-NEXT:    ret
+; Z80-NEXT:    .section .text,"ax",@progbits
+; Z80-NEXT:    .local .Lfunc_end2
+; Z80-NEXT:  .Lfunc_end2:
+; Z80-NEXT:    .size _memmove.p0i8.p0i8.i16, .Lfunc_end2-_memmove.p0i8.p0i8.i16
 ;
 ; EZ80-CODE16-LABEL: memmove.p0i8.p0i8.i16:
 ; EZ80-CODE16:       ; %bb.0:
-; EZ80-CODE16-NEXT:    ld iy, 0
-; EZ80-CODE16-NEXT:    add iy, sp
-; EZ80-CODE16-NEXT:    ld hl, (iy + 2)
-; EZ80-CODE16-NEXT:    ld de, (iy + 4)
-; EZ80-CODE16-NEXT:    ld bc, (iy + 6)
-; EZ80-CODE16-NEXT:    push bc
-; EZ80-CODE16-NEXT:    push de
-; EZ80-CODE16-NEXT:    push hl
 ; EZ80-CODE16-NEXT:    call _memmove
-; EZ80-CODE16-NEXT:    ld hl, 6
-; EZ80-CODE16-NEXT:    add hl, sp
-; EZ80-CODE16-NEXT:    ld sp, hl
 ; EZ80-CODE16-NEXT:    ret
+; EZ80-CODE16-NEXT:    .section .text,"ax",@progbits
+; EZ80-CODE16-NEXT:    .local .Lfunc_end2
+; EZ80-CODE16-NEXT:  .Lfunc_end2:
+; EZ80-CODE16-NEXT:    .size _memmove.p0i8.p0i8.i16, .Lfunc_end2-_memmove.p0i8.p0i8.i16
   call void @llvm.memmove.p0i8.p0i8.i16(i8* %0, i8* %1, i16 %2, i1 false)
   ret void
 }
@@ -113,39 +84,21 @@ declare void @llvm.memset.p0i8.i16(i8*, i8, i16, i1)
 define void @memset.p0i8.i16(i8*, i8, i16) {
 ; Z80-LABEL: memset.p0i8.i16:
 ; Z80:       ; %bb.0:
-; Z80-NEXT:    ld iy, 0
-; Z80-NEXT:    add iy, sp
-; Z80-NEXT:    ld l, (iy + 2)
-; Z80-NEXT:    ld h, (iy + 3)
-; Z80-NEXT:    ld a, (iy + 4)
-; Z80-NEXT:    ld e, (iy + 6)
-; Z80-NEXT:    ld d, (iy + 7)
-; Z80-NEXT:    push de
-; Z80-NEXT:    ld e, a
-; Z80-NEXT:    push de
-; Z80-NEXT:    push hl
 ; Z80-NEXT:    call _memset
-; Z80-NEXT:    ld hl, 6
-; Z80-NEXT:    add hl, sp
-; Z80-NEXT:    ld sp, hl
 ; Z80-NEXT:    ret
+; Z80-NEXT:    .section .text,"ax",@progbits
+; Z80-NEXT:    .local .Lfunc_end3
+; Z80-NEXT:  .Lfunc_end3:
+; Z80-NEXT:    .size _memset.p0i8.i16, .Lfunc_end3-_memset.p0i8.i16
 ;
 ; EZ80-CODE16-LABEL: memset.p0i8.i16:
 ; EZ80-CODE16:       ; %bb.0:
-; EZ80-CODE16-NEXT:    ld iy, 0
-; EZ80-CODE16-NEXT:    add iy, sp
-; EZ80-CODE16-NEXT:    ld hl, (iy + 2)
-; EZ80-CODE16-NEXT:    ld a, (iy + 4)
-; EZ80-CODE16-NEXT:    ld de, (iy + 6)
-; EZ80-CODE16-NEXT:    push de
-; EZ80-CODE16-NEXT:    ld e, a
-; EZ80-CODE16-NEXT:    push de
-; EZ80-CODE16-NEXT:    push hl
 ; EZ80-CODE16-NEXT:    call _memset
-; EZ80-CODE16-NEXT:    ld hl, 6
-; EZ80-CODE16-NEXT:    add hl, sp
-; EZ80-CODE16-NEXT:    ld sp, hl
 ; EZ80-CODE16-NEXT:    ret
+; EZ80-CODE16-NEXT:    .section .text,"ax",@progbits
+; EZ80-CODE16-NEXT:    .local .Lfunc_end3
+; EZ80-CODE16-NEXT:  .Lfunc_end3:
+; EZ80-CODE16-NEXT:    .size _memset.p0i8.i16, .Lfunc_end3-_memset.p0i8.i16
   call void @llvm.memset.p0i8.i16(i8* %0, i8 %1, i16 %2, i1 false)
   ret void
 }
@@ -154,23 +107,31 @@ declare i8* @llvm.ptrmask.p0i8.i16(i8*, i16)
 define i8* @ptrmask.p0i8.i16(i8*, i16) {
 ; Z80-LABEL: ptrmask.p0i8.i16:
 ; Z80:       ; %bb.0:
-; Z80-NEXT:    ld iy, 0
-; Z80-NEXT:    add iy, sp
-; Z80-NEXT:    ld l, (iy + 2)
-; Z80-NEXT:    ld h, (iy + 3)
-; Z80-NEXT:    ld c, (iy + 4)
-; Z80-NEXT:    ld b, (iy + 5)
-; Z80-NEXT:    call __sand
+; Z80-NEXT:    ld a, e
+; Z80-NEXT:    and c
+; Z80-NEXT:    ld l, a
+; Z80-NEXT:    ld a, d
+; Z80-NEXT:    and b
+; Z80-NEXT:    ld h, a
 ; Z80-NEXT:    ret
+; Z80-NEXT:    .section .text,"ax",@progbits
+; Z80-NEXT:    .local .Lfunc_end4
+; Z80-NEXT:  .Lfunc_end4:
+; Z80-NEXT:    .size _ptrmask.p0i8.i16, .Lfunc_end4-_ptrmask.p0i8.i16
 ;
 ; EZ80-CODE16-LABEL: ptrmask.p0i8.i16:
 ; EZ80-CODE16:       ; %bb.0:
-; EZ80-CODE16-NEXT:    ld iy, 0
-; EZ80-CODE16-NEXT:    add iy, sp
-; EZ80-CODE16-NEXT:    ld hl, (iy + 2)
-; EZ80-CODE16-NEXT:    ld bc, (iy + 4)
-; EZ80-CODE16-NEXT:    call __sand
+; EZ80-CODE16-NEXT:    ld a, e
+; EZ80-CODE16-NEXT:    and c
+; EZ80-CODE16-NEXT:    ld l, a
+; EZ80-CODE16-NEXT:    ld a, d
+; EZ80-CODE16-NEXT:    and b
+; EZ80-CODE16-NEXT:    ld h, a
 ; EZ80-CODE16-NEXT:    ret
+; EZ80-CODE16-NEXT:    .section .text,"ax",@progbits
+; EZ80-CODE16-NEXT:    .local .Lfunc_end4
+; EZ80-CODE16-NEXT:  .Lfunc_end4:
+; EZ80-CODE16-NEXT:    .size _ptrmask.p0i8.i16, .Lfunc_end4-_ptrmask.p0i8.i16
   call i8* @llvm.ptrmask.p0i8.i16(i8* %0, i16 %1)
   ret i8* %3
 }
@@ -179,25 +140,34 @@ declare i8 addrspace(1)* @llvm.ptrmask.p1i8.i24(i8 addrspace(1)*, i24)
 define i8 addrspace(1)* @ptrmask.p1i8.i24(i8 addrspace(1)*, i24) {
 ; Z80-LABEL: ptrmask.p1i8.i24:
 ; Z80:       ; %bb.0:
-; Z80-NEXT:    ld iy, 0
-; Z80-NEXT:    add iy, sp
-; Z80-NEXT:    ld l, (iy + 2)
-; Z80-NEXT:    ld h, (iy + 3)
-; Z80-NEXT:    ld c, (iy + 4)
-; Z80-NEXT:    ld b, (iy + 5)
-; Z80-NEXT:    call __sand
+; Z80-NEXT:    ld a, e
+; Z80-NEXT:    and c
+; Z80-NEXT:    ld l, a
+; Z80-NEXT:    ld a, d
+; Z80-NEXT:    and b
+; Z80-NEXT:    ld h, a
 ; Z80-NEXT:    ret
+; Z80-NEXT:    .section .text,"ax",@progbits
+; Z80-NEXT:    .local .Lfunc_end5
+; Z80-NEXT:  .Lfunc_end5:
+; Z80-NEXT:    .size _ptrmask.p1i8.i24, .Lfunc_end5-_ptrmask.p1i8.i24
 ;
 ; EZ80-CODE16-LABEL: ptrmask.p1i8.i24:
 ; EZ80-CODE16:       ; %bb.0:
-; EZ80-CODE16-NEXT:    ld iy, 0
-; EZ80-CODE16-NEXT:    add iy, sp
-; EZ80-CODE16-NEXT:    ld hl, (iy + 2)
-; EZ80-CODE16-NEXT:    ld bc, (iy + 6)
-; EZ80-CODE16-NEXT:    ld e, (iy + 4)
-; EZ80-CODE16-NEXT:    ld a, (iy + 8)
+; EZ80-CODE16-NEXT:    ex de, hl
+; EZ80-CODE16-NEXT:    ld iyl, e
+; EZ80-CODE16-NEXT:    ld iyh, d
+; EZ80-CODE16-NEXT:    ex de, hl
+; EZ80-CODE16-NEXT:    ld a, b
+; EZ80-CODE16-NEXT:    ex de, hl
+; EZ80-CODE16-NEXT:    ld e, c
+; EZ80-CODE16-NEXT:    lea bc, iy
 ; EZ80-CODE16-NEXT:    call __iand
 ; EZ80-CODE16-NEXT:    ret
+; EZ80-CODE16-NEXT:    .section .text,"ax",@progbits
+; EZ80-CODE16-NEXT:    .local .Lfunc_end5
+; EZ80-CODE16-NEXT:  .Lfunc_end5:
+; EZ80-CODE16-NEXT:    .size _ptrmask.p1i8.i24, .Lfunc_end5-_ptrmask.p1i8.i24
   call i8 addrspace(1)* @llvm.ptrmask.p1i8.i24(i8 addrspace(1)* %0, i24 %1)
   ret i8 addrspace(1)* %3
 }

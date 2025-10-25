@@ -112,7 +112,7 @@ def Z80tcret         : SDNode<"Z80ISD::TC_RETURN", SDT_Z80TCRet,
                               [SDNPHasChain, SDNPOptInGlue, SDNPVariadic]>;
 def Z80call          : SDNode<"Z80ISD::CALL", SDT_Z80Call,
                               [SDNPHasChain, SDNPOutGlue, SDNPOptInGlue,
-                               SDNPVariadic]>;
+                               SDNPMayLoad, SDNPMayStore, SDNPVariadic]>;
 def Z80brcond        : SDNode<"Z80ISD::BRCOND", SDT_Z80BrCond, [SDNPHasChain]>;
 def Z80select        : SDNode<"Z80ISD::SELECT", SDT_Z80Select>;
 def Z80pop           : SDNode<"Z80ISD::POP", SDT_Z80Pop,
@@ -313,7 +313,7 @@ let Defs = [F] in {
 // All calls clobber the non-callee saved registers.  SP is marked as a use to
 // prevent stack-pointer assignments that appear immediately before calls from
 // potentially appearing dead.  Uses for argument registers are added manually.
-let isCall = true in {
+let isCall = true, mayLoad = 1, mayStore = 1, hasSideEffects = 1 in {
   let Uses = [SPS] in {
     def CALL16   : I16i<NoPre, 0xCD, "call", "\t$tgt", "",
                         (outs), (ins i16imm:$tgt), [(Z80call mempat:$tgt)]>,
