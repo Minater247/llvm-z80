@@ -4,7 +4,7 @@
 __sremu:
         ; HL = numerator, BC = divisor
         ld      d, h          ; preserve original numerator in DE
-        ld      e, l          ; (compiled code divides DE by BC after %)
+        ld      e, l
 
         ld      a, b
         or      c
