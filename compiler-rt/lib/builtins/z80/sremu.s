@@ -2,16 +2,20 @@
         .globl __sremu
 
 __sremu:
-        ld      a, b          ; check divisor (BC)
+        ; HL = numerator, BC = divisor
+        ld      d, h          ; preserve original numerator in DE
+        ld      e, l          ; (compiled code divides DE by BC after %)
+
+        ld      a, b
         or      c
         jr      nz, .have_divisor
-        ld      hl, 0
+        ld      hl, 0         ; div-by-zero -> 0 remainder
         ret
 
 .have_divisor:
-.loop:
-        xor     a
-        sbc     hl, bc
-        jr      nc, .loop
-        add     hl, bc
+.__loop:
+        xor     a             ; clear carry
+        sbc     hl, bc        ; HL -= BC
+        jr      nc, .__loop
+        add     hl, bc        ; restore remainder
         ret

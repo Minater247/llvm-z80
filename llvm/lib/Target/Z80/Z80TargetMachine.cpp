@@ -236,12 +236,14 @@ void Z80PassConfig::addMachineLateOptimization() {
 void Z80PassConfig::addPreEmitPass2() {
   TargetPassConfig::addPreEmitPass2();
   addPass(createZ80BranchSelectorPass());
+  addPass(createZ80DanglingRegPass());
 }
 
 void Z80PassConfig::addPostRewrite() {
   TargetPassConfig::addPostRewrite();
   addPass(createZ80PostRewritePass());
   addPass(createZ80StaticStackPass());
+  addPass(createZ80DanglingRegPass());
 }
 
 std::unique_ptr<CSEConfigBase> Z80PassConfig::getCSEConfig() const {

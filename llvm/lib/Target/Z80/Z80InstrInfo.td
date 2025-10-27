@@ -1391,7 +1391,7 @@ def : Pat<(i24 (anyext R16:$src)),
 
 // zext
 def : Pat<(i16 (zext R8 :$src)),
-          (REG_SEQUENCE R16, (LD8r0), sub_high, R8:$src, sub_low)>;
+          (SUBREG_TO_REG (i16 0), R8:$src, sub_low)>;
 def : Pat<(i24 (zext R8 :$src)),
           (INSERT_SUBREG (i24 (LD24r0)), R8 :$src, sub_low)>;
 def : Pat<(i24 (zext R16:$src)),

@@ -64,8 +64,8 @@ class LLVM_LIBRARY_VISIBILITY Z80TargetInfo : public Z80TargetInfoBase {
 public:
   explicit Z80TargetInfo(const llvm::Triple &T, const TargetOptions &Opts)
       : Z80TargetInfoBase(T, Opts) {
+    IntWidth = 16;
     PointerWidth = 16;
-    IntWidth = 32;
     SizeType = UnsignedShort;
     PtrDiffType = SignedShort;
     IntPtrType = SignedShort;

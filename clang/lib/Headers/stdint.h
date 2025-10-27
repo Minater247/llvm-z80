@@ -857,5 +857,33 @@ typedef __UINTMAX_TYPE__ uintmax_t;
 #define WINT_WIDTH       __WINT_WIDTH__
 #endif
 
+#if defined(_Z80) || defined(__z80__) || defined(__Z80__)
+#undef  INTPTR_MAX
+#define INTPTR_MAX 0x7fff
+#undef  INTPTR_MIN
+#define INTPTR_MIN (-0x7fff - 1)
+#undef  UINTPTR_MAX
+#define UINTPTR_MAX 0xffffU
+
+#undef  PTRDIFF_MAX
+#define PTRDIFF_MAX 0x7fff
+#undef  PTRDIFF_MIN
+#define PTRDIFF_MIN (-0x7fff - 1)
+
+#undef  SIZE_MAX
+#define SIZE_MAX 0xffffU
+
+#if __STDC_VERSION__ >= 202000L
+#undef  INTPTR_WIDTH
+#define INTPTR_WIDTH 16
+#undef  UINTPTR_WIDTH
+#define UINTPTR_WIDTH 16
+#undef  PTRDIFF_WIDTH
+#define PTRDIFF_WIDTH 16
+#undef  SIZE_WIDTH
+#define SIZE_WIDTH 16
+#endif
+#endif
+
 #endif /* __STDC_HOSTED__ */
 #endif /* __CLANG_STDINT_H */

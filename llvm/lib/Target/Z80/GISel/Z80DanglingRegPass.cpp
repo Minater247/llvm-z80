@@ -57,6 +57,17 @@ bool Z80DanglingRegPass::runOnMachineFunction(MachineFunction &MF)
       MachineInstr &MI = *MII++;
       LLVM_DEBUG(dbgs() << "Z80DanglingRegPass: "; MI.dump());
 
+      if (MI.isCopy() && MI.getNumOperands() >= 2) {
+        MachineOperand &Src = MI.getOperand(1);
+        if (Src.isReg() && Src.isUndef()) {
+          LLVM_DEBUG(dbgs() << "Z80DanglingRegPass: removing COPY from undef: ";
+                     MI.dump());
+          MI.eraseFromParent();
+          changes = true;
+          continue;
+        }
+      }
+
       bool HasRegMask = false;
       for (auto& MO : MI.operands()) {
         if (MO.isRegMask()) {
@@ -132,4 +143,3 @@ FunctionPass *llvm::createZ80DanglingRegPass() {
 static RegisterPass<Z80DanglingRegPass> X("z80-dangling-reg", "Z80 dangling reg optimization",
                                      false /* Only looks at CFG */,
                                      false /* Analysis Pass */);
-

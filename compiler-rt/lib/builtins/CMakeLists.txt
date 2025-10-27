@@ -681,7 +681,9 @@ set(ve_SOURCES
   ${GENERIC_SOURCES})
 
 set(z80_SOURCES
-  z80/sremu.s)
+  z80/sremu.s
+  z80/smulu.s
+  z80/sshru.s)
 set(ez80_SOURCES ${z80_SOURCES})
 
 add_custom_target(builtins)

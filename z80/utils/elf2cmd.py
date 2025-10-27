@@ -12,6 +12,11 @@ import sys
 from pathlib import Path
 from typing import List, Tuple, Optional
 
+
+SHT_PROGBITS = 1
+SHT_NOBITS = 8
+SHF_ALLOC = 0x2
+
 class ELFParser:
     """Simple ELF parser for Z80 files"""
     
@@ -65,8 +70,8 @@ class ELFParser:
         
         return segments
     
-    def get_sections(self) -> List[Tuple[str, int, int, bytes]]:
-        """Get all sections as (name, vaddr, size, data) tuples"""
+    def get_sections(self) -> List[Tuple[str, int, int, int, bytes]]:
+        """Get all sections as (name, vaddr, size, type, data) tuples"""
         sections = []
         
         # Get string table for section names
@@ -97,9 +102,15 @@ class ELFParser:
             name = strtab[sh_name_idx:name_end].decode('ascii', errors='ignore')
             
             # Only include allocated sections with data
-            if sh_flags & 0x2 and sh_size > 0:  # SHF_ALLOC
-                section_data = self.data[sh_offset_in_file:sh_offset_in_file + sh_size]
-                sections.append((name, sh_addr, sh_size, section_data))
+            if sh_flags & SHF_ALLOC and sh_size > 0:
+                if sh_type == SHT_NOBITS:  # e.g. .bss
+                    section_data = b'\x00' * sh_size
+                else:
+                    section_data = self.data[sh_offset_in_file:sh_offset_in_file + sh_size]
+                    if len(section_data) < sh_size:
+                        section_data += b'\x00' * (sh_size - len(section_data))
+
+                sections.append((name, sh_addr, sh_size, sh_type, section_data))
         
         return sections
 
@@ -182,12 +193,17 @@ def convert_elf_to_cmd(elf_file: str, cmd_file: str, module_name: Optional[str] 
         print(f"Found {len(sections)} loadable sections:")
     
     sections_added = False
-    for name, vaddr, size, data in sections:
-        if len(data) > 0 and name in ['.text', '.data', '.rodata']:
-            if verbose:
-                print(f"  Section {name} at 0x{vaddr:04X}, size {len(data)} bytes")
-            cmd.add_load_block(vaddr, data)
-            sections_added = True
+    for name, vaddr, size, sh_type, data in sections:
+        if len(data) == 0:
+            continue
+
+        if sh_type not in (SHT_PROGBITS, SHT_NOBITS):
+            continue
+
+        if verbose:
+            print(f"  Section {name} at 0x{vaddr:04X}, size {len(data)} bytes")
+        cmd.add_load_block(vaddr, data)
+        sections_added = True
     
     # Fallback to segments if no sections were added
     if not sections_added:
