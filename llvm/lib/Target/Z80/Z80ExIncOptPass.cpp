@@ -26,10 +26,14 @@
 // the double INC. Using a positive model takes more entries but is less error-prone,
 // so adding more should be viable. Need to look into checking for constant SP.
 
+// TODO: Needs testing on EZ80, the logic should be correct but other eZ80 issues prevent
+//       testing on it currently.
+
 #include "MCTargetDesc/Z80MCTargetDesc.h"
 #include "Z80.h"
 #include "Z80InstrInfo.h"
 #include "Z80RegisterInfo.h"
+#include "Z80Subtarget.h"
 #include "llvm/CodeGen/LiveRegUnits.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineDominators.h"
@@ -65,7 +69,7 @@ namespace {
         bool runOnMachineFunction(MachineFunction &MF) override;
     
     private:
-        bool IsValidExSp(const MachineInstr  &MI, MCRegister &Reg, int &size);
+        bool IsValidExSp(const MachineInstr  &MI, MCRegister &Reg);
         bool IsValidIntermediate(const MachineInstr &MI);
         bool IsIncSp(const MachineInstr &MI);
     };
@@ -85,13 +89,12 @@ void llvm::initializeZ80ExIncOptPass(PassRegistry &Registry) {
 
 
 
-bool Z80ExIncOptPass::IsValidExSp(const MachineInstr  &MI, MCRegister &Reg, int &size) {
+bool Z80ExIncOptPass::IsValidExSp(const MachineInstr  &MI, MCRegister &Reg) {
     auto opcode = MI.getOpcode();
 
     if (opcode == Z80::EX16sa) {
         auto opreg = MI.getOperand(1).getReg();
         if (opreg == Z80::HL || opreg == Z80::IY) {
-            size = 2;
             Reg = opreg;
             return true;
         }
@@ -121,7 +124,10 @@ bool Z80ExIncOptPass::runOnMachineFunction(MachineFunction &MF) {
                     << "********** Function: " << MF.getName() << '\n');
 
     const TargetInstrInfo *TII = MF.getSubtarget().getInstrInfo();
+    const Z80Subtarget &STI = MF.getSubtarget<Z80Subtarget>();
     bool Changed = false;
+    
+    int size = STI.is24Bit() ? 3 : 2;
 
     for (auto &MBB : MF) {
         LLVM_DEBUG(dbgs() << "=== Processing Basic Block: " << MBB.getName() << " ===");
@@ -136,8 +142,7 @@ bool Z80ExIncOptPass::runOnMachineFunction(MachineFunction &MF) {
             });
 
             MCRegister reg;
-            int size;
-            if (!IsValidExSp(*CurrentMI, reg, size)) continue;
+            if (!IsValidExSp(*CurrentMI, reg)) continue;
 
             LLVM_DEBUG(dbgs() << "--  - Valid ex (sp)\n");
 
@@ -154,12 +159,17 @@ bool Z80ExIncOptPass::runOnMachineFunction(MachineFunction &MF) {
                 ++End;
             }
             
-            // TODO: look for `size` incs, rather than hardcoded 2
-            //       this does not work on ez80
+            llvm::MachineBasicBlock::iterator Inc1;
+            llvm::MachineBasicBlock::iterator Inc2;
+            llvm::MachineBasicBlock::iterator Inc3;
             if (End == MBB.end() || !IsIncSp(*End)) continue;
-            auto Inc1 = End++;
+            Inc1 = End++;
             if (End == MBB.end() || !IsIncSp(*End)) continue;
-            auto Inc2 = End++;
+            Inc2 = End++;
+            if (size == 3) {
+                if (End == MBB.end() || !IsIncSp(*End)) continue;
+                Inc3 = End++;
+            }
 
             LLVM_DEBUG(dbgs() << "Full transformation located!\n");
 
@@ -168,6 +178,9 @@ bool Z80ExIncOptPass::runOnMachineFunction(MachineFunction &MF) {
             Begin->eraseFromParent();
             Inc1->eraseFromParent();
             Inc2->eraseFromParent();
+            if (size == 3) {
+                Inc3->eraseFromParent();
+            }
 
             MI = End;
             Changed = true;
