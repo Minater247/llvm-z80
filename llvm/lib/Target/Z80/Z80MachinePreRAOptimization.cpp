@@ -49,6 +49,7 @@ public:
 bool Z80MachinePreRAOptimization::runOnMachineFunction(MachineFunction &MF) {
   bool Changed = false;
   const TargetInstrInfo &TII = *MF.getSubtarget().getInstrInfo();
+  const TargetRegisterInfo &TRI = *MF.getSubtarget().getRegisterInfo();
   MachineRegisterInfo &MRI = MF.getRegInfo();
   SmallSet<Register, 16> FoldAsLoadDefCandidates;
 
@@ -392,6 +393,33 @@ bool Z80MachinePreRAOptimization::runOnMachineFunction(MachineFunction &MF) {
 
       LLVM_DEBUG(dbgs() << "[z80-prera] Rewriting store pair: base=" << BaseAddr
                         << " second=" << SecondAddr << " delta=" << Delta << "\n");
+
+      if (CopyToA) {
+        bool AUsedLater = false;
+        auto ScanI = std::next(MachineBasicBlock::iterator(SecondStore));
+        for (; ScanI != MBB.end(); ++ScanI) {
+          if (ScanI->isDebugInstr())
+            continue;
+          if (ScanI->definesRegister(Z80::A, &TRI))
+            break;
+          if (ScanI->readsRegister(Z80::A, &TRI)) {
+            AUsedLater = true;
+            break;
+          }
+        }
+
+        if (!AUsedLater && ScanI == MBB.end()) {
+          LiveRegUnits LiveOutUnits(TRI);
+          LiveOutUnits.addLiveOuts(MBB);
+          if (!LiveOutUnits.available(Z80::A))
+            AUsedLater = true;
+        }
+
+        if (AUsedLater) {
+          I = NextI;
+          continue;
+        }
+      }
 
       MachineInstrBuilder NewStore;
       unsigned PtrFlags = PtrUsedLater ? 0 : RegState::Kill;
