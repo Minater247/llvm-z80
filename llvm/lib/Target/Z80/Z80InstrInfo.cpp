@@ -1291,14 +1291,16 @@ bool Z80InstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
   case Z80::LD8rp: {
     MachineOperand &DstOp = MI.getOperand(0);
     if (Z80::I8RegClass.contains(DstOp.getReg())) {
-      if (isLive(Z80::A, MI) || isLive(Z80::F, MI)) {
+      bool emitPushPop = isLive(Z80::A, MI) || isLive(Z80::F, MI);
+
+      if (emitPushPop) {
         applySPAdjust(
             *BuildMI(MBB, MI, DL, get(Is24Bit ? Z80::PUSH24AF : Z80::PUSH16AF)))
             .findRegisterUseOperand(Z80::AF)->setIsUndef();
       }
       copyPhysReg(MBB, Next, DL, DstOp.getReg(), Z80::A, true);
       DstOp.setReg(Z80::A);
-      if (isLive(Z80::A, Next) || isLive(Z80::F, Next))
+      if (emitPushPop)
         applySPAdjust(
             *BuildMI(MBB, Next, DL, get(Is24Bit ? Z80::POP24AF : Z80::POP16AF)));
     }
@@ -1384,7 +1386,8 @@ bool Z80InstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
   case Z80::LD8pr: {
     MachineOperand &SrcOp = MI.getOperand(MI.getNumExplicitOperands() - 1);
     if (Z80::I8RegClass.contains(SrcOp.getReg())) {
-      if (isLive(Z80::A, MI) || isLive(Z80::F, MI)) {
+      bool emitPushPop = isLive(Z80::A, MI) || isLive(Z80::F, MI);
+      if (emitPushPop) {
         applySPAdjust(
             *BuildMI(MBB, MI, DL, get(Is24Bit ? Z80::PUSH24AF : Z80::PUSH16AF)))
             .findRegisterUseOperand(Z80::AF)->setIsUndef();
@@ -1392,9 +1395,11 @@ bool Z80InstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
       copyPhysReg(MBB, MI, DL, Z80::A, SrcOp.getReg(), SrcOp.isKill());
       SrcOp.setReg(Z80::A);
       SrcOp.setIsKill();
-      if (isLive(Z80::A, Next) || isLive(Z80::F, Next))
-        applySPAdjust(
-            *BuildMI(MBB, Next, DL, get(Is24Bit ? Z80::POP24AF : Z80::POP16AF)));
+      if (emitPushPop) {
+        MachineInstrBuilder PopMIB =
+            BuildMI(MBB, Next, DL, get(Is24Bit ? Z80::POP24AF : Z80::POP16AF));
+        applySPAdjust(*PopMIB);
+      }
     }
     MI.setDesc(get(Opc == Z80::LD8or ? Z80::LD8og : Z80::LD8pg));
     break;
