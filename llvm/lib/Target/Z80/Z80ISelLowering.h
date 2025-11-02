@@ -121,6 +121,8 @@ private:
                                       const MachineRegisterInfo &MRI,
                                       unsigned Depth) const override;
 
+  bool isIntDivCheap(EVT VT, AttributeList Attr) const override;
+
   /// HandleByVal - Target-specific cleanup for ByVal support.
   void HandleByVal(CCState *, unsigned &, Align) const override;
 

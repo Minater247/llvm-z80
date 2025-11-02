@@ -17,6 +17,7 @@
 #include "Z80TargetMachine.h"
 #include "llvm/CodeGen/MachineJumpTableInfo.h"
 #include "llvm/Support/KnownBits.h"
+#include "llvm/IR/Attributes.h"
 using namespace llvm;
 
 #define DEBUG_TYPE "z80-isel"
@@ -59,6 +60,8 @@ Z80TargetLowering::Z80TargetLowering(const Z80TargetMachine &TM,
     // if not immediately matched in tests.
     setOperationAction(ISD::SRL, MVT::i32, Expand);
   }
+
+  setOperationAction(ISD::UDIV, MVT::i16, LibCall);
 
   setLibcall(RTLIB::ZEXT_I16_I24,     "_stoiu",      CallingConv::Z80_LibCall   );
   setLibcall(RTLIB::SEXT_I16_I24,     "_stoi",       CallingConv::Z80_LibCall   );
@@ -676,4 +679,10 @@ Z80TargetLowering::getInlineAsmMemConstraint(StringRef Constraint) const {
     case 'X': return InlineAsm::Constraint_X;
     }
   return TargetLowering::getInlineAsmMemConstraint(Constraint);
+}
+
+bool Z80TargetLowering::isIntDivCheap(EVT VT, AttributeList Attr) const {
+  if (VT == MVT::i16)
+    return true;
+  return TargetLowering::isIntDivCheap(VT, Attr);
 }
