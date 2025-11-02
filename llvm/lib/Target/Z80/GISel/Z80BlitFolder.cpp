@@ -53,7 +53,8 @@ bool Z80BlitFolder::runOnMachineFunction(MachineFunction &MF)
     for (auto& MI : MBB) {
       bool IgnoreUse = false;
       LLVM_DEBUG(dbgs() << "Z80BlitFolder 1st pass: "; MI.dump());
-      if (MI.getOpcode() == TargetOpcode::G_PHI) {
+      if (MI.getOpcode() == TargetOpcode::G_PHI ||
+          MI.getOpcode() == TargetOpcode::PHI) {
         for (auto& Op : MI.operands()) {
           if (Op.isReg()) {
             phi_registers.insert(Op.getReg());
@@ -177,7 +178,14 @@ bool Z80BlitFolder::runOnMachineFunction(MachineFunction &MF)
     }
   }
   for (auto& e : todelete) {
-    LLVM_DEBUG(dbgs() << "@Z80BlitFolder: dropping register " << Z80Tracker::RegisterEntry::getName(TRI, e.first) << "\n");
+    Register Reg = e.first;
+    if (!Reg.isVirtual())
+      continue;
+    if (!MRI.use_empty(Reg))
+      continue;
+    LLVM_DEBUG(dbgs() << "@Z80BlitFolder: dropping register "
+                      << Z80Tracker::RegisterEntry::getName(TRI, Reg)
+                      << "\n");
     for (auto *MI : e.second) {
       MI->removeFromParent();
       changes = true;
