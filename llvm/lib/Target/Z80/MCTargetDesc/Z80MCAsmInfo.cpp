@@ -48,9 +48,9 @@ Z80MCAsmInfoELF::Z80MCAsmInfoELF(const Triple &T) {
   NumberLiteralSyntax = ANLS_PlainDecimal;
   CharacterLiteralSyntax = ACLS_Unknown; //ACLS_SingleQuotePrefix; //ACLS_SingleQuotes;
   HasPairedDoubleQuoteStringConstants = true;
-  HasBackslashEscapesInStringConstants = false;
+  HasBackslashEscapesInStringConstants = true;
   StringConstantsEscapeNonPrint = EscapeNonPrint;
-  StringConstantsRequiredEscapes = {"\n\r\32", 4}; // include null
+  StringConstantsRequiredEscapes = {"\n\r\32\\", 5};
   PlainStringDirective = "\t.string\t";
   Data8bitsDirective = "\tdb\t";
   Data16bitsDirective = "\tdw\t";
