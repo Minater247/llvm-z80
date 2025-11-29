@@ -71,6 +71,90 @@ foreach IntTy = ["I32", "I64", "I128"] in {
   def CTPOP_#IntTy : RuntimeLibcall;
 }
 
+// Additional integer libcalls required by out-of-tree targets such as Z80.
+foreach IntTy = ["I16", "I24", "I48"] in {
+  def NEG_#IntTy : RuntimeLibcall;
+}
+
+foreach IntTy = ["I24", "I48"] in {
+  def SDIV_#IntTy : RuntimeLibcall;
+  def UDIV_#IntTy : RuntimeLibcall;
+  def SREM_#IntTy : RuntimeLibcall;
+  def UREM_#IntTy : RuntimeLibcall;
+  def SDIVREM_#IntTy : RuntimeLibcall;
+  def UDIVREM_#IntTy : RuntimeLibcall;
+}
+
+foreach IntTy = ["I8", "I16", "I24", "I48"] in {
+  def CTLZ_#IntTy : RuntimeLibcall;
+  def CTPOP_#IntTy : RuntimeLibcall;
+}
+
+foreach IntTy = ["I16", "I24", "I32", "I48", "I64"] in {
+  def NOT_#IntTy : RuntimeLibcall;
+  def AND_#IntTy : RuntimeLibcall;
+  def OR_#IntTy  : RuntimeLibcall;
+  def XOR_#IntTy : RuntimeLibcall;
+}
+
+foreach IntTy = ["I8", "I24", "I48"] in {
+  def SHL_#IntTy : RuntimeLibcall;
+  def SRL_#IntTy : RuntimeLibcall;
+  def SRA_#IntTy : RuntimeLibcall;
+}
+
+def SHL_I16_I8 : RuntimeLibcall;
+def SHL_I24_I8 : RuntimeLibcall;
+def SRA_I16_I8 : RuntimeLibcall;
+def SRA_I24_I8 : RuntimeLibcall;
+def SRL_I16_I8 : RuntimeLibcall;
+def SRL_I24_I8 : RuntimeLibcall;
+
+def MUL_I24 : RuntimeLibcall;
+def MUL_I24_I8 : RuntimeLibcall;
+def MUL_I48 : RuntimeLibcall;
+
+def ADD_I32 : RuntimeLibcall;
+def ADD_I32_I8 : RuntimeLibcall;
+def ADD_I64 : RuntimeLibcall;
+def SUB_I32 : RuntimeLibcall;
+def SUB_I64 : RuntimeLibcall;
+
+foreach IntTy = ["I32", "I48", "I64"] in {
+  def CMP_#IntTy : RuntimeLibcall;
+}
+
+foreach IntTy = ["I16", "I24", "I32", "I48", "I64"] in {
+  def CMP_#IntTy#_0 : RuntimeLibcall;
+}
+
+foreach IntTy = ["I32", "I48", "I64"] in {
+  def SCMP_#IntTy : RuntimeLibcall;
+}
+
+def SCMP : RuntimeLibcall;
+
+foreach IntTy = ["I8", "I16", "I24", "I32", "I48", "I64"] in {
+  def BITREV_#IntTy : RuntimeLibcall;
+}
+
+foreach IntTy = ["I32", "I48", "I64"] in {
+  def BSWAP_#IntTy : RuntimeLibcall;
+}
+
+foreach IntTy = ["I8", "I16", "I24", "I32", "I48", "I64"] in {
+  def POPCNT_#IntTy : RuntimeLibcall;
+}
+
+def ZEXT_I16_I24 : RuntimeLibcall;
+def SEXT_I16_I24 : RuntimeLibcall;
+def SEXT_I24_I32 : RuntimeLibcall;
+
+def NEG_F32 : RuntimeLibcall;
+def NEG_F64 : RuntimeLibcall;
+def CMP_F32 : RuntimeLibcall;
+def CMP_F64 : RuntimeLibcall;
+
 foreach FPTy = ["F32", "F64", "F80", "F128", "PPCF128"] in {
   def ADD_#FPTy : RuntimeLibcall;
   def FAST_ADD_#FPTy : RuntimeLibcall;
@@ -2140,8 +2224,269 @@ def __memcpy_4 : RuntimeLibcallImpl<MEMCPY_ALIGN_4>;
 
 def isXCore : RuntimeLibcallPredicate<"TT.getArch() == Triple::xcore">;
 def XCoreSystemLibrary
-    : SystemRuntimeLibrary<isXCore, (add DefaultRuntimeLibcallImpls,
-                                        __memcpy_4)>;
+  : SystemRuntimeLibrary<isXCore, (add DefaultRuntimeLibcallImpls,
+                    __memcpy_4)>;
+
+//===----------------------------------------------------------------------===//
+// Z80 Runtime Libcalls
+//===----------------------------------------------------------------------===//
+
+def Z80_LibCall_CC : LibcallCallingConv<[{CallingConv::Z80_LibCall}]>;
+def Z80_LibCall_AB_CC : LibcallCallingConv<[{CallingConv::Z80_LibCall_AB}]>;
+def Z80_LibCall_AC_CC : LibcallCallingConv<[{CallingConv::Z80_LibCall_AC}]>;
+def Z80_LibCall_BC_CC : LibcallCallingConv<[{CallingConv::Z80_LibCall_BC}]>;
+def Z80_LibCall_L_CC : LibcallCallingConv<[{CallingConv::Z80_LibCall_L}]>;
+def Z80_LibCall_F_CC : LibcallCallingConv<[{CallingConv::Z80_LibCall_F}]>;
+def Z80_LibCall_16_CC : LibcallCallingConv<[{CallingConv::Z80_LibCall_16}]>;
+def Z80_LibCall_BC_A_ret_BC_CC
+  : LibcallCallingConv<[{CallingConv::Z80_LibCall_BC_A_ret_BC}]>;
+def Z80_LibCall_HL_A_ret_HL_CC
+  : LibcallCallingConv<[{CallingConv::Z80_LibCall_HL_A_ret_HL}]>;
+
+def Z80Always_Default : RuntimeLibcallPredicate<[{}]>;
+def Z80Always_AB : RuntimeLibcallPredicate<[{}]>;
+def Z80Always_HL_A_ret_HL : RuntimeLibcallPredicate<[{}]>;
+def Z80Always_AC : RuntimeLibcallPredicate<[{}]>;
+def Z80Always_L : RuntimeLibcallPredicate<[{}]>;
+def Z80Always_BC_A_ret_BC : RuntimeLibcallPredicate<[{}]>;
+def Z80Always_F : RuntimeLibcallPredicate<[{}]>;
+def Z80Always_BC : RuntimeLibcallPredicate<[{}]>;
+def Z80Always_16 : RuntimeLibcallPredicate<[{}]>;
+
+def z80_stoiu : RuntimeLibcallImpl<ZEXT_I16_I24, "_stoiu">;
+def z80_stoi : RuntimeLibcallImpl<SEXT_I16_I24, "_stoi">;
+def z80_itol : RuntimeLibcallImpl<SEXT_I24_I32, "_itol">;
+def z80_snot : RuntimeLibcallImpl<NOT_I16, "_snot">;
+def z80_inot : RuntimeLibcallImpl<NOT_I24, "_inot">;
+def z80_lnot : RuntimeLibcallImpl<NOT_I32, "_lnot">;
+def z80_i48not : RuntimeLibcallImpl<NOT_I48, "_i48not">;
+def z80_llnot : RuntimeLibcallImpl<NOT_I64, "_llnot">;
+def z80_sand : RuntimeLibcallImpl<AND_I16, "_sand">;
+def z80_iand : RuntimeLibcallImpl<AND_I24, "_iand">;
+def z80_land : RuntimeLibcallImpl<AND_I32, "_land">;
+def z80_i48and : RuntimeLibcallImpl<AND_I48, "_i48and">;
+def z80_lland : RuntimeLibcallImpl<AND_I64, "_lland">;
+def z80_sor : RuntimeLibcallImpl<OR_I16, "_sor">;
+def z80_ior : RuntimeLibcallImpl<OR_I24, "_ior">;
+def z80_lor : RuntimeLibcallImpl<OR_I32, "_lor">;
+def z80_i48or : RuntimeLibcallImpl<OR_I48, "_i48or">;
+def z80_llor : RuntimeLibcallImpl<OR_I64, "_llor">;
+def z80_sxor : RuntimeLibcallImpl<XOR_I16, "_sxor">;
+def z80_ixor : RuntimeLibcallImpl<XOR_I24, "_ixor">;
+def z80_lxor : RuntimeLibcallImpl<XOR_I32, "_lxor">;
+def z80_i48xor : RuntimeLibcallImpl<XOR_I48, "_i48xor">;
+def z80_llxor : RuntimeLibcallImpl<XOR_I64, "_llxor">;
+def z80_bshl : RuntimeLibcallImpl<SHL_I8, "_bshl">;
+def z80_sshl : RuntimeLibcallImpl<SHL_I16, "_sshl">;
+def z80_ishl : RuntimeLibcallImpl<SHL_I24, "_ishl">;
+def z80_lshl : RuntimeLibcallImpl<SHL_I32, "_lshl">;
+def z80_i48shl : RuntimeLibcallImpl<SHL_I48, "_i48shl">;
+def z80_llshl : RuntimeLibcallImpl<SHL_I64, "_llshl">;
+def z80_sshl_b : RuntimeLibcallImpl<SHL_I16_I8, "_sshl_b">;
+def z80_ishl_b : RuntimeLibcallImpl<SHL_I24_I8, "_ishl_b">;
+def z80_bshrs : RuntimeLibcallImpl<SRA_I8, "_bshrs">;
+def z80_sshrs : RuntimeLibcallImpl<SRA_I16, "_sshrs">;
+def z80_ishrs : RuntimeLibcallImpl<SRA_I24, "_ishrs">;
+def z80_lshrs : RuntimeLibcallImpl<SRA_I32, "_lshrs">;
+def z80_i48shrs : RuntimeLibcallImpl<SRA_I48, "_i48shrs">;
+def z80_llshrs : RuntimeLibcallImpl<SRA_I64, "_llshrs">;
+def z80_sshrs_b : RuntimeLibcallImpl<SRA_I16_I8, "_sshrs_b">;
+def z80_ishrs_b : RuntimeLibcallImpl<SRA_I24_I8, "_ishrs_b">;
+def z80_bshru : RuntimeLibcallImpl<SRL_I8, "_bshru">;
+def z80_sshru : RuntimeLibcallImpl<SRL_I16, "_sshru">;
+def z80_ishru : RuntimeLibcallImpl<SRL_I24, "_ishru">;
+def z80_lshru : RuntimeLibcallImpl<SRL_I32, "_lshru">;
+def z80_i48shru : RuntimeLibcallImpl<SRL_I48, "_i48shru">;
+def z80_llshru : RuntimeLibcallImpl<SRL_I64, "_llshru">;
+def z80_sshru_b : RuntimeLibcallImpl<SRL_I16_I8, "_sshru_b">;
+def z80_ishru_b : RuntimeLibcallImpl<SRL_I24_I8, "_ishru_b">;
+def z80_sneg : RuntimeLibcallImpl<NEG_I16, "_sneg">;
+def z80_ineg : RuntimeLibcallImpl<NEG_I24, "_ineg">;
+def z80_lneg : RuntimeLibcallImpl<NEG_I32, "_lneg">;
+def z80_i48neg : RuntimeLibcallImpl<NEG_I48, "_i48neg">;
+def z80_llneg : RuntimeLibcallImpl<NEG_I64, "_llneg">;
+def z80_ladd : RuntimeLibcallImpl<ADD_I32, "_ladd">;
+def z80_ladd_b : RuntimeLibcallImpl<ADD_I32_I8, "_ladd_b">;
+def z80_lladd : RuntimeLibcallImpl<ADD_I64, "_lladd">;
+def z80_lsub : RuntimeLibcallImpl<SUB_I32, "_lsub">;
+def z80_llsub : RuntimeLibcallImpl<SUB_I64, "_llsub">;
+def z80_bmulu : RuntimeLibcallImpl<MUL_I8, "_bmulu">;
+def z80_smulu : RuntimeLibcallImpl<MUL_I16, "_smulu">;
+def z80_imulu : RuntimeLibcallImpl<MUL_I24, "_imulu">;
+def z80_imul_b : RuntimeLibcallImpl<MUL_I24_I8, "_imul_b">;
+def z80_lmulu : RuntimeLibcallImpl<MUL_I32, "_lmulu">;
+def z80_i48mulu : RuntimeLibcallImpl<MUL_I48, "_i48mulu">;
+def z80_llmulu : RuntimeLibcallImpl<MUL_I64, "_llmulu">;
+def z80_bdivs : RuntimeLibcallImpl<SDIV_I8, "_bdivs">;
+def z80_sdivs : RuntimeLibcallImpl<SDIV_I16, "_sdivs">;
+def z80_idivs : RuntimeLibcallImpl<SDIV_I24, "_idivs">;
+def z80_ldivs : RuntimeLibcallImpl<SDIV_I32, "_ldivs">;
+def z80_i48divs : RuntimeLibcallImpl<SDIV_I48, "_i48divs">;
+def z80_lldivs : RuntimeLibcallImpl<SDIV_I64, "_lldivs">;
+def z80_bdivu : RuntimeLibcallImpl<UDIV_I8, "_bdivu">;
+def z80_sdivu : RuntimeLibcallImpl<UDIV_I16, "_sdivu">;
+def z80_idivu : RuntimeLibcallImpl<UDIV_I24, "_idivu">;
+def z80_ldivu : RuntimeLibcallImpl<UDIV_I32, "_ldivu">;
+def z80_i48divu : RuntimeLibcallImpl<UDIV_I48, "_i48divu">;
+def z80_lldivu : RuntimeLibcallImpl<UDIV_I64, "_lldivu">;
+def z80_brems : RuntimeLibcallImpl<SREM_I8, "_brems">;
+def z80_srems : RuntimeLibcallImpl<SREM_I16, "_srems">;
+def z80_irems : RuntimeLibcallImpl<SREM_I24, "_irems">;
+def z80_lrems : RuntimeLibcallImpl<SREM_I32, "_lrems">;
+def z80_i48rems : RuntimeLibcallImpl<SREM_I48, "_i48rems">;
+def z80_llrems : RuntimeLibcallImpl<SREM_I64, "_llrems">;
+def z80_bremu : RuntimeLibcallImpl<UREM_I8, "_bremu">;
+def z80_sremu : RuntimeLibcallImpl<UREM_I16, "_sremu">;
+def z80_iremu : RuntimeLibcallImpl<UREM_I24, "_iremu">;
+def z80_lremu : RuntimeLibcallImpl<UREM_I32, "_lremu">;
+def z80_i48remu : RuntimeLibcallImpl<UREM_I48, "_i48remu">;
+def z80_llremu : RuntimeLibcallImpl<UREM_I64, "_llremu">;
+def z80_idvrmu : RuntimeLibcallImpl<UDIVREM_I24, "_idvrmu">;
+def z80_ldvrmu : RuntimeLibcallImpl<UDIVREM_I32, "_ldvrmu">;
+def z80_i48dvrmu : RuntimeLibcallImpl<UDIVREM_I48, "_i48dvrmu">;
+def z80_sctlz : RuntimeLibcallImpl<CTLZ_I16, "_sctlz">;
+def z80_bctlz : RuntimeLibcallImpl<CTLZ_I8, "_bctlz">;
+def z80_ictlz : RuntimeLibcallImpl<CTLZ_I24, "_ictlz">;
+def z80_lctlz : RuntimeLibcallImpl<CTLZ_I32, "_lctlz">;
+def z80_i48ctlz : RuntimeLibcallImpl<CTLZ_I48, "_i48ctlz">;
+def z80_llctlz : RuntimeLibcallImpl<CTLZ_I64, "_llctlz">;
+def z80_bpopcnt : RuntimeLibcallImpl<POPCNT_I8, "_bpopcnt">;
+def z80_spopcnt : RuntimeLibcallImpl<POPCNT_I16, "_spopcnt">;
+def z80_ipopcnt : RuntimeLibcallImpl<POPCNT_I24, "_ipopcnt">;
+def z80_lpopcnt : RuntimeLibcallImpl<POPCNT_I32, "_lpopcnt">;
+def z80_i48popcnt : RuntimeLibcallImpl<POPCNT_I48, "_i48popcnt">;
+def z80_llpopcnt : RuntimeLibcallImpl<POPCNT_I64, "_llpopcnt">;
+def z80_bbitrev : RuntimeLibcallImpl<BITREV_I8, "_bbitrev">;
+def z80_sbitrev : RuntimeLibcallImpl<BITREV_I16, "_sbitrev">;
+def z80_ibitrev : RuntimeLibcallImpl<BITREV_I24, "_ibitrev">;
+def z80_lbitrev : RuntimeLibcallImpl<BITREV_I32, "_lbitrev">;
+def z80_i48bitrev : RuntimeLibcallImpl<BITREV_I48, "_i48bitrev">;
+def z80_llbitrev : RuntimeLibcallImpl<BITREV_I64, "_llbitrev">;
+def z80_lbswap : RuntimeLibcallImpl<BSWAP_I32, "_lbswap">;
+def z80_i48bswap : RuntimeLibcallImpl<BSWAP_I48, "_i48bswap">;
+def z80_llbswap : RuntimeLibcallImpl<BSWAP_I64, "_llbswap">;
+def z80_lcmpu : RuntimeLibcallImpl<CMP_I32, "_lcmpu">;
+def z80_i48cmpu : RuntimeLibcallImpl<CMP_I48, "_i48cmpu">;
+def z80_llcmpu : RuntimeLibcallImpl<CMP_I64, "_llcmpu">;
+def z80_scmpzero : RuntimeLibcallImpl<CMP_I16_0, "_scmpzero">;
+def z80_icmpzero : RuntimeLibcallImpl<CMP_I24_0, "_icmpzero">;
+def z80_lcmpzero : RuntimeLibcallImpl<CMP_I32_0, "_lcmpzero">;
+def z80_i48cmpzero : RuntimeLibcallImpl<CMP_I48_0, "_i48cmpzero">;
+def z80_llcmpzero : RuntimeLibcallImpl<CMP_I64_0, "_llcmpzero">;
+def z80_lcmps : RuntimeLibcallImpl<SCMP_I32, "_lcmps">;
+def z80_i48cmps : RuntimeLibcallImpl<SCMP_I48, "_i48cmps">;
+def z80_llcmps : RuntimeLibcallImpl<SCMP_I64, "_llcmps">;
+def z80_setflag : RuntimeLibcallImpl<SCMP, "_setflag">;
+def z80_fadd : RuntimeLibcallImpl<ADD_F32, "_fadd">;
+def z80_fsub : RuntimeLibcallImpl<SUB_F32, "_fsub">;
+def z80_fmul : RuntimeLibcallImpl<MUL_F32, "_fmul">;
+def z80_fdiv : RuntimeLibcallImpl<DIV_F32, "_fdiv">;
+def z80_frem : RuntimeLibcallImpl<REM_F32, "_frem">;
+def z80_fneg : RuntimeLibcallImpl<NEG_F32, "_fneg">;
+def z80_fcmp : RuntimeLibcallImpl<CMP_F32, "_fcmp">;
+def z80_ftol : RuntimeLibcallImpl<FPTOSINT_F32_I32, "_ftol">;
+def z80_ftoll : RuntimeLibcallImpl<FPTOSINT_F32_I64, "_ftoll">;
+def z80_ftoul : RuntimeLibcallImpl<FPTOUINT_F32_I32, "_ftoul">;
+def z80_ftoull : RuntimeLibcallImpl<FPTOUINT_F32_I64, "_ftoull">;
+def z80_ltof : RuntimeLibcallImpl<SINTTOFP_I32_F32, "_ltof">;
+def z80_lltof : RuntimeLibcallImpl<SINTTOFP_I64_F32, "_lltof">;
+def z80_ultof : RuntimeLibcallImpl<UINTTOFP_I32_F32, "_ultof">;
+def z80_ulltof : RuntimeLibcallImpl<UINTTOFP_I64_F32, "_ulltof">;
+def z80_dadd : RuntimeLibcallImpl<ADD_F64, "_dadd">;
+def z80_dsub : RuntimeLibcallImpl<SUB_F64, "_dsub">;
+def z80_dmul : RuntimeLibcallImpl<MUL_F64, "_dmul">;
+def z80_ddiv : RuntimeLibcallImpl<DIV_F64, "_ddiv">;
+def z80_drem : RuntimeLibcallImpl<REM_F64, "_drem">;
+def z80_dneg : RuntimeLibcallImpl<NEG_F64, "_dneg">;
+def z80_dcmp : RuntimeLibcallImpl<CMP_F64, "_dcmp">;
+def z80_ftod : RuntimeLibcallImpl<FPEXT_F32_F64, "_ftod">;
+def z80_dtof : RuntimeLibcallImpl<FPROUND_F64_F32, "_dtof">;
+def z80_dtol : RuntimeLibcallImpl<FPTOSINT_F64_I32, "_dtol">;
+def z80_dtoll : RuntimeLibcallImpl<FPTOSINT_F64_I64, "_dtoll">;
+def z80_dtoul : RuntimeLibcallImpl<FPTOUINT_F64_I32, "_dtoul">;
+def z80_dtoull : RuntimeLibcallImpl<FPTOUINT_F64_I64, "_dtoull">;
+def z80_ltod : RuntimeLibcallImpl<SINTTOFP_I32_F64, "_ltod">;
+def z80_lltod : RuntimeLibcallImpl<SINTTOFP_I64_F64, "_lltod">;
+def z80_ultod : RuntimeLibcallImpl<UINTTOFP_I32_F64, "_ultod">;
+def z80_ulltod : RuntimeLibcallImpl<UINTTOFP_I64_F64, "_ulltod">;
+
+def Z80_LibCall_Libcalls
+  : LibcallsWithCC<(add
+    z80_stoiu, z80_stoi, z80_itol, z80_snot, z80_inot, z80_lnot,
+    z80_i48not, z80_llnot, z80_sand, z80_iand, z80_land, z80_i48and,
+    z80_lland, z80_sor, z80_ior, z80_lor, z80_i48or, z80_llor, z80_sxor,
+    z80_ixor, z80_lxor, z80_i48xor, z80_llxor, z80_ishl, z80_i48shl,
+    z80_llshl, z80_sshrs, z80_ishrs, z80_i48shrs, z80_llshrs, z80_ishru,
+    z80_i48shru, z80_llshru, z80_sneg, z80_ineg, z80_lneg, z80_i48neg,
+    z80_llneg, z80_ladd, z80_lladd, z80_lsub, z80_llsub, z80_smulu,
+    z80_imulu, z80_lmulu, z80_i48mulu, z80_llmulu, z80_idivs, z80_ldivs,
+    z80_i48divs, z80_lldivs, z80_idivu, z80_ldivu, z80_i48divu, z80_lldivu,
+    z80_irems, z80_lrems, z80_i48rems, z80_llrems, z80_iremu, z80_lremu,
+    z80_i48remu, z80_llremu, z80_idvrmu, z80_ldvrmu, z80_i48dvrmu,
+    z80_sctlz, z80_ictlz, z80_lctlz, z80_i48ctlz, z80_llctlz, z80_spopcnt,
+    z80_ipopcnt, z80_lpopcnt, z80_i48popcnt, z80_llpopcnt, z80_sbitrev,
+    z80_ibitrev, z80_lbitrev, z80_i48bitrev, z80_llbitrev, z80_lbswap,
+    z80_i48bswap, z80_llbswap, z80_ftoll, z80_ftoull, z80_lltof, z80_ulltof,
+    z80_dadd, z80_dsub, z80_dmul, z80_ddiv, z80_drem, z80_dneg, z80_ftod,
+    z80_dtof, z80_dtol, z80_dtoll, z80_dtoul, z80_dtoull, z80_ltod,
+    z80_lltod, z80_ultod, z80_ulltod),
+    Z80_LibCall_CC, Z80Always_Default>;
+
+def Z80_LibCall_AB_Libcalls
+  : LibcallsWithCC<(add z80_bshl, z80_bshrs, z80_bshru),
+           Z80_LibCall_AB_CC, Z80Always_AB>;
+
+def Z80_LibCall_HL_A_ret_HL_Libcalls
+  : LibcallsWithCC<(add z80_sshl), Z80_LibCall_HL_A_ret_HL_CC,
+           Z80Always_HL_A_ret_HL>;
+
+def Z80_LibCall_AC_Libcalls
+  : LibcallsWithCC<(add
+    z80_sshl_b, z80_ishl_b, z80_sshrs_b, z80_ishrs_b, z80_sshru_b,
+    z80_ishru_b, z80_ladd_b, z80_imul_b, z80_brems, z80_bremu, z80_bctlz,
+    z80_bpopcnt, z80_bbitrev),
+    Z80_LibCall_AC_CC, Z80Always_AC>;
+
+def Z80_LibCall_L_Libcalls
+  : LibcallsWithCC<(add
+    z80_lshl, z80_lshrs, z80_lshru, z80_fadd, z80_fsub, z80_fmul,
+    z80_fdiv, z80_frem, z80_fneg, z80_ftol, z80_ftoul, z80_ltof,
+    z80_ultof),
+    Z80_LibCall_L_CC, Z80Always_L>;
+
+def Z80_LibCall_BC_A_ret_BC_Libcalls
+  : LibcallsWithCC<(add z80_sshru), Z80_LibCall_BC_A_ret_BC_CC,
+           Z80Always_BC_A_ret_BC>;
+
+def Z80_LibCall_F_Libcalls
+  : LibcallsWithCC<(add
+    z80_lcmpu, z80_i48cmpu, z80_llcmpu, z80_scmpzero, z80_icmpzero,
+    z80_lcmpzero, z80_i48cmpzero, z80_llcmpzero, z80_lcmps, z80_i48cmps,
+    z80_llcmps, z80_setflag, z80_fcmp, z80_dcmp),
+    Z80_LibCall_F_CC, Z80Always_F>;
+
+def Z80_LibCall_BC_Libcalls
+  : LibcallsWithCC<(add z80_bmulu, z80_bdivs, z80_bdivu),
+           Z80_LibCall_BC_CC, Z80Always_BC>;
+
+def Z80_LibCall_16_Libcalls
+  : LibcallsWithCC<(add z80_sdivs, z80_sdivu, z80_srems, z80_sremu),
+           Z80_LibCall_16_CC, Z80Always_16>;
+
+def isZ80 : RuntimeLibcallPredicate<"TT.getArch() == Triple::z80">;
+
+def Z80SystemLibrary
+  : SystemRuntimeLibrary<isZ80,
+    (add DefaultRuntimeLibcallImpls,
+       Z80_LibCall_Libcalls,
+       Z80_LibCall_AB_Libcalls,
+       Z80_LibCall_HL_A_ret_HL_Libcalls,
+       Z80_LibCall_AC_Libcalls,
+       Z80_LibCall_L_Libcalls,
+       Z80_LibCall_BC_A_ret_BC_Libcalls,
+       Z80_LibCall_F_Libcalls,
+       Z80_LibCall_BC_Libcalls,
+       Z80_LibCall_16_Libcalls)>;
 
 //===----------------------------------------------------------------------===//
 // ZOS Runtime Libcalls

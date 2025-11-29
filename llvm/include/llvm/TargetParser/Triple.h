@@ -108,7 +108,9 @@ public:
     renderscript32, // 32-bit RenderScript
     renderscript64, // 64-bit RenderScript
     ve,             // NEC SX-Aurora Vector Engine
-    LastArchType = ve
+    z80,            // Zilog Z80
+    ez80,           // eZ80
+    LastArchType = ez80
   };
   enum SubArchType {
     NoSubArch,

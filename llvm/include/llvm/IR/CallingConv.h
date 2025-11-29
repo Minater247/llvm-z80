@@ -284,6 +284,23 @@ namespace CallingConv {
     RISCV_VLSCall_32768 = 122,
     RISCV_VLSCall_65536 = 123,
 
+    /// Calling convention for passing an OS-defined constant in the IY
+    /// register.
+    Z80_TIFlags = 200,
+
+    /// Calling conventions used for special Z80 runtime library functions
+    /// which pass arguments in registers and preserve all registers.
+    Z80_LibCall = 201,
+    Z80_LibCall_AB = 202,
+    Z80_LibCall_AC = 203,
+    Z80_LibCall_BC = 204,
+    Z80_LibCall_L = 205,
+    Z80_LibCall_F = 206,
+    Z80_LibCall_16 = 207,
+    Z80_LibCall_BC_A_ret_BC = 208,
+    Z80_LibCall_HL_A_ret_HL = 209,
+    Z80_LibCall_End,
+
     /// The highest possible ID. Must be some 2^k - 1.
     MaxID = 1023
   };
