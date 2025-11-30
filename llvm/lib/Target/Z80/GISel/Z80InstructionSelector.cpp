@@ -210,6 +210,14 @@ Z80InstructionSelector::getRegClass(Register Reg,
   return selectRRegClass(Reg, MRI);
 }
 
+static MachineInstr *getDefIgnoringCopies(Register Reg,
+                                          MachineRegisterInfo &MRI) {
+  MachineInstr *Def = MRI.getVRegDef(Reg);
+  while (Def && Def->isCopy())
+    Def = MRI.getVRegDef(Def->getOperand(1).getReg());
+  return Def;
+}
+
 static int64_t getSubRegIndex(unsigned Width, unsigned Off = 0) {
   switch (Width) {
   case 8:
@@ -2221,12 +2229,115 @@ bool Z80InstructionSelector::selectInlineAsm(MachineInstr &I,
 
 InstructionSelector::ComplexRendererFns
 Z80InstructionSelector::selectMem(MachineOperand &MO) const {
-  llvm_unreachable("Unimplemented!");
+  if (!MO.isReg())
+    return std::nullopt;
+
+  MachineInstr *I = MO.getParent();
+  if (!I)
+    return std::nullopt;
+  MachineFunction *MF = I->getMF();
+  if (!MF)
+    return std::nullopt;
+  MachineRegisterInfo &MRI = MF->getRegInfo();
+
+  auto ImmRenderer = [](int64_t Imm) {
+    return ComplexRendererFns{
+        {[=](MachineInstrBuilder &MIB) { MIB.addImm(Imm); }}};
+  };
+
+  auto *Def = getDefIgnoringCopies(MO.getReg(), MRI);
+  if (!Def)
+    return std::nullopt;
+
+  switch (Def->getOpcode()) {
+  case TargetOpcode::G_INTTOPTR:
+    if (MachineInstr *SrcDef =
+            getDefIgnoringCopies(Def->getOperand(1).getReg(), MRI)) {
+      if (SrcDef->getOpcode() == TargetOpcode::G_CONSTANT) {
+        auto Imm = SrcDef->getOperand(1).getCImm()->getSExtValue();
+        return ImmRenderer(Imm);
+      }
+    }
+    break;
+  case TargetOpcode::G_CONSTANT:
+    return ImmRenderer(Def->getOperand(1).getCImm()->getSExtValue());
+  case TargetOpcode::G_GLOBAL_VALUE:
+  case TargetOpcode::G_BLOCK_ADDR:
+  case TargetOpcode::G_JUMP_TABLE:
+  case TargetOpcode::G_CONSTANT_POOL: {
+    MachineOperand AddrMO = Def->getOperand(1);
+    return ComplexRendererFns{
+        {[=](MachineInstrBuilder &MIB) { MIB.add(AddrMO); }}};
+  }
+  default:
+    break;
+  }
+
+  return std::nullopt;
 }
 
 InstructionSelector::ComplexRendererFns
 Z80InstructionSelector::selectOff(MachineOperand &MO) const {
-  llvm_unreachable("Unimplemented!");
+  if (!MO.isReg())
+    return std::nullopt;
+
+  MachineInstr *I = MO.getParent();
+  if (!I)
+    return std::nullopt;
+  MachineFunction *MF = I->getMF();
+  if (!MF)
+    return std::nullopt;
+  MachineRegisterInfo &MRI = MF->getRegInfo();
+
+  auto *Def = getDefIgnoringCopies(MO.getReg(), MRI);
+  if (!Def)
+    return std::nullopt;
+
+  auto RenderBaseAndOff = [](MachineOperand Base, int64_t Off) {
+    return ComplexRendererFns{{[=](MachineInstrBuilder &MIB) { MIB.add(Base); },
+                               [=](MachineInstrBuilder &MIB) {
+                                 MIB.addImm(Off);
+                               }}};
+  };
+  auto RenderRegAndImm = [](Register BaseReg, int64_t Off) {
+    return ComplexRendererFns{{[=](MachineInstrBuilder &MIB) {
+                                 MIB.addReg(BaseReg);
+                               },
+                               [=](MachineInstrBuilder &MIB) {
+                                 MIB.addImm(Off);
+                               }}};
+  };
+
+  switch (Def->getOpcode()) {
+  case TargetOpcode::G_FRAME_INDEX:
+    return RenderBaseAndOff(Def->getOperand(1), 0);
+  case TargetOpcode::G_PTR_ADD:
+  case TargetOpcode::G_SUB: {
+    Register BaseReg = Def->getOperand(1).getReg();
+    auto OffsetConst = getIConstantVRegVal(Def->getOperand(2).getReg(), MRI);
+    if (!OffsetConst)
+      break;
+
+    int64_t Off = OffsetConst->getSExtValue();
+    if (Def->getOpcode() == TargetOpcode::G_SUB)
+      Off = -Off;
+
+    if (MachineInstr *BaseDef = getDefIgnoringCopies(BaseReg, MRI)) {
+      if (BaseDef->getOpcode() == TargetOpcode::G_FRAME_INDEX) {
+        MachineOperand FI = BaseDef->getOperand(1);
+        FI.setOffset(FI.getOffset() + Off);
+        return RenderBaseAndOff(FI, 0);
+      }
+    }
+
+    return RenderRegAndImm(BaseReg, Off);
+  }
+  default:
+    break;
+  }
+
+  // Fallback: treat the value as a base register with zero offset.
+  return RenderRegAndImm(MO.getReg(), 0);
 }
 
 InstructionSelector *

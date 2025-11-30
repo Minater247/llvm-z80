@@ -742,7 +742,6 @@ bool Z80CallLowering::lowerFormalArguments(MachineIRBuilder &MIRBuilder,
   MachineRegisterInfo &MRI = MF.getRegInfo();
   const DataLayout &DL = MF.getDataLayout();
   auto &FuncInfo = *MF.getInfo<Z80MachineFunctionInfo>();
-
   SmallVector<ArgInfo, 8> SplitArgs;
   unsigned Idx = 0;
   for (auto &Arg : F.args()) {

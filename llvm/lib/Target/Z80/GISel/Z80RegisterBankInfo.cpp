@@ -37,7 +37,8 @@ Z80RegisterBankInfo::Z80RegisterBankInfo(const TargetRegisterInfo &TRI) {
   // R24 + its subclasses.
   assert(RBGPR.covers(*TRI.getRegClass(Z80::R24RegClassID)) &&
          "Subclass not added?");
-  assert(RBGPR.getSize() == 24 && "GPRs should hold up to 24-bits");
+  assert(getMaximumSize(Z80::GPRRegBankID) == 24 &&
+         "GPRs should hold up to 24-bits");
 }
 
 const RegisterBank &

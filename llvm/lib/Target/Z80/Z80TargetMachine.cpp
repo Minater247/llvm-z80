@@ -16,6 +16,7 @@
 #include "Z80.h"
 #include "Z80Subtarget.h"
 #include "Z80TargetObjectFile.h"
+#include "Z80MachineFunctionInfo.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/CodeGen/GlobalISel/CSEInfo.h"
@@ -53,8 +54,8 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeZ80Target() {
 static std::string computeDataLayout(const Triple &TT) {
   bool IsEZ80 = TT.getArch() == Triple::ez80;
   bool Is16Bit = TT.isArch16Bit() || TT.getEnvironment() == Triple::CODE16;
-  // Z80 is little endian and mangling is Z80.
-  std::string Ret = "e-m:z";
+  // Z80 is little endian and uses ELF-style mangling.
+  std::string Ret = "e-m:e";
   // Memory Address Width
   Ret += Is16Bit ? "-p:16:8" : "-p:24:8";
   // Other Address Width
@@ -69,6 +70,13 @@ static std::string computeDataLayout(const Triple &TT) {
     Ret += ":24";
   Ret += "-S8";
   return Ret;
+}
+
+MachineFunctionInfo *Z80TargetMachine::createMachineFunctionInfo(
+    BumpPtrAllocator &Allocator, const Function &F,
+    const TargetSubtargetInfo *STI) const {
+  return Z80MachineFunctionInfo::create<Z80MachineFunctionInfo>(Allocator, F,
+                                                                STI);
 }
 
 static Reloc::Model getEffectiveRelocModel(std::optional<Reloc::Model> RM) {

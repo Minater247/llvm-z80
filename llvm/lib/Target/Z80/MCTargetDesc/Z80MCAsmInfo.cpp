@@ -44,7 +44,7 @@ Z80MCAsmInfoELF::Z80MCAsmInfoELF(const Triple &T) {
   UseLogicalShr = false;
 
   SupportsDebugInformation = true;
-  ExceptionsType = ExceptionHandling::DwarfCFI;
+  ExceptionsType = ExceptionHandling::DwarfCFI; // TODO: This crashes on DwarfCFI - determine why and fix
 }
 
 bool Z80MCAsmInfoELF::isAcceptableChar(char C) const {

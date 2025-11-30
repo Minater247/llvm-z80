@@ -443,15 +443,13 @@ let Defs = [UHL], Uses = [I, MB] in
 def LD24ai : I24<EDPre, 0xD7, "ld", "\thl, i">;
 
 let isMoveImm = true, isReMaterializable = true in {
-  let Defs = [F] in {
-    def LD8r0   : Pseudo<"ld", "\t$dst, 0",  "",
-                         (outs  R8:$dst), (ins), [(set  R8:$dst,  0)]>;
-    def LD24r0  : Pseudo<"ld", "\t$dst, 0",  "",
-                         (outs R24:$dst), (ins), [(set R24:$dst,  0)]>;
-    def LD24r_1 : Pseudo<"ld", "\t$dst, -1", "",
-                         (outs R24:$dst), (ins), [(set R24:$dst,
-                                                       !sub(!shl(1, 24), 1))]>;
-  }
+  def LD8r0   : Pseudo<"ld", "\t$dst, 0",  "",
+                       (outs  R8:$dst), (ins), [(set  R8:$dst,  0)]>;
+  def LD24r0  : Pseudo<"ld", "\t$dst, 0",  "",
+                       (outs R24:$dst), (ins), [(set R24:$dst,  0)]>;
+  def LD24r_1 : Pseudo<"ld", "\t$dst, -1", "",
+                       (outs R24:$dst), (ins), [(set R24:$dst,
+                                                     !sub(!shl(1, 24), 1))]>;
   def LD8ri  : Ii  <Idx0Pre, 0x06, "ld", "\t$dst, $src", "",
                     (outs  R8:$dst), (ins  i8imm:$src),
                     [(set  R8:$dst, imm:$src)]>;
@@ -527,14 +525,14 @@ let mayLoad = true, canFoldAsLoad = true, isReMaterializable = true in {
 }
 def : Pat<(i16 (extloadi8  mempat:$src)), (LD16rm mem:$src)>;
 def : Pat<(i16 (extloadi8    iPTR:$src)),
-          (INSERT_SUBREG (IMPLICIT_DEF), (LD8rp aptr:$src), sub_low)>;
+          (INSERT_SUBREG (i16 (IMPLICIT_DEF)), (LD8rp aptr:$src), sub_low)>;
 def : Pat<(i16 (extloadi8  offpat:$src)),
-          (INSERT_SUBREG (IMPLICIT_DEF), (LD8ro off:$src), sub_low)>;
+          (INSERT_SUBREG (i16 (IMPLICIT_DEF)), (LD8ro off:$src), sub_low)>;
 def : Pat<(i24 (extloadi8  mempat:$src)), (LD24rm mem:$src)>;
 def : Pat<(i24 (extloadi8    iPTR:$src)),
-          (INSERT_SUBREG (IMPLICIT_DEF), (LD8rp aptr:$src), sub_low)>;
+          (INSERT_SUBREG (i24 (IMPLICIT_DEF)), (LD8rp aptr:$src), sub_low)>;
 def : Pat<(i24 (extloadi8  offpat:$src)),
-          (INSERT_SUBREG (IMPLICIT_DEF), (LD8ro off:$src), sub_low)>;
+          (INSERT_SUBREG (i24 (IMPLICIT_DEF)), (LD8ro off:$src), sub_low)>;
 def : Pat<(i24 (extloadi16 mempat:$src)), (LD24rm  mem:$src)>;
 def : Pat<(i24 (extloadi16   iPTR:$src)), (LD24rp aptr:$src)>;
 def : Pat<(i24 (extloadi16 offpat:$src)), (LD24ro  off:$src)>;
@@ -1377,11 +1375,11 @@ def : Pat<(Z80tcret (texternalsym:$dst)), (TCRETURN24 texternalsym:$dst)>,
 
 // anyext
 def : Pat<(i16 (anyext R8 :$src)),
-          (INSERT_SUBREG (IMPLICIT_DEF), R8 :$src, sub_low)>;
+          (INSERT_SUBREG (i16 (IMPLICIT_DEF)), R8 :$src, sub_low)>;
 def : Pat<(i24 (anyext R8 :$src)),
-          (INSERT_SUBREG (IMPLICIT_DEF), R8 :$src, sub_low)>;
+          (INSERT_SUBREG (i24 (IMPLICIT_DEF)), R8 :$src, sub_low)>;
 def : Pat<(i24 (anyext R16:$src)),
-          (INSERT_SUBREG (IMPLICIT_DEF), R16:$src, sub_short)>;
+          (INSERT_SUBREG (i24 (IMPLICIT_DEF)), R16:$src, sub_short)>;
 
 // zext
 def : Pat<(i16 (zext R8 :$src)),

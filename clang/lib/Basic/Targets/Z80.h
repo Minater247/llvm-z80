@@ -1,0 +1,120 @@
+//===--- Z80.h - Declare Z80 target feature support -------------*- C++ -*-===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//===----------------------------------------------------------------------===//
+//
+// This file declares Z80 TargetInfo objects.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef LLVM_CLANG_LIB_BASIC_TARGETS_Z80_H
+#define LLVM_CLANG_LIB_BASIC_TARGETS_Z80_H
+
+#include "Targets.h"
+#include "clang/Basic/TargetInfo.h"
+#include "llvm/Support/Compiler.h"
+#include "llvm/TargetParser/Triple.h"
+#include "llvm/ADT/SmallVector.h"
+
+namespace clang {
+namespace targets {
+
+class LLVM_LIBRARY_VISIBILITY Z80TargetInfoBase : public TargetInfo {
+public:
+  Z80TargetInfoBase(const llvm::Triple &Triple, const TargetOptions &)
+      : TargetInfo(Triple) {
+    TLSSupported = false;
+    PointerAlign = BoolAlign = ShortAlign = IntAlign = HalfAlign = FloatAlign =
+        DoubleAlign = LongDoubleAlign = LongAlign = LongLongAlign =
+            SuitableAlign = MinGlobalAlign = 8;
+    DoubleWidth = 32;
+    DoubleFormat = &llvm::APFloat::IEEEsingle();
+    DefaultAlignForAttributeAligned = 32;
+    SizeType = UnsignedInt;
+    WCharType = SignedShort;
+    PtrDiffType = IntPtrType = WIntType = SignedInt;
+    Char32Type = UnsignedLong;
+  }
+
+  void getTargetDefines(const LangOptions &Opts,
+                        MacroBuilder &Builder) const override;
+  BuiltinVaListKind getBuiltinVaListKind() const override {
+    return TargetInfo::CharPtrBuiltinVaList;
+  }
+
+  StringRef getConstraintRegister(StringRef Constraint,
+                                  StringRef Expression) const override;
+  bool validateAsmConstraint(const char *&Name,
+                             TargetInfo::ConstraintInfo &Info) const override;
+  std::string convertConstraint(const char *&Constraint) const override;
+
+  std::string_view getClobbers() const override { return {}; }
+  ArrayRef<TargetInfo::GCCRegAlias> getGCCRegAliases() const override {
+    return {};
+  }
+  ArrayRef<TargetInfo::AddlRegName> getGCCAddlRegNames() const override;
+
+  bool allowsLargerPreferedTypeAlignment() const override { return false; }
+};
+
+class LLVM_LIBRARY_VISIBILITY Z80TargetInfo : public Z80TargetInfoBase {
+public:
+  explicit Z80TargetInfo(const llvm::Triple &T, const TargetOptions &Opts)
+      : Z80TargetInfoBase(T, Opts) {
+    IntWidth = 16;
+    PointerWidth = 16;
+    SizeType = UnsignedShort;
+    PtrDiffType = SignedShort;
+    IntPtrType = SignedShort;
+    resetDataLayout("e-m:e-p:16:8-p2:8:8-p3:16:8-i16:8-i24:8-i32:8-i48:8-i64:8-"
+                    "i96:8-f32:8-f64:8-a:8-n8:16-S8");
+  }
+
+private:
+  bool setCPU(const std::string &Name) override;
+  bool
+  initFeatureMap(llvm::StringMap<bool> &Features, DiagnosticsEngine &Diags,
+                 StringRef CPU,
+                 const std::vector<std::string> &FeaturesVec) const override;
+  void getTargetDefines(const LangOptions &Opts,
+                        MacroBuilder &Builder) const override;
+  llvm::SmallVector<Builtin::InfosShard> getTargetBuiltins() const override;
+  ArrayRef<const char *> getGCCRegNames() const override;
+};
+
+class LLVM_LIBRARY_VISIBILITY EZ80TargetInfo : public Z80TargetInfoBase {
+public:
+  explicit EZ80TargetInfo(const llvm::Triple &T, const TargetOptions &Opts)
+      : Z80TargetInfoBase(T, Opts) {
+    if (T.getEnvironment() == llvm::Triple::CODE16) {
+      // eZ80 in CODE16 mode: 16-bit pointers, 32-bit int for C compatibility.
+      PointerWidth = 16;
+      IntWidth = 32;
+      // Keep size/ptr-diff types 16-bit to reflect 16-bit addressing.
+      SizeType = UnsignedShort;
+      PtrDiffType = SignedShort;
+      IntPtrType = SignedShort;
+      resetDataLayout("e-m:e-p:16:8-p1:24:8-p2:8:8-p3:16:8-p4:24:8-i16:8-i24:8-i32:8-"
+                      "i48:8-i64:8-i96:8-f32:8-f64:8-a:8-n8:16-S8");
+    } else {
+      PointerWidth = IntWidth = 24;
+      resetDataLayout("e-m:e-p:24:8-p1:16:8-p2:8:8-p3:16:8-p4:24:8-i16:8-i24:8-i32:8-"
+                      "i48:8-i64:8-i96:8-f32:8-f64:8-a:8-n8:16:24-S8");
+    }
+  }
+
+private:
+  bool setCPU(const std::string &Name) override;
+  void getTargetDefines(const LangOptions &Opts,
+                        MacroBuilder &Builder) const override;
+  llvm::SmallVector<Builtin::InfosShard> getTargetBuiltins() const override;
+  ArrayRef<const char *> getGCCRegNames() const override;
+};
+
+} // namespace targets
+} // namespace clang
+
+#endif // LLVM_CLANG_LIB_BASIC_TARGETS_Z80_H

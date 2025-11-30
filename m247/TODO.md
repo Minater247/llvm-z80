@@ -1,1 +1,2 @@
 - Remove Z80 from `target_with_asm_parsers` and `targets_with_disassemblers` exclusion lists once implemented
+- Reintroduce Clang driver support for Z80 feature flags (`-mz80-*`) once options plumbing is restored
