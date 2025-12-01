@@ -7960,6 +7960,8 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
                     TC.getTriple().isOSBinFormatCOFF()) &&
                        !TC.getTriple().isPS4() && !TC.getTriple().isVE() &&
                        !TC.getTriple().isOSNetBSD() &&
+                       TC.getTriple().getArch() != llvm::Triple::z80 &&
+                       TC.getTriple().getArch() != llvm::Triple::ez80 &&
                        !Distro(D.getVFS(), TC.getTriple()).IsGentoo() &&
                        !TC.getTriple().isAndroid() && TC.useIntegratedAs()))
     CmdArgs.push_back("-faddrsig");
