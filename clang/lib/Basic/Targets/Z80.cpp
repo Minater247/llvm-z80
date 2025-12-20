@@ -14,6 +14,9 @@
 #include "clang/Basic/MacroBuilder.h"
 #include "llvm/ADT/StringSwitch.h"
 
+#include <cctype>
+#include <optional>
+
 namespace clang {
 namespace targets {
 
@@ -39,6 +42,106 @@ const TargetInfo::AddlRegName AddlRegNames[] = {
 using namespace clang;
 using namespace clang::targets;
 
+namespace {
+
+struct Z80AsmReg {
+  StringRef Name;
+  unsigned SpellingLength;
+};
+
+/// Returns the asm register name for the given spelling, or an empty string if
+/// the spelling is not a known register.
+static StringRef normalizeZ80RegisterSpelling(StringRef Spelling) {
+  auto EqualsLower = [&](StringRef LowerName) {
+    if (Spelling.size() != LowerName.size())
+      return false;
+    for (size_t I = 0, E = LowerName.size(); I != E; ++I)
+      if (std::tolower(static_cast<unsigned char>(Spelling[I])) !=
+          LowerName[I])
+        return false;
+    return true;
+  };
+
+  if (EqualsLower("a"))
+    return "a";
+  if (EqualsLower("bc"))
+    return "bc";
+  if (EqualsLower("b"))
+    return "b";
+  if (EqualsLower("c"))
+    return "c";
+  if (EqualsLower("de"))
+    return "de";
+  if (EqualsLower("d"))
+    return "d";
+  if (EqualsLower("e"))
+    return "e";
+  if (EqualsLower("hl"))
+    return "hl";
+  if (EqualsLower("h"))
+    return "h";
+  if (EqualsLower("l"))
+    return "l";
+  if (EqualsLower("ixh") || EqualsLower("xh"))
+    return "ixh";
+  if (EqualsLower("ixl") || EqualsLower("xl"))
+    return "ixl";
+  if (EqualsLower("ix") || EqualsLower("x"))
+    return "ix";
+  if (EqualsLower("iyh") || EqualsLower("yh"))
+    return "iyh";
+  if (EqualsLower("iyl") || EqualsLower("yl"))
+    return "iyl";
+  if (EqualsLower("iy") || EqualsLower("y"))
+    return "iy";
+  if (EqualsLower("sps"))
+    return "sps";
+  if (EqualsLower("spl"))
+    return "spl";
+  if (EqualsLower("sp"))
+    return "sp";
+  return "";
+}
+
+static std::optional<Z80AsmReg>
+matchZ80AsmRegister(StringRef Constraint, const Z80TargetInfoBase &Target,
+                    bool Canonicalize) {
+  bool HasBraces = Constraint.consume_front("{");
+  if (HasBraces) {
+    size_t BraceEnd = Constraint.find('}');
+    if (BraceEnd == StringRef::npos)
+      return std::nullopt;
+    Constraint = Constraint.take_front(BraceEnd);
+  }
+
+  if (Constraint.empty())
+    return std::nullopt;
+
+  unsigned MaxLen = Constraint.size();
+  if (MaxLen > 3)
+    MaxLen = 3;
+
+  for (unsigned Len = MaxLen; Len != 0; --Len) {
+    StringRef Candidate = Constraint.take_front(Len);
+    StringRef RegName = normalizeZ80RegisterSpelling(Candidate);
+    if (RegName.empty())
+      continue;
+
+    if (!Target.isValidGCCRegisterName(RegName))
+      continue;
+
+    if (Canonicalize)
+      RegName = Target.getNormalizedGCCRegisterName(RegName, true);
+
+    unsigned SpellingLength = Len + (HasBraces ? 2 : 0);
+    return Z80AsmReg{RegName, SpellingLength};
+  }
+
+  return std::nullopt;
+}
+
+} // namespace
+
 static unsigned matchAsmCCConstraint(const char *&Name) {
   return llvm::StringSwitch<unsigned>(Name)
       .Case("@ccnz", 5)
@@ -61,33 +164,29 @@ void Z80TargetInfoBase::getTargetDefines(const LangOptions &Opts,
 StringRef Z80TargetInfoBase::getConstraintRegister(StringRef Constraint,
                                                    StringRef Expression) const {
   Constraint =
-      Constraint.drop_until([](char C) { return isalpha(C) || C == '@'; });
-  if (!Constraint.empty())
-    switch (Constraint.front()) {
-    case 'a':
-      return "a";
-    case 'b':
-    case 'c':
-      return "bc";
-    case 'd':
-    case 'e':
-      return "de";
-    case 'h':
-    case 'l':
-      return "hl";
-    case 'x':
-      return "ix";
-    case 'y':
-      return "iy";
-    case 'r':
-    case 'R':
-      return Expression;
-    }
+      Constraint.drop_until(
+          [](char C) { return isalpha(C) || C == '{' || C == '@'; });
+  if (Constraint.empty())
+    return "";
+
+  if (Constraint.front() == 'r' || Constraint.front() == 'R')
+    return Expression;
+
+  if (auto Reg = matchZ80AsmRegister(Constraint, *this, /*Canonicalize=*/true))
+    return Reg->Name;
+
   return "";
 }
 
 bool Z80TargetInfoBase::validateAsmConstraint(
     const char *&Name, TargetInfo::ConstraintInfo &Info) const {
+  if (auto Reg = matchZ80AsmRegister(StringRef(Name), *this,
+                                     /*Canonicalize=*/false)) {
+    Name += Reg->SpellingLength - 1;
+    Info.setAllowsRegister();
+    return true;
+  }
+
   switch (Name[0]) {
   case 'I': // bit offset within byte [0,7]
     Info.setRequiresImmediate(0, 7);
@@ -112,27 +211,8 @@ bool Z80TargetInfoBase::validateAsmConstraint(
     Info.setRequiresImmediate(-128, 127);
     return true;
   case 'R': // reg including index
-  case 'a': // reg a
-  case 'b': // reg b
-  case 'c': // reg c
-  case 'd': // reg d
-  case 'e': // reg e
-  case 'h': // reg h
-  case 'l': // reg l
     Info.setAllowsRegister();
     return true;
-  case 'x': // reg ixh, ixl, ix
-  case 'y': // reg iyh, iyl, iy
-    switch (Name[1]) {
-    case 'h': // reg ixh, iyh
-    case 'l': // reg ixl, iyl
-      ++Name;
-      LLVM_FALLTHROUGH;
-    default:
-      Info.setAllowsRegister();
-      return true;
-    }
-    break;
   case '@':
     // CC condition changes.
     if (unsigned Len = matchAsmCCConstraint(Name)) {
@@ -147,40 +227,19 @@ bool Z80TargetInfoBase::validateAsmConstraint(
 
 std::string
 Z80TargetInfoBase::convertConstraint(const char *&Constraint) const {
-  StringRef Prefix = "{", Suffix = "}";
-  unsigned Len = 0;
-  switch (Constraint[0]) {
-  case 'a':
-  case 'b':
-  case 'c':
-  case 'd':
-  case 'e':
-  case 'h':
-  case 'l':
-    Len = 1;
-    break;
-  case 'x':
-  case 'y':
-    Prefix = "{i";
-    switch (Constraint[1]) {
-    case 'h':
-    case 'l':
-      Len = 2;
-      break;
-    default:
-      Len = 1;
-      break;
-    }
-    break;
-  case '@':
-    Len = matchAsmCCConstraint(Constraint);
-    break;
+  if (auto Reg = matchZ80AsmRegister(StringRef(Constraint), *this,
+                                     /*Canonicalize=*/false)) {
+    Constraint += Reg->SpellingLength - 1;
+    return "{" + Reg->Name.str() + "}";
   }
-  if (!Len)
-    return std::string(1, Constraint[0]);
-  auto Converted = (Prefix + StringRef(Constraint, Len) + Suffix).str();
-  Constraint += Len - 1;
-  return Converted;
+
+  if (unsigned Len = matchAsmCCConstraint(Constraint)) {
+    std::string Converted = "{" + std::string(Constraint, Len) + "}";
+    Constraint += Len - 1;
+    return Converted;
+  }
+
+  return std::string(1, Constraint[0]);
 }
 
 ArrayRef<TargetInfo::AddlRegName> Z80TargetInfoBase::getGCCAddlRegNames() const {
