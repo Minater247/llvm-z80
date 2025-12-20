@@ -1246,6 +1246,18 @@ public:
   validateAsmConstraint(const char *&Name,
                         TargetInfo::ConstraintInfo &info) const = 0;
 
+  struct AsmRegisterInfo {
+    StringRef Name;
+    unsigned Size;
+  };
+  /// Returns information about the register referenced by an inline asm
+  /// constraint, or std::nullopt if the constraint does not refer to a single
+  /// register with a known size.
+  virtual std::optional<AsmRegisterInfo>
+  getAsmRegisterInfo(StringRef Constraint) const {
+    return std::nullopt;
+  }
+
   bool resolveSymbolicName(const char *&Name,
                            ArrayRef<ConstraintInfo> OutputConstraints,
                            unsigned &Index) const;

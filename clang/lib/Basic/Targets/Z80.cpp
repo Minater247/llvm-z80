@@ -47,6 +47,7 @@ namespace {
 struct Z80AsmReg {
   StringRef Name;
   unsigned SpellingLength;
+  unsigned Size;
 };
 
 /// Returns the asm register name for the given spelling, or an empty string if
@@ -103,6 +104,20 @@ static StringRef normalizeZ80RegisterSpelling(StringRef Spelling) {
   return "";
 }
 
+static std::optional<unsigned> getZ80RegisterSize(StringRef Name) {
+  if (Name == "a" || Name == "b" || Name == "c" || Name == "d" ||
+      Name == "e" || Name == "h" || Name == "l" || Name == "ixh" ||
+      Name == "ixl" || Name == "iyh" || Name == "iyl" || Name == "sps" ||
+      Name == "spl")
+    return 8;
+
+  if (Name == "bc" || Name == "de" || Name == "hl" || Name == "ix" ||
+      Name == "iy" || Name == "sp")
+    return 16;
+
+  return std::nullopt;
+}
+
 static std::optional<Z80AsmReg>
 matchZ80AsmRegister(StringRef Constraint, const Z80TargetInfoBase &Target,
                     bool Canonicalize) {
@@ -130,11 +145,15 @@ matchZ80AsmRegister(StringRef Constraint, const Z80TargetInfoBase &Target,
     if (!Target.isValidGCCRegisterName(RegName))
       continue;
 
+    std::optional<unsigned> Size = getZ80RegisterSize(RegName);
+    if (!Size)
+      continue;
+
     if (Canonicalize)
       RegName = Target.getNormalizedGCCRegisterName(RegName, true);
 
     unsigned SpellingLength = Len + (HasBraces ? 2 : 0);
-    return Z80AsmReg{RegName, SpellingLength};
+    return Z80AsmReg{RegName, SpellingLength, *Size};
   }
 
   return std::nullopt;
@@ -176,6 +195,13 @@ StringRef Z80TargetInfoBase::getConstraintRegister(StringRef Constraint,
     return Reg->Name;
 
   return "";
+}
+
+std::optional<TargetInfo::AsmRegisterInfo>
+Z80TargetInfoBase::getAsmRegisterInfo(StringRef Constraint) const {
+  if (auto Reg = matchZ80AsmRegister(Constraint, *this, /*Canonicalize=*/false))
+    return TargetInfo::AsmRegisterInfo{Reg->Name, Reg->Size};
+  return std::nullopt;
 }
 
 bool Z80TargetInfoBase::validateAsmConstraint(

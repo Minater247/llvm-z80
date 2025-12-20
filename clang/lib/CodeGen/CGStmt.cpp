@@ -3083,6 +3083,30 @@ void CodeGenFunction::EmitAsmStmt(const AsmStmt &S) {
       // Deal with the tied operands' constraint code in adjustInlineAsmType.
       ReplaceConstraint = OutputConstraints[Output];
     }
+    if (Info.allowsRegister()) {
+      if (auto Reg = getTarget().getAsmRegisterInfo(ReplaceConstraint)) {
+        uint64_t OperandSize =
+            CGM.getDataLayout().getTypeSizeInBits(Arg->getType());
+        if (OperandSize > Reg->Size &&
+            isa<llvm::IntegerType>(Arg->getType())) {
+          std::string ValueString = "<non-constant>";
+          Expr::EvalResult ConstValue;
+          if (InputExpr->EvaluateAsInt(ConstValue, getContext())) {
+            llvm::SmallString<32> Buffer;
+            ConstValue.Val.getInt().toString(Buffer, /*Radix=*/10);
+            ValueString = Buffer.str().str();
+          }
+
+          Arg = Builder.CreateTrunc(
+              Arg, llvm::IntegerType::get(getLLVMContext(), Reg->Size));
+
+          CGM.getDiags().Report(InputExpr->getExprLoc(),
+                                diag::warn_z80_asm_input_truncated)
+              << ValueString << Reg->Name << Reg->Size
+              << static_cast<unsigned>(OperandSize);
+        }
+      }
+    }
     if (llvm::Type* AdjTy =
           getTargetHooks().adjustInlineAsmType(*this, ReplaceConstraint,
                                                    Arg->getType()))

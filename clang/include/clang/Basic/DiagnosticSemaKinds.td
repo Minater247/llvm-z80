@@ -9799,6 +9799,10 @@ let CategoryName = "Inline Assembly Issue" in {
   def warn_invalid_asm_cast_lvalue : Warning<
     "invalid use of a cast in an inline asm context requiring an lvalue">,
     InGroup<DiagGroup<"invalid-gnu-asm-cast">>, DefaultError;
+  def warn_z80_asm_input_truncated : Warning<
+    "inline asm operand value '%0' truncated to %2-bit register '%1' "
+    "(operand is %3-bit)">,
+    InGroup<ASMOperandWidths>;
   def warn_asm_mismatched_size_modifier : Warning<
     "value size does not match register size specified by the constraint "
     "and modifier">,

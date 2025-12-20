@@ -18,6 +18,7 @@
 #include "llvm/Support/Compiler.h"
 #include "llvm/TargetParser/Triple.h"
 #include "llvm/ADT/SmallVector.h"
+#include <optional>
 
 namespace clang {
 namespace targets {
@@ -50,6 +51,8 @@ public:
   bool validateAsmConstraint(const char *&Name,
                              TargetInfo::ConstraintInfo &Info) const override;
   std::string convertConstraint(const char *&Constraint) const override;
+  std::optional<AsmRegisterInfo>
+  getAsmRegisterInfo(StringRef Constraint) const override;
 
   std::string_view getClobbers() const override { return {}; }
   ArrayRef<TargetInfo::GCCRegAlias> getGCCRegAliases() const override {
