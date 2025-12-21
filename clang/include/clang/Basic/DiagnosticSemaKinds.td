@@ -9800,8 +9800,8 @@ let CategoryName = "Inline Assembly Issue" in {
     "invalid use of a cast in an inline asm context requiring an lvalue">,
     InGroup<DiagGroup<"invalid-gnu-asm-cast">>, DefaultError;
   def warn_z80_asm_input_truncated : Warning<
-    "inline asm operand value '%0' truncated to %2-bit register '%1' "
-    "(operand is %3-bit)">,
+    "inline asm operand truncated to fit %1-bit register '%0' "
+    "(operand is %2-bit)">,
     InGroup<ASMOperandWidths>;
   def warn_asm_mismatched_size_modifier : Warning<
     "value size does not match register size specified by the constraint "
@@ -10646,7 +10646,7 @@ def warn_dangling_reference_captured_by_unknown : Warning<
    "the full-expression">, InGroup<DanglingCapture>;
 
 def warn_experimental_lifetime_safety_dummy_warning : Warning<
-   "todo: remove this warning after we have atleast one warning based on the lifetime analysis">, 
+   "todo: remove this warning after we have atleast one warning based on the lifetime analysis">,
    InGroup<LifetimeSafety>, DefaultIgnore;
 
 // For non-floating point, expressions of the form x == x or x != x
@@ -12544,7 +12544,7 @@ def warn_zero_as_null_pointer_constant : Warning<
   InGroup<DiagGroup<"zero-as-null-pointer-constant">>, DefaultIgnore;
 
 def warn_not_eliding_copy_on_return : Warning<
-  "not eliding copy on return">, 
+  "not eliding copy on return">,
   InGroup<DiagGroup<"nrvo">>, DefaultIgnore;
 
 def err_nullability_cs_multilevel : Error<

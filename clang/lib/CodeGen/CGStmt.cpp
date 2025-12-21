@@ -3089,21 +3089,12 @@ void CodeGenFunction::EmitAsmStmt(const AsmStmt &S) {
             CGM.getDataLayout().getTypeSizeInBits(Arg->getType());
         if (OperandSize > Reg->Size &&
             isa<llvm::IntegerType>(Arg->getType())) {
-          std::string ValueString = "<non-constant>";
-          Expr::EvalResult ConstValue;
-          if (InputExpr->EvaluateAsInt(ConstValue, getContext())) {
-            llvm::SmallString<32> Buffer;
-            ConstValue.Val.getInt().toString(Buffer, /*Radix=*/10);
-            ValueString = Buffer.str().str();
-          }
-
           Arg = Builder.CreateTrunc(
               Arg, llvm::IntegerType::get(getLLVMContext(), Reg->Size));
 
           CGM.getDiags().Report(InputExpr->getExprLoc(),
                                 diag::warn_z80_asm_input_truncated)
-              << ValueString << Reg->Name << Reg->Size
-              << static_cast<unsigned>(OperandSize);
+              << Reg->Name << Reg->Size << static_cast<unsigned>(OperandSize);
         }
       }
     }
