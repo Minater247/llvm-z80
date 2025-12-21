@@ -861,6 +861,10 @@ void tools::gnutools::Assembler::ConstructJob(Compilation &C,
     CmdArgs.push_back(Args.MakeArgString("-march=" + CPUName));
     break;
   }
+  case llvm::Triple::z80:
+  case llvm::Triple::ez80:
+    DefaultAssembler = "z80-none-elf-as";
+    break;
   case llvm::Triple::ve:
     DefaultAssembler = "nas";
   }
@@ -3024,6 +3028,8 @@ bool Generic_GCC::IsIntegratedAssemblerDefault() const {
   case llvm::Triple::nvptx:
   case llvm::Triple::nvptx64:
   case llvm::Triple::xcore:
+  case llvm::Triple::z80:
+  case llvm::Triple::ez80:
     return false;
   default:
     return true;
