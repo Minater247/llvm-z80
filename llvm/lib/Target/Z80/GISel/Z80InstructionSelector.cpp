@@ -238,17 +238,23 @@ static int64_t getSubRegIndex(unsigned Width, unsigned Off = 0) {
 // Set Z80 Opcode and constrain DstReg.
 bool Z80InstructionSelector::selectCopy(MachineInstr &I,
                                         MachineRegisterInfo &MRI) const {
+  auto getOpSize = [&](const MachineOperand &MO) {
+    unsigned Size = RBI.getSizeInBits(MO.getReg(), MRI, TRI);
+    if (unsigned SubIdx = MO.getSubReg())
+      if (unsigned SubSize = TRI.getSubRegIdxSize(SubIdx))
+        Size = SubSize;
+    if (Size == 1)
+      Size = 8;
+    return Size;
+  };
+
   Register DstReg = I.getOperand(0).getReg();
-  unsigned DstSize = RBI.getSizeInBits(DstReg, MRI, TRI);
-  if (DstSize == 1)
-    DstSize = 8;
+  unsigned DstSize = getOpSize(I.getOperand(0));
   const RegisterBank &DstRegBank = *RBI.getRegBank(DstReg, MRI, TRI);
   const TargetRegisterClass *DstRC = getRegClass(DstReg, MRI);
 
   Register SrcReg = I.getOperand(1).getReg();
-  unsigned SrcSize = RBI.getSizeInBits(SrcReg, MRI, TRI);
-  if (SrcSize == 1)
-    SrcSize = 8;
+  unsigned SrcSize = getOpSize(I.getOperand(1));
   const RegisterBank &SrcRegBank = *RBI.getRegBank(SrcReg, MRI, TRI);
   const TargetRegisterClass *SrcRC = getRegClass(SrcReg, MRI);
 
@@ -1600,8 +1606,13 @@ Z80InstructionSelector::foldCompare(MachineInstr &I, MachineIRBuilder &MIB,
         CopyHi->getOperand(1).setSubReg(Z80::sub_high);
         if (!constrainSelectedInstRegOperands(*CopyHi, TII, TRI, RBI))
           return Z80::COND_INVALID;
+        Register LoReg = MRI.createVirtualRegister(&Z80::R8RegClass);
+        auto CopyLo = MIB.buildCopy(LoReg, LHSReg);
+        CopyLo->getOperand(1).setSubReg(Z80::sub_low);
+        if (!constrainSelectedInstRegOperands(*CopyLo, TII, TRI, RBI))
+          return Z80::COND_INVALID;
         auto OrLo = MIB.buildInstr(Z80::OR8ar);
-        OrLo.addReg(LHSReg, 0, Z80::sub_low);
+        OrLo.addReg(LoReg);
         if (!constrainSelectedInstRegOperands(*OrLo, TII, TRI, RBI))
           return Z80::COND_INVALID;
         return CC;

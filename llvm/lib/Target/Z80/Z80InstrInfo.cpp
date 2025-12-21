@@ -1260,6 +1260,7 @@ bool Z80InstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
       MI.setDesc(get(Z80::LD8ri));
       if (MachineOperand *MO = MI.findRegisterDefOperand(Z80::F, &TRI))
         MO->ChangeToImmediate(0);
+      MI.addOperand(MachineOperand::CreateImm(0));
     }
     break;
   case Z80::LD24r0:
@@ -1277,6 +1278,8 @@ bool Z80InstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
       MI.setDesc(get(Z80::LD24ri));
       if (MachineOperand *MO = MI.findRegisterDefOperand(Z80::F, &TRI))
         MO->ChangeToImmediate(Opc == Z80::LD24r0 ? 0 : -1);
+      MI.addOperand(
+          MachineOperand::CreateImm(Opc == Z80::LD24r0 ? 0 : -1));
     }
     break;
   case Z80::Cmp16ao:
