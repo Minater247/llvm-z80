@@ -38,11 +38,8 @@ Z80FrameLowering::Z80FrameLowering(const Z80Subtarget &STI)
 /// or if frame pointer elimination is disabled.
 bool Z80FrameLowering::hasFPImpl(const MachineFunction &MF) const {
   const MachineFrameInfo &MFI = MF.getFrameInfo();
-  for (int i = MFI.getObjectIndexBegin(); i < MFI.getObjectIndexEnd(); ++i) {
-    //LLVM_DEBUG(dbgs() << "Z80FrameLowering: hasFP: " << i << ": isDead=" << (MFI.isDeadObjectIndex(i) ? 1 : 0) << "\n");
-    if (!MFI.isDeadObjectIndex(i))
-      return true;
-  }
+  if (MFI.hasVarSizedObjects() || MFI.isFrameAddressTaken())
+    return true;
   auto& F = MF.getFunction();
   if (F.hasFnAttribute("static_stack_needs_ix"))
       return false;

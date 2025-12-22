@@ -139,6 +139,7 @@ const uint32_t *Z80RegisterInfo::getNoPreservedMask() const {
 BitVector Z80RegisterInfo::getReservedRegs(const MachineFunction &MF) const {
   BitVector Reserved(getNumRegs());
 
+  const Z80FrameLowering *TFI = getFrameLowering(MF);
   // Set the stack-pointer registers as reserved.
   Reserved.set(Z80::SPS);
   Reserved.set(Z80::SPL);
@@ -147,11 +148,17 @@ BitVector Z80RegisterInfo::getReservedRegs(const MachineFunction &MF) const {
   Reserved.set(getProgramCounter());
 
   // Set the frame-pointer register and its aliases as reserved if needed.
-  for (Register Reg :
-       {Register(Is24Bit ? Z80::UIX : Z80::IX), getFrameRegister(MF)})
-    for (MCRegAliasIterator I(Reg, this, /*IncludeSelf=*/true); I.isValid();
-         ++I)
+  Register FrameReg = getFrameRegister(MF);
+  if (TFI->hasFP(MF) ||
+      MF.getFunction().hasFnAttribute("static_stack_needs_ix"))
+    for (MCRegAliasIterator I(Is24Bit ? Z80::UIX : Z80::IX, this,
+                              /*IncludeSelf=*/true);
+         I.isValid(); ++I)
       Reserved.set(*I);
+
+  for (MCRegAliasIterator I(FrameReg, this, /*IncludeSelf=*/true); I.isValid();
+       ++I)
+    Reserved.set(*I);
 
   return Reserved;
 }
@@ -194,7 +201,6 @@ bool Z80RegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
   const Z80FrameLowering *TFI = getFrameLowering(MF);
   int FrameIndex = MI.getOperand(FIOperandNum).getIndex();
   Register BaseReg = getFrameRegister(MF);
-  assert(TFI->hasFP(MF) && "Stack slot use without fp unimplemented");
   auto Offset = MF.getFrameInfo().getObjectOffset(FrameIndex) -
                 TFI->getOffsetOfLocalArea();
   if (FrameIndex < 0)

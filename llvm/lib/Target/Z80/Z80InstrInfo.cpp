@@ -1018,7 +1018,10 @@ void Z80InstrInfo::rewriteFrameIndex(MachineInstr &MI, unsigned FIOperandNum,
 
   unsigned Opc = MI.getOpcode();
   bool IllegalLEA = Opc == Z80::LEA16ro && !Subtarget.hasEZ80Ops();
-  if (TRI.isFrameOffsetLegal(&MI, BaseReg, Offset) && !IllegalLEA) {
+  bool BaseIsIndex = Is24Bit ? Z80::I24RegClass.contains(BaseReg)
+                             : Z80::I16RegClass.contains(BaseReg);
+  if (BaseIsIndex && TRI.isFrameOffsetLegal(&MI, BaseReg, Offset) &&
+      !IllegalLEA) {
     MI.getOperand(FIOperandNum).ChangeToRegister(BaseReg, false);
     if (!NewOffset && (Opc == Z80::PEA24o || Opc == Z80::PEA16o)) {
       MI.setDesc(get(Opc == Z80::PEA24o ? Z80::PUSH24r : Z80::PUSH16r));
