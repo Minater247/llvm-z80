@@ -1190,6 +1190,9 @@ bool Z80InstrInfo::isReallyTriviallyReMaterializable(const MachineInstr &MI) con
   case Z80::LD8r0:
   case Z80::LD24r0:
   case Z80::LD24r_1:
+  case Z80::LD8ri:
+  case Z80::LD16ri:
+  case Z80::LD24ri:
     return true;
   }
   return false;

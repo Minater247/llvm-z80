@@ -78,15 +78,7 @@ Z80RegisterInfo::getLargestLegalSuperClass(const TargetRegisterClass *RC,
 
 unsigned Z80RegisterInfo::getRegPressureLimit(const TargetRegisterClass *RC,
                                               MachineFunction &MF) const {
-  return 3;
-
-  switch (RC->getID()) {
-  default:
-    return 0;
-  case Z80::R16RegClassID:
-  case Z80::R24RegClassID:
-    return 2;
-  }
+  return getAllocatableSet(MF, RC).count();
 }
 
 const MCPhysReg *
