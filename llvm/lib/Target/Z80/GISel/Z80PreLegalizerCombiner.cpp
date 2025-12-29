@@ -243,9 +243,45 @@ bool Z80PreLegalizerCombiner::runOnMachineFunction(MachineFunction &MF) {
     return false;
 
   auto &TPC = getAnalysis<TargetPassConfig>();
+  MachineRegisterInfo &MRI = MF.getRegInfo();
   const Function &F = MF.getFunction();
   bool EnableOpt =
       MF.getTarget().getOptLevel() != CodeGenOptLevel::None && !skipFunction(F);
+
+  bool Changed = false;
+  // Expand extending loads into a plain load followed by an explicit extend so
+  // the legalizer and instruction selector only need to handle G_LOAD.
+  for (MachineBasicBlock &MBB : MF) {
+    for (auto It = MBB.begin(), End = MBB.end(); It != End;) {
+      MachineInstr &MI = *It++;
+      unsigned Opc = MI.getOpcode();
+      if (Opc != TargetOpcode::G_ZEXTLOAD && Opc != TargetOpcode::G_SEXTLOAD)
+        continue;
+
+      auto *MMO = *MI.memoperands_begin();
+      LLT MemTy = MMO->getMemoryType();
+      Register PtrReg = MI.getOperand(1).getReg();
+      Register DstReg = MI.getOperand(0).getReg();
+      LLT DstTy = MRI.getType(DstReg);
+
+      MachineIRBuilder Builder(MI);
+      auto Load = Builder.buildLoad(MemTy, PtrReg, *MMO);
+      Register LoadReg = Load.getReg(0);
+
+      if (DstTy == MemTy)
+        Builder.buildCopy(DstReg, LoadReg);
+      else if (DstTy.getSizeInBits() > MemTy.getSizeInBits())
+        Builder.buildInstr(Opc == TargetOpcode::G_ZEXTLOAD
+                               ? TargetOpcode::G_ZEXT
+                               : TargetOpcode::G_SEXT,
+                           {DstReg}, {LoadReg});
+      else
+        Builder.buildTrunc(DstReg, LoadReg);
+
+      MI.eraseFromParent();
+      Changed = true;
+    }
+  }
 
   GISelValueTracking *VT =
       &getAnalysis<GISelValueTrackingAnalysisLegacy>().get(MF);
@@ -266,7 +302,7 @@ bool Z80PreLegalizerCombiner::runOnMachineFunction(MachineFunction &MF) {
   Z80PreLegalizerCombinerImpl Impl(MF, CInfo, &TPC, *VT,
                                    /*CSEInfo*/ nullptr, RuleConfig, ST, MDT,
                                    LI);
-  return Impl.combineMachineInstrs();
+  return Changed || Impl.combineMachineInstrs();
 }
 
 char Z80PreLegalizerCombiner::ID = 0;

@@ -260,6 +260,9 @@ Z80LegalizerInfo::Z80LegalizerInfo(const Z80Subtarget &STI,
 
   getActionDefinitionsBuilder(G_FCOPYSIGN).libcallFor({{s32, s32}, {s64, s64}});
 
+  getActionDefinitionsBuilder(G_ZEXTLOAD).custom();
+  getActionDefinitionsBuilder(G_SEXTLOAD).custom();
+
   getActionDefinitionsBuilder({G_LOAD, G_STORE})
       .legalForCartesianProduct(LegalTypes, {p[0]})
       .legalForCartesianProduct(LegalTypesOther, {p[1]})
@@ -357,6 +360,27 @@ bool Z80LegalizerInfo::legalizeCustom(LegalizerHelper &Helper, MachineInstr &MI,
   case G_VASTART:
     Result = legalizeVAStart(Helper, MI);
     break;
+  case G_ZEXTLOAD:
+  case G_SEXTLOAD: {
+    auto *MMO = *MI.memoperands().begin();
+    Register PtrReg = MI.getOperand(1).getReg();
+    Register DstReg = MI.getOperand(0).getReg();
+    MachineRegisterInfo &MRI = *Helper.MIRBuilder.getMRI();
+    LLT DstTy = MRI.getType(DstReg);
+    LLT MemTy = MMO->getMemoryType();
+    auto Load = Helper.MIRBuilder.buildLoad(MemTy, PtrReg, *MMO);
+    Register LoadReg = Load.getReg(0);
+    if (DstTy == MemTy)
+      Helper.MIRBuilder.buildCopy(DstReg, LoadReg);
+    else if (DstTy.getSizeInBits() > MemTy.getSizeInBits())
+      Helper.MIRBuilder.buildInstr(
+          MI.getOpcode() == G_ZEXTLOAD ? G_ZEXT : G_SEXT, {DstReg}, {LoadReg});
+    else
+      Helper.MIRBuilder.buildTrunc(DstReg, LoadReg);
+    MI.eraseFromParent();
+    Result = LegalizerHelper::Legalized;
+    break;
+  }
   case G_SHL:
   case G_LSHR:
   case G_ASHR:
@@ -628,24 +652,55 @@ Z80LegalizerInfo::legalizeShift(LegalizerHelper &Helper, MachineInstr &MI,
   MachineRegisterInfo &MRI = *Helper.MIRBuilder.getMRI();
   Register DstReg = MI.getOperand(0).getReg();
   LLT Ty = MRI.getType(DstReg);
+  MachineIRBuilder &Builder = Helper.MIRBuilder;
+  GISelChangeObserver &Observer = Helper.Observer;
   if (auto Amt =
           getIConstantVRegValWithLookThrough(MI.getOperand(2).getReg(), MRI)) {
-    if (Ty == LLT::scalar(8) && Amt->Value == 1)
+    unsigned ShiftVal = Amt->Value.getZExtValue();
+    LLT AmtTy = MRI.getType(MI.getOperand(2).getReg());
+
+    if (!ShiftVal) {
+      Builder.buildCopy(DstReg, MI.getOperand(1).getReg());
+      MI.eraseFromParent();
+      return LegalizerHelper::Legalized;
+    }
+
+    if (Ty == LLT::scalar(8) && ShiftVal == 1)
+      return LegalizerHelper::AlreadyLegal;
+    if (Opc == G_SHL &&
+        (Ty == LLT::scalar(16) ||
+         (Subtarget.is24Bit() && Ty == LLT::scalar(24))) &&
+        ShiftVal == 1)
       return LegalizerHelper::AlreadyLegal;
     if ((Opc == G_SHL || Opc == G_LSHR) && Ty == LLT::scalar(16) &&
-        Amt->Value == 8)
+        ShiftVal == 8)
       return LegalizerHelper::AlreadyLegal;
-    if (MI.getOpcode() == G_ASHR && Amt->Value == Ty.getSizeInBits() - 1 &&
+    if (MI.getOpcode() == G_ASHR && ShiftVal == Ty.getSizeInBits() - 1 &&
         (Ty == LLT::scalar(8) || Ty == LLT::scalar(16) ||
          (Subtarget.is24Bit() && Ty == LLT::scalar(24))))
       return LegalizerHelper::AlreadyLegal;
+
+    unsigned MaxLegalSize = Subtarget.is24Bit() ? 24 : 16;
+    if (Opc == G_SHL && Ty.isScalar() && Ty.getSizeInBits() <= MaxLegalSize &&
+        ShiftVal < Ty.getSizeInBits()) {
+      Builder.setInstrAndDebugLoc(MI);
+      Register SrcReg = MI.getOperand(1).getReg();
+      Register OneReg = Builder.buildConstant(AmtTy, 1).getReg(0);
+      while (--ShiftVal)
+        SrcReg =
+            Builder.buildInstr(TargetOpcode::G_SHL, {Ty}, {SrcReg, OneReg})
+                .getReg(0);
+      Observer.changingInstr(MI);
+      MI.getOperand(1).setReg(SrcReg);
+      MI.getOperand(2).setReg(OneReg);
+      Observer.changedInstr(MI);
+      return LegalizerHelper::Legalized;
+    }
   }
 
   if (Opc == G_LSHR) {
     Register Reg = MI.getOperand(1).getReg();
     LLT RegTy = MRI.getType(Reg);
-    MachineIRBuilder &Builder = Helper.MIRBuilder;
-    GISelChangeObserver &Observer = Helper.Observer;
     if (MRI.getType(Reg).getSizeInBits() == 8) {
       Register RHSReg = MI.getOperand(2).getReg();
       auto RHSImm = getIConstantVRegValWithLookThrough(RHSReg, MRI);
@@ -693,6 +748,11 @@ Z80LegalizerInfo::legalizeShift(LegalizerHelper &Helper, MachineInstr &MI,
       }
     }
   }
+
+  if (Ty.isScalar() && Ty.getSizeInBits() == 16)
+    if (Helper.narrowScalar(MI, 0, LLT::scalar(8)) ==
+        LegalizerHelper::Legalized)
+      return LegalizerHelper::Legalized;
 
 
   return Helper.libcall(MI, LocObserver);

@@ -73,6 +73,8 @@ private:
                              MachineFunction &MF) const;
   bool selectMask(MachineInstr &I, MachineRegisterInfo &MRI,
                   MachineFunction &MF) const;
+  bool selectALU8(MachineInstr &I, MachineRegisterInfo &MRI, unsigned OpcReg,
+                  unsigned OpcImm, bool IsCommutative) const;
 
   bool selectCopy(MachineInstr &I, MachineRegisterInfo &MRI) const;
   bool selectExtract(MachineInstr &I, MachineRegisterInfo &MRI,
@@ -338,6 +340,40 @@ bool Z80InstructionSelector::select(MachineInstr &I) const {
 
   assert(I.getNumOperands() == I.getNumExplicitOperands() &&
          "Generic instruction has unexpected implicit operands");
+
+  if (Opc == TargetOpcode::G_IMPLICIT_DEF || Opc == TargetOpcode::G_PHI)
+    return selectImplicitDefOrPHI(I, MRI);
+
+  if (Opc == TargetOpcode::G_ADD || Opc == TargetOpcode::G_SUB ||
+      Opc == TargetOpcode::G_AND || Opc == TargetOpcode::G_OR ||
+      Opc == TargetOpcode::G_XOR) {
+    Register DstReg = I.getOperand(0).getReg();
+    LLT Ty = MRI.getType(DstReg);
+    if (Ty.isScalar() && Ty.getSizeInBits() == 8) {
+      switch (Opc) {
+      case TargetOpcode::G_ADD:
+        if (selectALU8(I, MRI, Z80::ADD8ar, Z80::ADD8ai, true))
+          return true;
+        break;
+      case TargetOpcode::G_SUB:
+        if (selectALU8(I, MRI, Z80::SUB8ar, Z80::SUB8ai, false))
+          return true;
+        break;
+      case TargetOpcode::G_AND:
+        if (selectALU8(I, MRI, Z80::AND8ar, Z80::AND8ai, true))
+          return true;
+        break;
+      case TargetOpcode::G_OR:
+        if (selectALU8(I, MRI, Z80::OR8ar, Z80::OR8ai, true))
+          return true;
+        break;
+      case TargetOpcode::G_XOR:
+        if (selectALU8(I, MRI, Z80::XOR8ar, Z80::XOR8ai, true))
+          return true;
+        break;
+      }
+    }
+  }
 
   if (selectImpl(I, *CoverageInfo))
     return true;
@@ -902,15 +938,16 @@ bool Z80InstructionSelector::selectLoadStore(MachineInstr &I,
       MOs.push_back(MachineOperand::CreateImm(Off));
       break;
     case TargetOpcode::G_PTR_ADD:
-      if (!PreferRegPtrFor8) {
+      if (!PreferRegPtrFor8)
         if (auto OffConst =
                 getIConstantVRegVal(PtrMI->getOperand(2).getReg(), MRI)) {
-          if ((PtrMI = MRI.getVRegDef(PtrMI->getOperand(1).getReg()))) {
-            Off += OffConst->getSExtValue();
-            continue;
-          }
+          int64_t NewOff = Off + OffConst->getSExtValue();
+          if (isInt<8>(NewOff))
+            if ((PtrMI = MRI.getVRegDef(PtrMI->getOperand(1).getReg()))) {
+              Off = NewOff;
+              continue;
+            }
         }
-      }
       break;
     }
     break;
@@ -1172,6 +1209,49 @@ bool Z80InstructionSelector::selectMask(MachineInstr &I,
   Builder.setInsertPt(Builder.getMBB(), std::next(Builder.getInsertPt()));
   return selectCopy(*Builder.buildCopy(DstReg, Register(Z80::A)), MRI) &&
          constrainSelectedInstRegOperands(I, TII, TRI, RBI);
+}
+
+bool Z80InstructionSelector::selectALU8(MachineInstr &I,
+                                        MachineRegisterInfo &MRI,
+                                        unsigned OpcReg, unsigned OpcImm,
+                                        bool IsCommutative) const {
+  Register DstReg = I.getOperand(0).getReg();
+  LLT Ty = MRI.getType(DstReg);
+  if (!Ty.isScalar() || Ty.getSizeInBits() != 8)
+    return false;
+
+  const RegisterBank &RB = *RBI.getRegBank(DstReg, MRI, TRI);
+  if (RB.getID() != Z80::GPRRegBankID)
+    return false;
+
+  Register LHSReg = I.getOperand(1).getReg();
+  Register RHSReg = I.getOperand(2).getReg();
+  auto RHSConst = getIConstantVRegVal(RHSReg, MRI);
+  if (!RHSConst && IsCommutative)
+    if (auto LHSConst = getIConstantVRegVal(LHSReg, MRI)) {
+      std::swap(LHSReg, RHSReg);
+      RHSConst = LHSConst;
+      I.getOperand(1).setReg(LHSReg);
+      I.getOperand(2).setReg(RHSReg);
+    }
+
+  MachineIRBuilder Builder(I);
+  if (!selectCopy(*Builder.buildCopy(Z80::A, LHSReg), MRI))
+    return false;
+
+  bool UseImm = RHSConst.has_value() && OpcImm;
+  if (UseImm)
+    I.getOperand(2).ChangeToImmediate(RHSConst->getSExtValue());
+  I.setDesc(TII.get(UseImm ? OpcImm : OpcReg));
+  I.removeOperand(1);
+  I.removeOperand(0);
+  I.addImplicitDefUseOperands(*I.getMF());
+
+  Builder.setInsertPt(Builder.getMBB(), std::next(Builder.getInsertPt()));
+  if (!selectCopy(*Builder.buildCopy(DstReg, Register(Z80::A)), MRI))
+    return false;
+
+  return constrainSelectedInstRegOperands(I, TII, TRI, RBI);
 }
 
 bool Z80InstructionSelector::selectExtract(MachineInstr &I,
@@ -1928,13 +2008,88 @@ Z80InstructionSelector::foldCond(Register CondReg, MachineIRBuilder &MIB,
 
 bool Z80InstructionSelector::selectShift(MachineInstr &I,
                                          MachineRegisterInfo &MRI) const {
-  assert(I.getOpcode() == Z80::G_ASHR && "Unexpected opcode");
+  unsigned Opc = I.getOpcode();
   Register DstReg = I.getOperand(0).getReg();
   Register SrcReg = I.getOperand(1).getReg();
   auto Amt = getIConstantVRegValWithLookThrough(I.getOperand(2).getReg(), MRI);
-  assert(Amt && "Expected constant shift amount");
+  if (!Amt)
+    return false;
   LLT Ty = MRI.getType(DstReg);
-  assert(Ty.isScalar() && "Illegal type");
+  if (!Ty.isScalar())
+    return false;
+
+  if (Opc == TargetOpcode::G_LSHR && Ty == LLT::scalar(16) &&
+      Amt->Value == 8) {
+    MachineIRBuilder MIB(I);
+    if (!RBI.constrainGenericRegister(DstReg, Z80::R16RegClass, MRI) ||
+        !RBI.constrainGenericRegister(SrcReg, Z80::R16RegClass, MRI))
+      return false;
+
+    auto CopyLow =
+        MIB.buildInstr(TargetOpcode::COPY)
+            .addDef(DstReg, RegState::Define, Z80::sub_low)
+            .addReg(SrcReg, 0, Z80::sub_high);
+    auto ZeroHigh =
+        MIB.buildInstr(Z80::LD8r0)
+            .addDef(DstReg, RegState::Define, Z80::sub_high);
+
+    I.eraseFromParent();
+    return constrainSelectedInstRegOperands(*CopyLow, TII, TRI, RBI) &&
+           constrainSelectedInstRegOperands(*ZeroHigh, TII, TRI, RBI);
+  }
+
+  if ((Opc == TargetOpcode::G_SHL || Opc == TargetOpcode::G_LSHR) &&
+      Ty == LLT::scalar(8) && Amt->Value.ult(8) && Amt->Value != 0) {
+    unsigned TargetOpc = Opc == TargetOpcode::G_SHL ? Z80::SLA8g : Z80::SRL8g;
+    MachineIRBuilder MIB(I);
+    unsigned ShiftVal = Amt->Value.getZExtValue();
+    auto ShiftI =
+        MIB.buildInstr(TargetOpc,
+                       {ShiftVal == 1 ? DstOp{DstReg} : DstOp{Ty}}, {SrcReg});
+    if (!constrainSelectedInstRegOperands(*ShiftI, TII, TRI, RBI))
+      return false;
+    Register Reg = ShiftI.getReg(0);
+    while (--ShiftVal) {
+      ShiftI = MIB.buildInstr(TargetOpc,
+                              {ShiftVal == 1 ? DstOp{DstReg} : DstOp{Ty}},
+                              {Reg});
+      if (!constrainSelectedInstRegOperands(*ShiftI, TII, TRI, RBI))
+        return false;
+      Reg = ShiftI.getReg(0);
+    }
+    I.eraseFromParent();
+    return true;
+  }
+
+  if (Opc == TargetOpcode::G_SHL &&
+      (Ty == LLT::scalar(16) ||
+       (Ty == LLT::scalar(24) && STI.is24Bit())) &&
+      Amt->Value.ult(Ty.getSizeInBits()) && Amt->Value != 0) {
+    unsigned TargetOpc =
+        Ty.getSizeInBits() == 16 ? Z80::ADD16aa : Z80::ADD24aa;
+    MachineIRBuilder MIB(I);
+    unsigned ShiftVal = Amt->Value.getZExtValue();
+    auto ShiftI =
+        MIB.buildInstr(TargetOpc,
+                       {ShiftVal == 1 ? DstOp{DstReg} : DstOp{Ty}}, {SrcReg});
+    if (!constrainSelectedInstRegOperands(*ShiftI, TII, TRI, RBI))
+      return false;
+    Register Reg = ShiftI.getReg(0);
+    while (--ShiftVal) {
+      ShiftI = MIB.buildInstr(TargetOpc,
+                              {ShiftVal == 1 ? DstOp{DstReg} : DstOp{Ty}},
+                              {Reg});
+      if (!constrainSelectedInstRegOperands(*ShiftI, TII, TRI, RBI))
+        return false;
+      Reg = ShiftI.getReg(0);
+    }
+    I.eraseFromParent();
+    return true;
+  }
+
+  if (Opc != TargetOpcode::G_ASHR)
+    return false;
+
   if (Amt->Value == Ty.getSizeInBits() - 1) {
     MachineIRBuilder MIB(I);
     Register Reg;
@@ -2219,7 +2374,31 @@ bool Z80InstructionSelector::selectImplicitDefOrPHI(
                         : TargetOpcode::PHI));
 
   Register DstReg = I.getOperand(0).getReg();
-  return RBI.constrainGenericRegister(DstReg, *getRegClass(DstReg, MRI), MRI);
+  const TargetRegisterClass *RC = getRegClass(DstReg, MRI);
+  if (!RC)
+    return false;
+  LLVM_DEBUG(dbgs() << "Selecting PHI/IMPLICIT_DEF dst "
+                    << printReg(DstReg, &TRI) << " as "
+                    << TRI.getRegClassName(RC) << "\n");
+  auto ConstrainToRC = [&](Register Reg) {
+    if (RBI.constrainGenericRegister(Reg, *RC, MRI))
+      return true;
+    MRI.setRegClass(Reg, RC);
+    return true;
+  };
+  if (!ConstrainToRC(DstReg))
+    return false;
+
+  if (I.getOpcode() == TargetOpcode::G_PHI)
+    for (unsigned Idx = 1; Idx < I.getNumOperands(); Idx += 2) {
+      Register Reg = I.getOperand(Idx).getReg();
+      if (!Reg.isVirtual())
+        continue;
+      if (!ConstrainToRC(Reg))
+        return false;
+    }
+
+  return true;
 }
 
 bool Z80InstructionSelector::selectInlineAsm(MachineInstr &I,
@@ -2340,6 +2519,9 @@ Z80InstructionSelector::selectOff(MachineOperand &MO) const {
         return RenderBaseAndOff(FI, 0);
       }
     }
+
+    if (!isInt<8>(Off))
+      return std::nullopt;
 
     return RenderRegAndImm(BaseReg, Off);
   }

@@ -1060,8 +1060,9 @@ void Z80InstrInfo::rewriteFrameIndex(MachineInstr &MI, unsigned FIOperandNum,
     return;
   }
 
-  if (Register ScratchReg = findUnusedOrCreateRegister(
-          Is24Bit ? &Z80::A24RegClass : &Z80::A16RegClass, MRI, RS)) {
+  if (Register ScratchReg = scavengeOrCreateRegister(
+          Is24Bit ? &Z80::A24RegClass : &Z80::A16RegClass, MRI, II, RS,
+          SPAdj)) {
     BuildMI(MBB, II, DL, get(Is24Bit ? Z80::LD24ri : Z80::LD16ri), OffsetReg)
         .addImm(NewOffset);
     copyRegister(MBB, II, DL, ScratchReg, BaseReg);

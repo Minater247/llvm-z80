@@ -383,8 +383,16 @@ static RTLIB::Libcall getRTLibDesc(unsigned Opcode, unsigned Size) {
 #define RTLIBCASE_INT(LibcallPrefix)                                           \
   do {                                                                         \
     switch (Size) {                                                            \
+    case 8:                                                                    \
+      return RTLIB::LibcallPrefix##8;                                          \
+    case 16:                                                                   \
+      return RTLIB::LibcallPrefix##16;                                         \
+    case 24:                                                                   \
+      return RTLIB::LibcallPrefix##24;                                         \
     case 32:                                                                   \
       return RTLIB::LibcallPrefix##32;                                         \
+    case 48:                                                                   \
+      return RTLIB::LibcallPrefix##48;                                         \
     case 64:                                                                   \
       return RTLIB::LibcallPrefix##64;                                         \
     case 128:                                                                  \
