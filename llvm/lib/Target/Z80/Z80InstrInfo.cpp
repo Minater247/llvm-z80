@@ -692,6 +692,7 @@ void Z80InstrInfo::copyPhysReg(MachineBasicBlock &MBB,
   if (SrcReg == Z80::SPL || SrcReg == Z80::SPS) {
     // Copies from SP.
     Is24Bit |= SrcReg == Z80::SPL;
+    unsigned SPAdj = Is24Bit ? 3 : 2;
     MCRegister PopReg, ExReg;
     if (DstReg == Z80::UBC || DstReg == Z80::BC) {
       PopReg = DstReg;
@@ -706,10 +707,24 @@ void Z80InstrInfo::copyPhysReg(MachineBasicBlock &MBB,
           .addReg(ExReg, RegState::ImplicitDefine)
           .addReg(DstReg, RegState::ImplicitKill);
     }
+    bool PreserveFlags = true;
+    unsigned BaseImm = PopReg ? SPAdj : 0;
+    if (PreserveFlags)
+      BaseImm += SPAdj;
     BuildMI(MBB, MI, DL, get(Subtarget.is24Bit() ? Z80::LD24ri : Z80::LD16ri),
-            DstReg).addImm(PopReg ? Is24Bit ? 3 : 2 : 0);
+            DstReg)
+        .addImm(BaseImm);
+    if (PreserveFlags) {
+      MachineInstr &PushAF = applySPAdjust(
+          *BuildMI(MBB, MI, DL,
+                   get(Is24Bit ? Z80::PUSH24AF : Z80::PUSH16AF)));
+      markUseUndef(PushAF, Z80::AF, TRI);
+    }
     BuildMI(MBB, MI, DL, get(SrcReg == Z80::SPL ? Z80::ADD24as : Z80::ADD16as),
             DstReg).addReg(DstReg)->addRegisterDead(Z80::F, &getRegisterInfo());
+    if (PreserveFlags)
+      applySPAdjust(
+          *BuildMI(MBB, MI, DL, get(Is24Bit ? Z80::POP24AF : Z80::POP16AF)));
     if (PopReg) {
       BuildMI(MBB, MI, DL, get(Is24Bit ? Z80::EX24sa : Z80::EX16sa), DstReg)
           .addReg(DstReg);
@@ -1033,8 +1048,9 @@ void Z80InstrInfo::rewriteFrameIndex(MachineInstr &MI, unsigned FIOperandNum,
   }
 
   // Determine whether F is live at this insertion point; avoid saving if dead.
-  bool SaveFlags = MBB.computeRegisterLiveness(&getRegisterInfo(), Z80::F, II) !=
-                   MachineBasicBlock::LQR_Dead;
+  bool SaveFlags = BaseReg == Z80::SPL || BaseReg == Z80::SPS ||
+                   MBB.computeRegisterLiveness(&getRegisterInfo(), Z80::F, II) !=
+                       MachineBasicBlock::LQR_Dead;
   Register OffsetReg = scavengeOrCreateRegister(
       Is24Bit ? &Z80::O24RegClass : &Z80::O16RegClass, MRI, II, RS, SPAdj);
   if ((Opc == Z80::LEA24ro &&
