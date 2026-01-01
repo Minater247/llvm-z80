@@ -43,6 +43,11 @@ bool Z80FrameLowering::hasFPImpl(const MachineFunction &MF) const {
   auto& F = MF.getFunction();
   if (F.hasFnAttribute("static_stack_needs_ix"))
       return false;
+
+  // TODO: Until call frames are implemented, this needs to be short-circuited.
+  // Spills were affecting SP while storing, causing stack object corruption.
+  return true;
+
   return MF.getTarget().Options.DisableFramePointerElim(MF);
 }
 bool Z80FrameLowering::isFPSaved(const MachineFunction &MF) const {
