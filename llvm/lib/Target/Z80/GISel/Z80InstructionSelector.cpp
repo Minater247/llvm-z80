@@ -375,6 +375,11 @@ bool Z80InstructionSelector::select(MachineInstr &I) const {
     }
   }
 
+  if (Opc == TargetOpcode::G_LOAD || Opc == TargetOpcode::G_STORE) {
+    if (selectLoadStore(I, MRI, MF))
+      return true;
+  }
+
   if (selectImpl(I, *CoverageInfo))
     return true;
 
@@ -398,9 +403,6 @@ bool Z80InstructionSelector::select(MachineInstr &I) const {
     return selectZExt(I, MRI);
   case TargetOpcode::G_ANYEXT:
     return selectAnyExt(I, MRI);
-  case TargetOpcode::G_LOAD:
-  case TargetOpcode::G_STORE:
-    return selectLoadStore(I, MRI, MF);
   case TargetOpcode::G_PTR_ADD:
   case TargetOpcode::G_FRAME_INDEX:
     return selectFrameIndexOrGep(I, MRI, MF);
@@ -789,10 +791,21 @@ bool Z80InstructionSelector::selectLoadStore(MachineInstr &I,
   MachineInstr *PtrMI = MRI.getVRegDef(PtrReg);
   LLT Ty = MRI.getType(ValReg);
 
+  bool IsConstantPtr = false;
+  if (PtrMI) {
+    if (PtrMI->getOpcode() == TargetOpcode::G_INTTOPTR) {
+      if (MachineInstr *IntMI = MRI.getVRegDef(PtrMI->getOperand(1).getReg()))
+        if (IntMI->getOpcode() == TargetOpcode::G_CONSTANT)
+          IsConstantPtr = true;
+    } else if (PtrMI->getOpcode() == TargetOpcode::G_CONSTANT) {
+      IsConstantPtr = true;
+    }
+  }
+
   // For 8-bit memory ops, if the vreg has multiple uses, keep it as a
   // register (aptr) instead of collapsing to absolute. Otherwise the reg allocator
   // can't do its job.
-  const bool PreferRegPtrFor8 = (Ty.getSizeInBits() == 8) && !MRI.hasOneUse(PtrReg);
+  const bool PreferRegPtrFor8 = (Ty.getSizeInBits() == 8) && !MRI.hasOneUse(PtrReg) && !IsConstantPtr;
 
   bool RMWOrdered = false;
   SmallVector<unsigned, 3> RMWOps;
