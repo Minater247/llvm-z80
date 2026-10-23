@@ -36,7 +36,7 @@ using namespace llvm;
 void Z80InstrInfo::anchor() {}
 
 Z80InstrInfo::Z80InstrInfo(Z80Subtarget &STI)
-    : Z80GenInstrInfo((STI.is24Bit() ? Z80::ADJCALLSTACKDOWN24
+    : Z80GenInstrInfo(STI, RI, (STI.is24Bit() ? Z80::ADJCALLSTACKDOWN24
                                      : Z80::ADJCALLSTACKDOWN16),
                       (STI.is24Bit() ? Z80::ADJCALLSTACKUP24
                                      : Z80::ADJCALLSTACKUP16)),
@@ -849,9 +849,9 @@ void Z80InstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
                                        MachineBasicBlock::iterator MI,
                                        Register SrcReg, bool IsKill, int FI,
                                        const TargetRegisterClass *TRC,
-                                       const TargetRegisterInfo *TRI,
                                        Register VReg,
                                        MachineInstr::MIFlag Flags) const {
+  const TargetRegisterInfo *TRI = &getRegisterInfo();
   (void)VReg;
   (void)Flags;
   const DebugLoc &DL = MBB.findDebugLoc(MI);
@@ -866,7 +866,7 @@ void Z80InstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
     markUseUndef(PushAF, Z80::AF, *TRI);
     BuildMI(MBB, MI, DL, get(Is24Bit ? Z80::EX24sa : Z80::EX16sa), TempReg)
         .addReg(TempReg, RegState::Undef);
-    storeRegToStackSlot(MBB, MI, Z80::L, true, FI, &Z80::R8RegClass, TRI,
+    storeRegToStackSlot(MBB, MI, Z80::L, true, FI, &Z80::R8RegClass,
               Register(), MachineInstr::NoFlags);
     applySPAdjust(*BuildMI(MBB, MI, DL,
                            get(Is24Bit ? Z80::POP24r : Z80::POP16r), TempReg));
@@ -914,9 +914,9 @@ void Z80InstrInfo::loadRegFromStackSlot(MachineBasicBlock &MBB,
                                         MachineBasicBlock::iterator MI,
                                         Register DstReg, int FI,
                                         const TargetRegisterClass *TRC,
-                                        const TargetRegisterInfo *TRI,
                                         Register VReg,
                                         MachineInstr::MIFlag Flags) const {
+  const TargetRegisterInfo *TRI = &getRegisterInfo();
   (void)VReg;
   (void)Flags;
   const DebugLoc &DL = MBB.findDebugLoc(MI);
@@ -929,7 +929,7 @@ void Z80InstrInfo::loadRegFromStackSlot(MachineBasicBlock &MBB,
     applySPAdjust(
         *BuildMI(MBB, MI, DL, get(Is24Bit ? Z80::PUSH24r : Z80::PUSH16r))
              .addReg(TempReg, RegState::Undef));
-    loadRegFromStackSlot(MBB, MI, Z80::L, FI, &Z80::R8RegClass, TRI,
+    loadRegFromStackSlot(MBB, MI, Z80::L, FI, &Z80::R8RegClass,
                Register(), MachineInstr::NoFlags);
     BuildMI(MBB, MI, DL, get(TargetOpcode::COPY), Z80::H)
         .addReg(Z80::A, RegState::Undef); // Preserve A
@@ -1205,7 +1205,7 @@ Register Z80InstrInfo::isStoreToStackSlot(const MachineInstr &MI,
   return Register();
 }
 
-bool Z80InstrInfo::isReallyTriviallyReMaterializable(const MachineInstr &MI) const {
+bool Z80InstrInfo::isReMaterializableImpl(const MachineInstr &MI) const {
   switch (MI.getOpcode()) {
   case Z80::LD8r0:
   case Z80::LD24r0:
@@ -1220,12 +1220,12 @@ bool Z80InstrInfo::isReallyTriviallyReMaterializable(const MachineInstr &MI) con
 
 void Z80InstrInfo::reMaterialize(MachineBasicBlock &MBB,
                                  MachineBasicBlock::iterator I, Register DstReg,
-                                 unsigned SubIdx, const MachineInstr &Orig,
-                                 const TargetRegisterInfo &TRI) const {
+                                 unsigned SubIdx, const MachineInstr &Orig) const {
+  const TargetRegisterInfo &TRI = getRegisterInfo();
   if (!Orig.modifiesRegister(Z80::F, &TRI) ||
       MBB.computeRegisterLiveness(&TRI, Z80::F, I) ==
       MachineBasicBlock::LQR_Dead)
-    return TargetInstrInfo::reMaterialize(MBB, I, DstReg, SubIdx, Orig, TRI);
+    return TargetInstrInfo::reMaterialize(MBB, I, DstReg, SubIdx, Orig);
   // The instruction clobbers F. Re-materialize as LDri to avoid side effects.
   unsigned Opc;
   int Value;
@@ -2009,7 +2009,7 @@ void Z80InstrInfo::updateOperandRegConstraints(MachineFunction &MF,
       continue;
 
     auto *NewRC =
-        MRI.constrainRegClass(Reg, getRegClass(NewMI.getDesc(), Idx, &TRI, MF));
+        MRI.constrainRegClass(Reg, getRegClass(NewMI.getDesc(), Idx));
     if (!NewRC) {
       LLVM_DEBUG(
           dbgs() << "WARNING: Unable to update register constraint for operand "

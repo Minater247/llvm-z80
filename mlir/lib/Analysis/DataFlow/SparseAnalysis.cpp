@@ -19,7 +19,7 @@
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "mlir/Support/LLVM.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/Support/Debug.h"
+#include "llvm/Support/DebugLog.h"
 #include <cassert>
 #include <optional>
 
@@ -67,56 +67,36 @@ AbstractSparseForwardDataFlowAnalysis::initialize(Operation *top) {
 
 LogicalResult
 AbstractSparseForwardDataFlowAnalysis::initializeRecursively(Operation *op) {
-  LLVM_DEBUG({
-    llvm::dbgs() << "Initializing recursively for operation: " << op->getName()
-                 << "\n";
-  });
+  LDBG() << "Initializing recursively for operation: " << op->getName();
 
   // Initialize the analysis by visiting every owner of an SSA value (all
   // operations and blocks).
   if (failed(visitOperation(op))) {
-    LLVM_DEBUG({
-      llvm::dbgs() << "Failed to visit operation: " << op->getName() << "\n";
-    });
+    LDBG() << "Failed to visit operation: " << op->getName();
     return failure();
   }
 
   for (Region &region : op->getRegions()) {
-    LLVM_DEBUG({
-      llvm::dbgs() << "Processing region with " << region.getBlocks().size()
-                   << " blocks"
-                   << "\n";
-    });
+    LDBG() << "Processing region with " << region.getBlocks().size()
+           << " blocks";
     for (Block &block : region) {
-      LLVM_DEBUG({
-        llvm::dbgs() << "Processing block with " << block.getNumArguments()
-                     << " arguments"
-                     << "\n";
-      });
+      LDBG() << "Processing block with " << block.getNumArguments()
+             << " arguments";
       getOrCreate<Executable>(getProgramPointBefore(&block))
           ->blockContentSubscribe(this);
       visitBlock(&block);
       for (Operation &op : block) {
-        LLVM_DEBUG({
-          llvm::dbgs() << "Recursively initializing nested operation: "
-                       << op.getName() << "\n";
-        });
+        LDBG() << "Recursively initializing nested operation: " << op.getName();
         if (failed(initializeRecursively(&op))) {
-          LLVM_DEBUG({
-            llvm::dbgs() << "Failed to initialize nested operation: "
-                         << op.getName() << "\n";
-          });
+          LDBG() << "Failed to initialize nested operation: " << op.getName();
           return failure();
         }
       }
     }
   }
 
-  LLVM_DEBUG({
-    llvm::dbgs()
-        << "Successfully completed recursive initialization for operation: "
-        << op->getName() << "\n";
-  });
+  LDBG() << "Successfully completed recursive initialization for operation: "
+         << op->getName();
   return success();
 }
 
@@ -150,7 +130,7 @@ AbstractSparseForwardDataFlowAnalysis::visitOperation(Operation *op) {
   // The results of a region branch operation are determined by control-flow.
   if (auto branch = dyn_cast<RegionBranchOpInterface>(op)) {
     visitRegionSuccessors(getProgramPointAfter(branch), branch,
-                          /*successor=*/RegionBranchPoint::parent(),
+                          /*successor=*/{branch, branch->getResults()},
                           resultLattices);
     return success();
   }
@@ -248,10 +228,12 @@ LogicalResult AbstractSparseForwardDataFlowAnalysis::visitCallOperation(
     ArrayRef<AbstractSparseLattice *> resultLattices) {
   // If the call operation is to an external function, attempt to infer the
   // results from the call arguments.
-  auto callable =
-      dyn_cast_if_present<CallableOpInterface>(call.resolveCallable());
-  if (!getSolverConfig().isInterprocedural() ||
-      (callable && !callable.getCallableRegion())) {
+  auto isExternalCallable = [&]() {
+    auto callable =
+        dyn_cast_if_present<CallableOpInterface>(call.resolveCallable());
+    return callable && !callable.getCallableRegion();
+  };
+  if (!getSolverConfig().isInterprocedural() || isExternalCallable()) {
     visitExternalCallImpl(call, operandLattices, resultLattices);
     return success();
   }
@@ -297,7 +279,7 @@ void AbstractSparseForwardDataFlowAnalysis::visitCallableOperation(
 
 void AbstractSparseForwardDataFlowAnalysis::visitRegionSuccessors(
     ProgramPoint *point, RegionBranchOpInterface branch,
-    RegionBranchPoint successor, ArrayRef<AbstractSparseLattice *> lattices) {
+    RegionSuccessor successor, ArrayRef<AbstractSparseLattice *> lattices) {
   const auto *predecessors = getOrCreateFor<PredecessorState>(point, point);
   assert(predecessors->allPredecessorsKnown() &&
          "unexpected unresolved region successors");
@@ -332,7 +314,7 @@ void AbstractSparseForwardDataFlowAnalysis::visitRegionSuccessors(
         visitNonControlFlowArgumentsImpl(
             branch,
             RegionSuccessor(
-                branch->getResults().slice(firstIndex, inputs.size())),
+                branch, branch->getResults().slice(firstIndex, inputs.size())),
             lattices, firstIndex);
       } else {
         if (!inputs.empty())
@@ -446,29 +428,20 @@ static MutableArrayRef<OpOperand> operandsToOpOperands(OperandRange &operands) {
 
 LogicalResult
 AbstractSparseBackwardDataFlowAnalysis::visitOperation(Operation *op) {
-  LLVM_DEBUG({
-    llvm::dbgs() << "Visiting operation: " << op->getName() << " with "
-                 << op->getNumOperands() << " operands and "
-                 << op->getNumResults() << " results"
-                 << "\n";
-  });
+  LDBG() << "Visiting operation: " << op->getName() << " with "
+         << op->getNumOperands() << " operands and " << op->getNumResults()
+         << " results";
 
   // If we're in a dead block, bail out.
   if (op->getBlock() != nullptr &&
       !getOrCreate<Executable>(getProgramPointBefore(op->getBlock()))
            ->isLive()) {
-    LLVM_DEBUG({
-      llvm::dbgs() << "Operation is in dead block, bailing out"
-                   << "\n";
-    });
+    LDBG() << "Operation is in dead block, bailing out";
     return success();
   }
 
-  LLVM_DEBUG({
-    llvm::dbgs() << "Creating lattice elements for " << op->getNumOperands()
-                 << " operands and " << op->getNumResults() << " results"
-                 << "\n";
-  });
+  LDBG() << "Creating lattice elements for " << op->getNumOperands()
+         << " operands and " << op->getNumResults() << " results";
   SmallVector<AbstractSparseLattice *> operandLattices =
       getLatticeElements(op->getOperands());
   SmallVector<const AbstractSparseLattice *> resultLattices =
@@ -477,20 +450,14 @@ AbstractSparseBackwardDataFlowAnalysis::visitOperation(Operation *op) {
   // Block arguments of region branch operations flow back into the operands
   // of the parent op
   if (auto branch = dyn_cast<RegionBranchOpInterface>(op)) {
-    LLVM_DEBUG({
-      llvm::dbgs() << "Processing RegionBranchOpInterface operation"
-                   << "\n";
-    });
+    LDBG() << "Processing RegionBranchOpInterface operation";
     visitRegionSuccessors(branch, operandLattices);
     return success();
   }
 
   if (auto branch = dyn_cast<BranchOpInterface>(op)) {
-    LLVM_DEBUG({
-      llvm::dbgs() << "Processing BranchOpInterface operation with "
-                   << op->getNumSuccessors() << " successors"
-                   << "\n";
-    });
+    LDBG() << "Processing BranchOpInterface operation with "
+           << op->getNumSuccessors() << " successors";
 
     // Block arguments of successor blocks flow back into our operands.
 
@@ -528,10 +495,7 @@ AbstractSparseBackwardDataFlowAnalysis::visitOperation(Operation *op) {
   // For function calls, connect the arguments of the entry blocks to the
   // operands of the call op that are forwarded to these arguments.
   if (auto call = dyn_cast<CallOpInterface>(op)) {
-    LLVM_DEBUG({
-      llvm::dbgs() << "Processing CallOpInterface operation"
-                   << "\n";
-    });
+    LDBG() << "Processing CallOpInterface operation";
     Operation *callableOp = call.resolveCallableInTable(&symbolTable);
     if (auto callable = dyn_cast_or_null<CallableOpInterface>(callableOp)) {
       // Not all operands of a call op forward to arguments. Such operands are
@@ -582,10 +546,7 @@ AbstractSparseBackwardDataFlowAnalysis::visitOperation(Operation *op) {
   // of this op itself and the operands of the terminators of the regions of
   // this op.
   if (auto terminator = dyn_cast<RegionBranchTerminatorOpInterface>(op)) {
-    LLVM_DEBUG({
-      llvm::dbgs() << "Processing RegionBranchTerminatorOpInterface operation"
-                   << "\n";
-    });
+    LDBG() << "Processing RegionBranchTerminatorOpInterface operation";
     if (auto branch = dyn_cast<RegionBranchOpInterface>(op->getParentOp())) {
       visitRegionSuccessorsFromTerminator(terminator, branch);
       return success();
@@ -593,25 +554,16 @@ AbstractSparseBackwardDataFlowAnalysis::visitOperation(Operation *op) {
   }
 
   if (op->hasTrait<OpTrait::ReturnLike>()) {
-    LLVM_DEBUG({
-      llvm::dbgs() << "Processing ReturnLike operation"
-                   << "\n";
-    });
+    LDBG() << "Processing ReturnLike operation";
     // Going backwards, the operands of the return are derived from the
     // results of all CallOps calling this CallableOp.
     if (auto callable = dyn_cast<CallableOpInterface>(op->getParentOp())) {
-      LLVM_DEBUG({
-        llvm::dbgs() << "Callable parent found, visiting callable operation"
-                     << "\n";
-      });
+      LDBG() << "Callable parent found, visiting callable operation";
       return visitCallableOperation(op, callable, operandLattices);
     }
   }
 
-  LLVM_DEBUG({
-    llvm::dbgs() << "Using default visitOperationImpl for operation: "
-                 << op->getName() << "\n";
-  });
+  LDBG() << "Using default visitOperationImpl for operation: " << op->getName();
   return visitOperationImpl(op, operandLattices, resultLattices);
 }
 

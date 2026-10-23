@@ -284,6 +284,19 @@ namespace CallingConv {
     RISCV_VLSCall_32768 = 122,
     RISCV_VLSCall_65536 = 123,
 
+    // Calling convention for AMDGPU whole wave functions.
+    AMDGPU_Gfx_WholeWave = 124,
+
+    /// Calling convention used for CHERIoT when crossing a protection boundary.
+    CHERIoT_CompartmentCall = 125,
+    /// Calling convention used for the callee of CHERIoT_CompartmentCall.
+    /// Ignores the first two capability arguments and the first integer
+    /// argument, zeroes all unused return registers on return.
+    CHERIoT_CompartmentCallee = 126,
+    /// Calling convention used for CHERIoT for cross-library calls to a
+    /// stateless compartment.
+    CHERIoT_LibraryCall = 127,
+
     /// Calling convention for passing an OS-defined constant in the IY
     /// register.
     Z80_TIFlags = 200,
@@ -311,8 +324,13 @@ namespace CallingConv {
 /// directly or indirectly via a call-like instruction.
 constexpr bool isCallableCC(CallingConv::ID CC) {
   switch (CC) {
+  // Called with special intrinsics:
+  // llvm.amdgcn.cs.chain
   case CallingConv::AMDGPU_CS_Chain:
   case CallingConv::AMDGPU_CS_ChainPreserve:
+  // llvm.amdgcn.call.whole.wave
+  case CallingConv::AMDGPU_Gfx_WholeWave:
+  // Hardware entry points:
   case CallingConv::AMDGPU_CS:
   case CallingConv::AMDGPU_ES:
   case CallingConv::AMDGPU_GS:

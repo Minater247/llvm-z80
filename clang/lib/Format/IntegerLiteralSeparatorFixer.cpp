@@ -19,7 +19,7 @@ namespace format {
 
 enum class Base { Binary, Decimal, Hex, Other };
 
-static Base getBase(const StringRef IntegerLiteral) {
+static Base getBase(StringRef IntegerLiteral) {
   assert(IntegerLiteral.size() > 1);
 
   if (IntegerLiteral[0] > '0') {
@@ -117,7 +117,7 @@ IntegerLiteralSeparatorFixer::process(const Environment &Env,
     }
     if (Style.isCpp()) {
       // Hex alpha digits a-f/A-F must be at the end of the string literal.
-      StringRef Suffixes = "_himnsuyd";
+      static constexpr StringRef Suffixes("_himnsuyd");
       if (const auto Pos =
               Text.find_first_of(IsBase16 ? Suffixes.drop_back() : Suffixes);
           Pos != StringRef::npos) {
@@ -167,8 +167,8 @@ IntegerLiteralSeparatorFixer::process(const Environment &Env,
   return {Result, 0};
 }
 
-bool IntegerLiteralSeparatorFixer::checkSeparator(
-    const StringRef IntegerLiteral, int DigitsPerGroup) const {
+bool IntegerLiteralSeparatorFixer::checkSeparator(StringRef IntegerLiteral,
+                                                  int DigitsPerGroup) const {
   assert(DigitsPerGroup > 0);
 
   int I = 0;
@@ -187,7 +187,7 @@ bool IntegerLiteralSeparatorFixer::checkSeparator(
   return true;
 }
 
-std::string IntegerLiteralSeparatorFixer::format(const StringRef IntegerLiteral,
+std::string IntegerLiteralSeparatorFixer::format(StringRef IntegerLiteral,
                                                  int DigitsPerGroup,
                                                  int DigitCount,
                                                  bool RemoveSeparator) const {

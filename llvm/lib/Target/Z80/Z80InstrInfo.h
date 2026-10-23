@@ -124,7 +124,7 @@ public:
 								 MachineBasicBlock::iterator MI, Register SrcReg,
 								 bool isKill, int FrameIndex,
 								 const TargetRegisterClass *RC,
-								 const TargetRegisterInfo *TRI, Register VReg,
+								 Register VReg,
 								 MachineInstr::MIFlag Flags =
 								 		MachineInstr::NoFlags) const override;
 	Register isStoreToStackSlot(const MachineInstr &MI,
@@ -132,7 +132,7 @@ public:
 	void loadRegFromStackSlot(MachineBasicBlock &MBB,
 									MachineBasicBlock::iterator MI, Register DstReg,
 									int FrameIndex, const TargetRegisterClass *RC,
-									const TargetRegisterInfo *TRI, Register VReg,
+									Register VReg,
 									MachineInstr::MIFlag Flags =
 										MachineInstr::NoFlags) const override;
 	Register isLoadFromStackSlot(const MachineInstr &MI,
@@ -142,11 +142,10 @@ public:
 												 Register BaseReg, int64_t Offset,
 												 RegScavenger *RS = nullptr, int SPAdj = 0) const;
 
-	bool isReallyTriviallyReMaterializable(const MachineInstr &MI) const
+	bool isReMaterializableImpl(const MachineInstr &MI) const
 			override;
 	void reMaterialize(MachineBasicBlock &MBB, MachineBasicBlock::iterator I,
-										 Register DstReg, unsigned SubIdx, const MachineInstr &Orig,
-										 const TargetRegisterInfo &TRI) const override;
+										 Register DstReg, unsigned SubIdx, const MachineInstr &Orig) const override;
 
 	bool expandPostRAPseudo(MachineInstr &MI) const override;
 

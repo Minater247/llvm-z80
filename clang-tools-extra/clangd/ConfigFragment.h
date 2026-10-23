@@ -361,6 +361,8 @@ struct Fragment {
   struct HoverBlock {
     /// Whether hover show a.k.a type.
     std::optional<Located<bool>> ShowAKA;
+    /// Limit the number of characters returned when hovering a macro.
+    std::optional<Located<uint32_t>> MacroContentsLimit;
   };
   HoverBlock Hover;
 
@@ -393,6 +395,17 @@ struct Fragment {
     std::vector<Located<std::string>> DisabledModifiers;
   };
   SemanticTokensBlock SemanticTokens;
+
+  /// Configures documentation style and behaviour.
+  struct DocumentationBlock {
+    /// Specifies the format of comments in the code.
+    /// Valid values are enum Config::CommentFormatPolicy values:
+    /// - Plaintext: Treat comments as plain text.
+    /// - Markdown: Treat comments as Markdown.
+    /// - Doxygen: Treat comments as doxygen.
+    std::optional<Located<std::string>> CommentFormat;
+  };
+  DocumentationBlock Documentation;
 };
 
 } // namespace config

@@ -25,7 +25,7 @@ using namespace llvm;
 
 Z80TargetLowering::Z80TargetLowering(const Z80TargetMachine &TM,
                                      const Z80Subtarget &STI)
-    : TargetLowering(TM), Subtarget(STI) {
+    : TargetLowering(TM, STI), Subtarget(STI) {
   bool Is24Bit = Subtarget.is24Bit();
 
   setSchedulingPreference(Sched::RegPressure);

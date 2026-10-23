@@ -1,8 +1,7 @@
 #include "Z80Subtarget.h"
 #include "Z80TargetMachine.h"
-#include "llvm/ADT/STLArrayExtras.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/ADT/Triple.h"
 #include "llvm/CodeGen/MIRParser/MIRParser.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
@@ -15,8 +14,11 @@
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/TargetLoweringObjectFile.h"
 #include "llvm/Target/TargetMachine.h"
+#include "llvm/TargetParser/Triple.h"
 #include <array>
+#include <optional>
 #include <utility>
 
 #include "gtest/gtest.h"
@@ -84,7 +86,7 @@ constexpr struct TestInstr {
 #define imp_u(r) " implicit " u(r)
     {{0x00}, "NOP"},
     {{0x01, wi}, u(bc) " = LD" w "ri i" w " 0"},
-    {{0x02}, "LD8pa " u(bc) "," imp(a)},
+    {{0x02}, "LD8pa " u(bc) ", $a"},
     {{0x03}, u(bc) " = INC" w "r " u(bc) ""},
     {{0x04}, "$b = INC8r $b," imp_def(f)},
     {{0x05}, "$b = DEC8r $b," imp_def(f)},
@@ -92,7 +94,7 @@ constexpr struct TestInstr {
     {{0x07}, "RLCA" imp_def(a) "," imp_def(f) "," imp(a)},
     {{0x08}, "EXAF" imp_def(af) "," imp(af)},
     {{0x09}, u(hl) " = ADD" w "ao " u(hl) ", " u(bc) "," imp_def(f)},
-    {{0x0A}, "LD8ap " u(bc) "," imp_def(a)},
+    {{0x0A}, "$a = LD8ap " u(bc)},
     {{0x0B}, u(bc) " = DEC" w "r " u(bc) ""},
     {{0x0C}, "$c = INC8r $c," imp_def(f)},
     {{0x0D}, "$c = DEC8r $c," imp_def(f)},
@@ -100,7 +102,7 @@ constexpr struct TestInstr {
     {{0x0F}, "RRCA" imp_def(a) "," imp_def(f) "," imp(a)},
     {{0x10, bi}, "DJNZ" bb "," imp_def(b) "," imp(b) def_bb},
     {{0x11, wi}, u(de) " = LD" w "ri i" w " 0"},
-    {{0x12}, "LD8pa " u(de) "," imp(a)},
+    {{0x12}, "LD8pa " u(de) ", $a"},
     {{0x13}, u(de) " = INC" w "r " u(de) ""},
     {{0x14}, "$d = INC8r $d," imp_def(f)},
     {{0x15}, "$d = DEC8r $d," imp_def(f)},
@@ -108,7 +110,7 @@ constexpr struct TestInstr {
     {{0x17}, "RLA" imp_def(a) "," imp_def(f) "," imp(a) "," imp(f)},
     {{0x18, bi}, "JR" bb def_bb},
     {{0x19}, u(hl) " = ADD" w "ao " u(hl) ", " u(de) "," imp_def(f)},
-    {{0x1A}, "LD8ap " u(de) "," imp_def(a)},
+    {{0x1A}, "$a = LD8ap " u(de)},
     {{0x1B}, u(de) " = DEC" w "r " u(de) ""},
     {{0x1C}, "$e = INC8r $e," imp_def(f)},
     {{0x1D}, "$e = DEC8r $e," imp_def(f)},
@@ -1469,7 +1471,7 @@ constexpr struct TestInstr {
 };
 
 void checkInstructionSizes(StringRef T) {
-  std::string TT(Triple::normalize(T));
+  Triple TT(Triple::normalize(T));
 
   LLVMInitializeZ80TargetInfo();
   LLVMInitializeZ80Target();
@@ -1480,7 +1482,7 @@ void checkInstructionSizes(StringRef T) {
   ASSERT_TRUE(TheTarget);
 
   std::unique_ptr<Z80TargetMachine> TM(static_cast<Z80TargetMachine *>(
-      TheTarget->createTargetMachine(TT, "generic", "", {}, None)));
+      TheTarget->createTargetMachine(TT, "generic", "", {}, std::nullopt)));
   ASSERT_TRUE(TM);
 
   Z80Subtarget STI(TM->getTargetTriple(), TM->getTargetCPU(),
@@ -1524,7 +1526,7 @@ void checkInstructionSizes(StringRef T) {
   ASSERT_TRUE(M);
 
   M->setDataLayout(TM->createDataLayout());
-  M->setTargetTriple(TM->getTargetTriple().getTriple());
+  M->setTargetTriple(TM->getTargetTriple());
 
   MachineModuleInfo MMI(TM.get());
   ASSERT_FALSE(Parser->parseMachineFunctions(*M, MMI));
@@ -1533,7 +1535,7 @@ void checkInstructionSizes(StringRef T) {
   ASSERT_TRUE(F);
   auto &MF = MMI.getOrCreateMachineFunction(*F);
 
-  ASSERT_EQ(MF.getInstructionCount(), array_lengthof(TestInstrs));
+  ASSERT_EQ(MF.getInstructionCount(), std::size(TestInstrs));
   auto TI = std::begin(TestInstrs);
   for (const auto &MBB : MF)
     for (const auto &MI : MBB) {
