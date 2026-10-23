@@ -34,8 +34,8 @@ short_jump_over_fixed:
   nop
 # CHECK: c.nop
   j short_jump_over_fixed
-# CHECK-NEXT: c.j 0x14 <short_jump_over_fixed+0x2>
-# CHECK-NEXT: R_RISCV_RVC_JUMP short_jump_over_fixed
+# CHECK-NEXT: c.j 0x12 <short_jump_over_fixed>
+# CHECK-NOT: R_RISCV_RVC_JUMP
 # CHECK-NOT: R_RISCV_RELAX
   ret
 # CHECK-NEXT: c.jr ra
@@ -61,8 +61,8 @@ mid_jump_over_fixed:
   .space 0x1000
 # CHECK-NEXT: ...
   j mid_jump_over_fixed
-# CHECK-NEXT: jal zero, 0x1026 <mid_jump_over_fixed+0x1002>
-# CHECK-NEXT: R_RISCV_JAL mid_jump_over_fixed
+# CHECK-NEXT: jal zero, 0x24 <mid_jump_over_fixed>
+# CHECK-NOT: R_RISCV_JAL
 # CHECK-NOT: R_RISCV_RELAX
   ret
 # CHECK-NEXT: c.jr ra

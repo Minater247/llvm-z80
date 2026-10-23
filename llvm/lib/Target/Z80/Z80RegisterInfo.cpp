@@ -37,8 +37,7 @@ Z80RegisterInfo::Z80RegisterInfo(const Triple &TT)
 }
 
 const TargetRegisterClass *
-Z80RegisterInfo::getPointerRegClass(const MachineFunction &MF,
-                                    unsigned Kind) const {
+Z80RegisterInfo::getPointerRegClass(unsigned Kind) const {
   switch (Kind) {
   default: llvm_unreachable("Unexpected Kind!");
   case 0: return Is24Bit ? &Z80::R24RegClass : &Z80::R16RegClass;
@@ -271,7 +270,7 @@ Register Z80RegisterInfo::materializeFrameBaseRegister(MachineBasicBlock *MBB,
   MachineBasicBlock::iterator II = MBB->begin();
   DebugLoc DL = MBB->findDebugLoc(II);
   const MCInstrDesc &MCID = TII.get(Is24Bit ? Z80::LEA24ro : Z80::LEA16ro);
-  Register BaseReg = MRI.createVirtualRegister(TII.getRegClass(MCID, 0, this, MF));
+  Register BaseReg = MRI.createVirtualRegister(TII.getRegClass(MCID, 0));
   BuildMI(*MBB, II, DL, MCID, BaseReg).addFrameIndex(FrameIdx).addImm(Offset);
   return BaseReg;
 }

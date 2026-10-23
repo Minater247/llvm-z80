@@ -44,8 +44,7 @@ public:
   /// getPointerRegClass - Returns a TargetRegisterClass used for pointer
   /// values.
   const TargetRegisterClass *
-  getPointerRegClass(const MachineFunction &MF,
-            unsigned Kind = 0) const override;
+  getPointerRegClass(unsigned Kind = 0) const override;
 
   const TargetRegisterClass *
   getLargestLegalSuperClass(const TargetRegisterClass *RC,

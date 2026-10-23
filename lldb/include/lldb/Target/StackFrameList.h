@@ -101,6 +101,9 @@ public:
   /// Returns whether we have currently fetched all the frames of a stack.
   bool WereAllFramesFetched() const;
 
+  /// Get the thread associated with this frame list.
+  Thread &GetThread() const { return m_thread; }
+
 protected:
   friend class Thread;
   friend class ScriptedThread;
@@ -185,6 +188,11 @@ protected:
   /// frame index on stop the right way to fix it would need to be some explicit
   /// negotiation for who gets to control this.
   std::optional<uint32_t> m_selected_frame_idx;
+
+  /// Protect access to m_selected_frame_idx. Always acquire after m_list_mutex
+  /// to avoid lock inversion. A recursive mutex because GetSelectedFrameIndex
+  /// may indirectly call SetSelectedFrame.
+  std::recursive_mutex m_selected_frame_mutex;
 
   /// The number of concrete frames fetched while filling the frame list. This
   /// is only used when synthetic frames are enabled.

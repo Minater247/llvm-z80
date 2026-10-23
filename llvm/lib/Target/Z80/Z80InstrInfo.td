@@ -991,7 +991,7 @@ multiclass ORInstr<bits<3> opcode, string mnemonic> {
       def  8ap : I <Idx0Pre, {0b10, opcode, 0b110}, mnemonic, "\t$src", "",
                     (outs), (ins  aptr:$src),
                     [(set A, F, (Z80or_flag A, (i8 (load   iPTR:$src))))]>;
-      def  8ao : Io<Idx1Pre, {0b10, opcode, 0b110}, mnemonic, "\t$src", "",
+      def  8ao : Io<Idx0Pre, {0b10, opcode, 0b110}, mnemonic, "\t$src", "",
                     (outs), (ins   off:$src),
                     [(set A, F, (Z80or_flag A, (i8 (load offpat:$src))))]>;
     }
