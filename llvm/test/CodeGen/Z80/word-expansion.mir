@@ -1,0 +1,129 @@
+# RUN: llc -run-pass=postrapseudos,machine-cp,z80-dangling-reg -verify-machineinstrs %s -o - | FileCheck %s
+--- |
+  target triple = "z80"
+  define void @volatile_word() { ret void }
+  define void @partial_pair() { ret void }
+  define void @index_copy_preserves_de() { ret void }
+  define void @killed_index_copy() { ret void }
+  define void @index_copy_preserves_a() { ret void }
+  define void @index_copy_preserves_f() { ret void }
+  define void @scratch_undefined_future_lane() { ret void }
+  define void @scratch_live_high() { ret void }
+...
+---
+name: volatile_word
+tracksRegLiveness: true
+# Both byte reads remain volatile, including the dead low result.
+# CHECK-LABEL: name: volatile_word
+# CHECK: $l = LD8go $ix, 0 :: (volatile load (s8)
+# CHECK: $h = LD8go $ix, 1 :: (volatile load (s8)
+body: |
+  bb.0:
+    liveins: $ix
+    $hl = LD88ro $ix, 0 :: (volatile load (s16))
+    $l = LD8ri 0
+    RET16 implicit-def $sps, implicit $sps, implicit $hl
+...
+---
+name: partial_pair
+tracksRegLiveness: true
+# Spill the defined high half without inventing a use of the low half.
+# CHECK-LABEL: name: partial_pair
+# CHECK: LD8og $ix, 0, undef $c
+# CHECK: LD8og $ix, 1, $b
+body: |
+  bb.0:
+    liveins: $ix, $d
+    $b = COPY $d
+    LD88or $ix, 0, $bc :: (store (s16))
+    RET16 implicit-def $sps, implicit $sps
+...
+---
+name: index_copy_preserves_de
+tracksRegLiveness: true
+# Copying L into IYL exchanges DE/HL twice. The saved DE value must remain
+# live through both exchanges, so the bank allocator exports a preceding
+# banked arithmetic result used by this ADD.
+# CHECK-LABEL: name: index_copy_preserves_de
+# CHECK: EX16DE {{.*}}implicit $d, implicit $h, implicit $e, implicit $l
+# CHECK: $iyl = LD8yy $e
+# CHECK: EX16DE {{.*}}implicit $h, implicit $d, implicit $l, implicit $e
+body: |
+  bb.0:
+    liveins: $de, $hl
+    $iyl = COPY $l
+    $hl = ADD16ao $hl, $de, implicit-def dead $f
+    RET16 implicit-def $sps, implicit $sps, implicit $hl, implicit $iyl
+...
+---
+name: killed_index_copy
+tracksRegLiveness: true
+# Keep the source defined until COPY's final implicit whole-pair kill.
+# CHECK-LABEL: name: killed_index_copy
+# CHECK: $e = LD8yy $iyl
+# CHECK: $d = LD8yy $iyh
+# CHECK: EX16DE {{.*}}implicit killed $iy
+body: |
+  bb.0:
+    liveins: $de, $iy
+    $hl = COPY killed $iy
+    $hl = ADD16ao $hl, $de, implicit-def dead $f
+    RET16 implicit-def $sps, implicit $sps, implicit $hl
+...
+---
+name: index_copy_preserves_a
+tracksRegLiveness: true
+# CHECK-LABEL: name: index_copy_preserves_a
+# CHECK: $a = LD8gg $l
+# CHECK: PUSH16AF {{.*}}implicit undef $af{{.*}}implicit $a
+body: |
+  bb.0:
+    liveins: $l, $ixl
+    $a = COPY $l
+    $iyl = COPY $ixl
+    RET16 implicit-def $sps, implicit $sps, implicit $a, implicit $iyl
+...
+---
+name: index_copy_preserves_f
+tracksRegLiveness: true
+# CHECK-LABEL: name: index_copy_preserves_f
+# CHECK: PUSH16AF {{.*}}implicit undef $af{{.*}}implicit $f
+body: |
+  bb.0:
+    liveins: $a, $ixl
+    CP8ai 7, implicit-def $f, implicit $a
+    $iyl = COPY $ixl
+    RET16 implicit-def $sps, implicit $sps, implicit $f, implicit $iyl
+...
+---
+name: scratch_undefined_future_lane
+tracksRegLiveness: true
+# A later pair spill reads an undefined H lane. It must not manufacture an
+# incoming H use when IY is temporarily exchanged through HL for a store.
+# CHECK-LABEL: name: scratch_undefined_future_lane
+# CHECK: $hl = EX16sa undef $hl, implicit $sps
+# CHECK-NOT: implicit $h
+# CHECK: $l = LD8ri 7
+body: |
+  bb.0:
+    liveins: $ix, $iy, $b
+    LD88or $ix, 0, $iy
+    $l = LD8ri 7
+    LD88or $ix, 2, $hl
+    $hl = LD88ro $ix, 2
+    $h = COPY $b
+    LD88or $ix, 4, $hl
+    RET16 implicit-def $sps, implicit $sps
+...
+---
+name: scratch_live_high
+tracksRegLiveness: true
+# CHECK-LABEL: name: scratch_live_high
+# CHECK: $hl = EX16sa undef $hl, implicit $sps, implicit $h
+body: |
+  bb.0:
+    liveins: $ix, $iy, $h
+    LD88or $ix, 0, $iy
+    $a = COPY $h
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...

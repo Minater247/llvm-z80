@@ -54,6 +54,32 @@ bool Z80MachinePreRAOptimization::runOnMachineFunction(MachineFunction &MF) {
   MachineRegisterInfo &MRI = MF.getRegInfo();
   SmallSet<Register, 16> FoldAsLoadDefCandidates;
 
+  // Copy propagation can expose A after selection constrained a byte access
+  // to HL/IX/IY. The accumulator forms also address BC and DE. Recover that
+  // freedom before allocation, rather than copying a live pointer to an index
+  // register just to store a result already in A.
+  SmallSet<Register, 16> RelaxedPointers;
+  for (auto &MBB : MF)
+    for (auto &MI : MBB) {
+      unsigned PtrOp;
+      if (MI.getOpcode() == Z80::LD8pg &&
+          MI.getOperand(1).getReg() == Z80::A) {
+        MI.setDesc(TII.get(Z80::LD8pa));
+        PtrOp = 0;
+      } else if (MI.getOpcode() == Z80::LD8gp &&
+                 MI.getOperand(0).getReg() == Z80::A) {
+        MI.setDesc(TII.get(Z80::LD8ap));
+        PtrOp = 1;
+      } else
+        continue;
+      Register Ptr = MI.getOperand(PtrOp).getReg();
+      if (Ptr.isVirtual())
+        RelaxedPointers.insert(Ptr);
+      Changed = true;
+    }
+  for (Register Ptr : RelaxedPointers)
+    MRI.recomputeRegClass(Ptr);
+
   for (MachineBasicBlock &MBB : MF) {
     for (auto MII = MBB.begin(), MIE = MBB.end(); MII != MIE;) {
       MachineInstr *MI = &*MII;

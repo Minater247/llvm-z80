@@ -1,0 +1,56 @@
+# RUN: llc -mattr=+undoc -run-pass=z80-regalloc,virtregrewriter -verify-machineinstrs %s -o - | FileCheck %s
+#
+# Subregister copy preferences must resolve to the chosen pair's actual byte.
+# CHECK-LABEL: name: subreg_copy
+# CHECK: $iy = LD16ri 1234
+# CHECK-NEXT: $e = COPY $iyl
+# CHECK-NEXT: $e = INC8r killed $e
+# CHECK: KILL killed $e, killed $iyh, $a
+#
+# All four values are simultaneously live: byte assignments must not alias
+# either pair. Also exercise functions with no live intervals.
+# CHECK-LABEL: name: pair_byte_aliases
+# CHECK: $bc = LD16ri 1234
+# CHECK-NEXT: $e = LD8ri 7
+# CHECK-NEXT: $a = LD8ri 8
+# CHECK-NEXT: $hl = LD16ri 5678
+# CHECK: KILL killed $bc, killed $e, killed $a, killed $hl
+# CHECK-LABEL: name: empty
+# CHECK: RET16
+--- |
+  target triple = "z80"
+  define void @subreg_copy() { ret void }
+  define void @pair_byte_aliases() { ret void }
+  define void @empty() { ret void }
+...
+---
+name: subreg_copy
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $a
+    %0:i16 = LD16ri 1234
+    %1:g8 = COPY %0.sub_low
+    %1:g8 = INC8r %1, implicit-def dead $f
+    KILL %1, %0.sub_high, $a
+    RET16 implicit-def $sps, implicit $sps
+...
+---
+name: pair_byte_aliases
+tracksRegLiveness: true
+body: |
+  bb.0:
+    %0:r16 = LD16ri 1234
+    %1:r8 = LD8ri 7
+    %2:r8 = LD8ri 8
+    %3:r16 = LD16ri 5678
+    KILL %0, %1, %2, %3
+    RET16 implicit-def $sps, implicit $sps
+...
+---
+name: empty
+tracksRegLiveness: true
+body: |
+  bb.0:
+    RET16 implicit-def $sps, implicit $sps
+...

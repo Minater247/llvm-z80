@@ -54,6 +54,19 @@ bool Z80FrameLowering::isFPSaved(const MachineFunction &MF) const {
   return hasFP(MF) && MF.getInfo<Z80MachineFunctionInfo>()->getUsesAltFP() ==
                           Z80MachineFunctionInfo::AFPM_None;
 }
+void Z80FrameLowering::getCalleeSaves(const MachineFunction &MF,
+                                    BitVector &SavedRegs) const {
+  TargetFrameLowering::getCalleeSaves(MF, SavedRegs);
+  // The dedicated frame-pointer save is emitted outside the generic CSR list.
+  // Report it to IPRA, otherwise callers see the prologue's IX definition as a
+  // clobber and save IX again (including when IX addresses their own frame).
+  if (!MF.getFunction().hasFnAttribute(Attribute::Naked)) {
+    if (isFPSaved(MF))
+      SavedRegs.set(TRI->getFrameRegister(MF));
+    if (MF.getFunction().hasFnAttribute("static_stack_needs_ix"))
+      SavedRegs.set(Z80::IX);
+  }
+}
 bool Z80FrameLowering::hasReservedCallFrame(const MachineFunction &MF) const {
   return false; // call frames are not implemented yet
 }
@@ -253,10 +266,13 @@ void Z80FrameLowering::emitPrologue(MachineFunction &MF,
               .addImm(0)
               .setMIFlag(MachineInstr::FrameSetup);
           BuildMI(MBB, MBBI, DL, TII.get(Z80::ADD16as), Z80::IX)
+              .addReg(Z80::IX)
               .setMIFlag(MachineInstr::FrameSetup);
           BuildMI(MBB, MBBI, DL, TII.get(Z80::ADD16as), Z80::IY)
+              .addReg(Z80::IY)
               .setMIFlag(MachineInstr::FrameSetup);
-          BuildMI(MBB, MBBI, DL, TII.get(Z80::LD16sa), ScratchReg)
+          BuildMI(MBB, MBBI, DL, TII.get(Z80::LD16sa))
+              .addReg(ScratchReg, RegState::Kill)
               .setMIFlag(MachineInstr::FrameSetup);
         } else {
           BuildMI(MBB, MBBI, DL, TII.get(Is24Bit ? Z80::CALL24 : Z80::CALL16))
@@ -274,6 +290,7 @@ void Z80FrameLowering::emitPrologue(MachineFunction &MF,
               .addImm(0)
               .setMIFlag(MachineInstr::FrameSetup);
           BuildMI(MBB, MBBI, DL, TII.get(Z80::ADD16as), Z80::IX)
+              .addReg(Z80::IX)
               .setMIFlag(MachineInstr::FrameSetup);
         } else {
           BuildMI(MBB, MBBI, DL, TII.get(Is24Bit ? Z80::CALL24 : Z80::CALL16))
@@ -420,10 +437,11 @@ void Z80FrameLowering::emitEpilogue(MachineFunction &MF,
   }
 }
 
-// Only non-nested non-nmi interrupts can use shadow registers.
+// Only non-nested non-nmi interrupts may use an explicitly available bank.
 static bool shouldUseShadow(const MachineFunction &MF) {
   const Function &F = MF.getFunction();
-  return F.getFnAttribute("interrupt").getValueAsString() == "Generic";
+  return MF.getSubtarget<Z80Subtarget>().useAlternateRegs() &&
+         F.getFnAttribute("interrupt").getValueAsString() == "Generic";
 }
 
 static MachineInstr& setImplicitUsesUndef(MachineInstr &MI) {

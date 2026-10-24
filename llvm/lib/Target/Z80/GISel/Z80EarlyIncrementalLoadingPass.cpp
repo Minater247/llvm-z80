@@ -102,14 +102,9 @@ bool Z80EarlyIncrementalLoadingPass::runOnMachineFunction(MachineFunction &MF)
                   LLVM_DEBUG(dbgs() << "Z80EarlyIncrementalLoadingPass: replaced PTR_ADD with COPY: "; MI0.dump());
                 } else {
                   MachineIRBuilder MIB(MI0);
-                  Register off = MRI.createGenericVirtualRegister(LLT::scalar(16));
-#if 0
-                  auto LastLDI = RE.getLastDef();
-                  BuildMI(MBB, std::next(LastLDI->getIterator()), LastLDI->getDebugLoc(), TII->get(TargetOpcode::G_CONSTANT), off).addImm(Delta);
-#else
-                  MachineInstr *CONST = BuildMI(MBB, MI0, MI0.getDebugLoc(), TII->get(TargetOpcode::G_CONSTANT), off).addImm(Delta);
-#endif
-                  LLVM_DEBUG(dbgs() << "Z80EarlyIncrementalLoadingPass: inserted G_CONSTANT: "; CONST->dump());
+                  Register off = MRI.createGenericVirtualRegister(MRI.getType(Off));
+                  MIB.buildConstant(off, Delta);
+                  LLVM_DEBUG(dbgs() << "Z80EarlyIncrementalLoadingPass: inserted G_CONSTANT: "; MRI.getVRegDef(off)->dump());
                   MI0.getOperand(1).setReg(copy);
                   MI0.getOperand(2).setReg(off);
                   LLVM_DEBUG(dbgs() << "Z80EarlyIncrementalLoadingPass: replaced PTR_ADD parameters: "; MI0.dump());

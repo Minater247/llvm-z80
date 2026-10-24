@@ -35,6 +35,10 @@ set(sources
   GISel/Z80SelfOrAndOptPass.cpp
   GISel/Z80Tracker.cpp
   GISel/Z80UnrollLd.cpp
+  Z80StackStream.cpp
+  Z80BankRegionAllocator.cpp
+  Z80LateCopyPropagation.cpp
+  Z80AlternateRegAllocator.cpp
   Z80AsmPrinter.cpp
   Z80BranchSelector.cpp
   Z80CallingConv.cpp
@@ -46,6 +50,7 @@ set(sources
   Z80MachineLateOptimization.cpp
   Z80MachinePreRAOptimization.cpp
   Z80PostSelectCombiner.cpp
+  Z80RegisterAllocator.cpp
   Z80RegisterInfo.cpp
   Z80RepeatedStoreOptPass.cpp
   Z80ExIncOptPass.cpp

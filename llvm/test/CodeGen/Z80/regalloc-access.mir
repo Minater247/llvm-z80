@@ -1,0 +1,39 @@
+# RUN: llc -mattr=+undoc -run-pass=z80-regalloc,virtregrewriter -verify-machineinstrs %s -o - | FileCheck %s
+# The index-pair load expands to PUSH HL; two loads; EX (SP),HL; POP IY.
+# Keeping the destination in HL avoids the scratch save and exchange.
+# CHECK-LABEL: name: pair_load
+# CHECK: $hl = LD88ro $ix, 0
+# CHECK-NEXT: KILL killed $hl
+# Transfers between IX and IY halves need a saved accumulator. An ordinary
+# byte is cheaper for a value that is read from one bank and sent to the other.
+# CHECK-LABEL: name: cross_index
+# CHECK: $e = COPY $ixl
+# CHECK-NEXT: $e = INC8r killed $e
+# CHECK-NEXT: $iyl = COPY killed $e
+--- |
+  target triple = "z80"
+  define void @pair_load() { ret void }
+  define void @cross_index() { ret void }
+...
+---
+name: pair_load
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $ix
+    %0:r16 = LD88ro $ix, 0
+    KILL %0
+    RET16 implicit-def $sps, implicit $sps
+...
+---
+name: cross_index
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $ixl, $a
+    %0:r8 = COPY $ixl
+    %0:r8 = INC8r %0, implicit-def dead $f
+    $iyl = COPY killed %0
+    KILL $iyl, $a
+    RET16 implicit-def $sps, implicit $sps
+...

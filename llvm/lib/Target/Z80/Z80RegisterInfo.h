@@ -59,6 +59,8 @@ public:
   const uint32_t *getCallPreservedMask(const MachineFunction &MF,
                                        CallingConv::ID CC) const override;
   const uint32_t *getNoPreservedMask() const override;
+  ArrayRef<MCPhysReg>
+  getIntraCallClobberedRegs(const MachineFunction *MF) const override;
 
   /// getReservedRegs - Returns a bitset indexed by physical register number
   /// indicating if a register is a special register that has particular uses

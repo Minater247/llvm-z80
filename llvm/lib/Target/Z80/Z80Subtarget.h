@@ -63,6 +63,12 @@ class Z80Subtarget final : public Z80GenSubtargetInfo {
 	/// True if target has SLI (also known SLL and SL1) instruction (HasUndocOps)
 	bool HasSliOp = false;
 
+	/// Alternate registers are OS-owned unless explicitly made available.
+	bool UseAlternateRegs = false;
+
+	/// Environment promise: neither maskable interrupts nor NMI can occur.
+	bool ExpectNoInterrupts = false;
+
 	// Ordering here is important. Z80InstrInfo initializes Z80RegisterInfo which
 	// Z80TargetLowering needs.
 	Z80InstrInfo InstrInfo;
@@ -131,6 +137,8 @@ public:
 	bool hasEZ80Ops() const { return HasEZ80Ops; }
 	bool hasIndexHalfRegs() const { return HasIdxHalfRegs; }
 	bool hasSliOp() const { return HasSliOp; }
+	bool useAlternateRegs() const { return UseAlternateRegs; }
+	bool expectNoInterrupts() const { return ExpectNoInterrupts; }
 	bool has24BitEZ80Ops() const { return is24Bit() && hasEZ80Ops(); }
 	bool has16BitEZ80Ops() const { return is16Bit() && hasEZ80Ops(); }
 };

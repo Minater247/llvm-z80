@@ -95,6 +95,20 @@ let CostPerUse = [1] in {
   def UIY : EZ80ExtReg<IY>;
 }
 
+// Storage in the alternate bank. These registers are never directly encoded
+// as instruction operands; bank-transfer pseudos provide access after RA.
+def A_ALT : Z80Reg<"a_alt">;
+def F_ALT : Z80Reg<"f_alt">;
+let SubRegs = [A_ALT, F_ALT], SubRegIndices = [sub_high, sub_low],
+    CoveredBySubRegs = 1 in
+def AF_ALT : Z80Reg<"af_alt">;
+def BC_ALT : Z80Reg<"bc_alt">;
+def DE_ALT : Z80Reg<"de_alt">;
+def HL_ALT : Z80Reg<"hl_alt">;
+def UBC_ALT : EZ80ExtReg<BC_ALT>;
+def UDE_ALT : EZ80ExtReg<DE_ALT>;
+def UHL_ALT : EZ80ExtReg<HL_ALT>;
+
 // misc registers
 def SPS : Z80Reg<"sp", 3>, DwarfRegNum<[6]>;
 def SPL : Z80Reg<"sp", 3>, DwarfRegNum<[7]>;
@@ -144,3 +158,11 @@ def A24 : Z80RC24<(add UHL, I24)>;
 def R24 : Z80RC24<(add G24, I24)>;
 let CopyCost = -1 in
 def Z24 : Z80RC24<(add SPL, PC)>;
+
+// The bank allocator owns these classes; ordinary instructions cannot name
+// their members. Reserving them prevents scavenging and ordinary allocation.
+let isAllocatable = 0 in {
+  def ALT8 : Z80RC8<(add A_ALT)>;
+  def ALT16 : Z80RC16<(add HL_ALT, DE_ALT, BC_ALT)>;
+  def ALT24 : Z80RC24<(add UHL_ALT, UDE_ALT, UBC_ALT)>;
+}

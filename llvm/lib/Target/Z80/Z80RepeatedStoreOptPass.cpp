@@ -41,22 +41,6 @@ void initializeZ80RepeatedStoreOptPassPass(PassRegistry &);
 }
 
 namespace {
-static void advanceLiveRegUnitsForward(LiveRegUnits &Units,
-                                       const MachineInstr &MI) {
-  for (const MachineOperand &MO : phys_regs_and_masks(MI)) {
-    if (MO.isRegMask()) {
-      Units.removeRegsNotPreserved(MO.getRegMask());
-      continue;
-    }
-
-    if (MO.isKill())
-      Units.removeReg(MO.getReg());
-  }
-
-  for (const MachineOperand &MO : phys_regs_and_masks(MI))
-    if (MO.isReg() && MO.isDef() && !MO.isDead())
-      Units.addReg(MO.getReg());
-}
 
 class Z80RepeatedStoreOptPass : public MachineFunctionPass {
 public:
@@ -79,22 +63,19 @@ private:
 
   // Check if register HL is live immediately after a specific point in the instruction sequence
   bool isHLLiveAfterPoint(const MachineBasicBlock &MBB,
-                         MachineBasicBlock::iterator Point,
-                         const LiveRegUnits &LiveRegs);
+                         MachineBasicBlock::iterator Point);
 
   // Optimize a sequence of repeated stores
   bool optimizeRepeatedStores(MachineBasicBlock &MBB,
                              MachineBasicBlock::iterator Begin,
                              MachineBasicBlock::iterator End,
-                             uint64_t Address,
-                             const LiveRegUnits &LiveRegs);
+                             uint64_t Address);
 
   // Helper to optimize subsequences within a block, splitting on HL conflicts
   bool optimizeSubsequences(MachineBasicBlock &MBB,
                            MachineBasicBlock::iterator Begin,
                            MachineBasicBlock::iterator End,
-                           uint64_t Address,
-                           const LiveRegUnits &LiveRegs);
+                           uint64_t Address);
 };
 } // end anonymous namespace
 
@@ -154,90 +135,22 @@ Register Z80RepeatedStoreOptPass::getStoreSourceRegister(const MachineInstr &MI)
 
 // Check if register HL is live immediately after a specific point in the instruction sequence
 bool Z80RepeatedStoreOptPass::isHLLiveAfterPoint(const MachineBasicBlock &MBB,
-                                                MachineBasicBlock::iterator Point,
-                                                const LiveRegUnits &LiveRegs) {
+                                                MachineBasicBlock::iterator Point) {
   const TargetRegisterInfo &TRI = *MBB.getParent()->getSubtarget().getRegisterInfo();
 
-  LLVM_DEBUG(dbgs() << "Checking HL liveness immediately after point\n");
-  LLVM_DEBUG({
-    if (Point == MBB.end()) {
-      dbgs() << "Point is end of block\n";
-    } else {
-      dbgs() << "Point instruction: " << *Point;
-    }
-  });
-
-  // If Point is at the end of the block, check liveness at block exit
-  if (Point == MBB.end()) {
-    LiveRegUnits LocalLiveRegs(TRI);
-    LocalLiveRegs.addLiveOuts(MBB);
-
-    const MCRegister HLReg = Z80::HL;
-    bool hlAvailable = LocalLiveRegs.available(HLReg);
-    LLVM_DEBUG({
-      bool hAvailable = LocalLiveRegs.available(Z80::H);
-      bool lAvailable = LocalLiveRegs.available(Z80::L);
-      dbgs() << "At end of block:\n";
-      dbgs() << "  HL available: " << hlAvailable << "\n";
-      dbgs() << "  H available: " << hAvailable << "\n";
-      dbgs() << "  L available: " << lAvailable << "\n";
-      dbgs() << "  HL is live: " << !hlAvailable << "\n";
-    });
-
-    return !hlAvailable;
-  }
-
-  // Create a copy of the current LiveRegs state and step forward through
-  // the instructions from Point to see if HL becomes live
-  LiveRegUnits LocalLiveRegs = LiveRegs;
-
-  LLVM_DEBUG(dbgs() << "Current liveness state before stepping forward:\n");
-  LLVM_DEBUG({
-    for (unsigned Reg = 1; Reg < TRI.getNumRegs(); ++Reg) {
-      if (!LocalLiveRegs.available(Reg)) {
-        dbgs() << "  " << TRI.getName(Reg) << "\n";
-      }
-    }
-  });
-
-  // Step forward from Point to the end of the block to see when HL becomes live
-  for (auto MI = Point; MI != MBB.end(); ++MI) {
-    LLVM_DEBUG(dbgs() << "Stepping forward through: " << *MI);
-
-    // Check if this instruction makes HL live (i.e., it's used but not defined)
-    if (MI->readsRegister(Z80::HL, &TRI) ||
-        MI->readsRegister(Z80::H, &TRI) ||
-        MI->readsRegister(Z80::L, &TRI)) {
-      LLVM_DEBUG(dbgs() << "Found instruction that uses HL: " << *MI << " | HL becomes live after this point\n");
-      return true;
-    }
-
-    // Step forward to update liveness for the next instruction
-    advanceLiveRegUnitsForward(LocalLiveRegs, *MI);
-
-    LLVM_DEBUG(dbgs() << "Live registers after stepping forward:\n");
-    LLVM_DEBUG({
-      for (unsigned Reg = 1; Reg < TRI.getNumRegs(); ++Reg) {
-        if (!LocalLiveRegs.available(Reg)) {
-          dbgs() << "  " << TRI.getName(Reg) << "\n";
-        }
-      }
-    });
-  }
-
-  // If we reach here, check final liveness at the end of the block
-  LocalLiveRegs.addLiveOuts(MBB);
-  const MCRegister HLReg = Z80::HL;
-  bool hlAvailable = LocalLiveRegs.available(HLReg);
-  LLVM_DEBUG(dbgs() << "At end of forward walk, HL available = " << hlAvailable << "\n");
-  return !hlAvailable;
+  // Walk backwards to the boundary. A later use after an intervening
+  // definition does not make the old HL value live here.
+  LiveRegUnits Live(TRI);
+  Live.addLiveOuts(MBB);
+  for (auto I = MBB.end(); I != Point;)
+    Live.stepBackward(*--I);
+  return !Live.available(Z80::HL);
 }
 
 // Optimize a sequence of repeated stores
 bool Z80RepeatedStoreOptPass::optimizeRepeatedStores(
     MachineBasicBlock &MBB, MachineBasicBlock::iterator Begin,
-    MachineBasicBlock::iterator End, uint64_t Address,
-    const LiveRegUnits &LiveRegs) {
+    MachineBasicBlock::iterator End, uint64_t Address) {
 
   MachineFunction &MF = *MBB.getParent();
   const TargetInstrInfo &TII = *MF.getSubtarget().getInstrInfo();
@@ -257,7 +170,7 @@ bool Z80RepeatedStoreOptPass::optimizeRepeatedStores(
   MCRegister HLReg = Z80::HL;
 
   // Check if HL is live after the last store in this subsequence
-  bool IsHLLive = isHLLiveAfterPoint(MBB, End, LiveRegs);
+  bool IsHLLive = isHLLiveAfterPoint(MBB, End);
 
   LLVM_DEBUG(dbgs() << "Liveness analysis result: IsHLLive = " << IsHLLive << "\n");
 
@@ -389,8 +302,7 @@ bool Z80RepeatedStoreOptPass::optimizeRepeatedStores(
 bool Z80RepeatedStoreOptPass::optimizeSubsequences(MachineBasicBlock &MBB,
                           MachineBasicBlock::iterator Begin,
                           MachineBasicBlock::iterator End,
-                          uint64_t Address,
-                          const LiveRegUnits &LiveRegs) {
+                          uint64_t Address) {
   bool Changed = false;
   [[maybe_unused]] const TargetRegisterInfo &TRI =
     *MBB.getParent()->getSubtarget().getRegisterInfo();
@@ -433,7 +345,7 @@ bool Z80RepeatedStoreOptPass::optimizeSubsequences(MachineBasicBlock &MBB,
             LLVM_DEBUG(dbgs() << "end of block\n");
           }
           if (StoreCount >= 2) {  // Only optimize if we have actual stores
-            if (optimizeRepeatedStores(MBB, SubseqBegin, LastStoreIt, Address, LiveRegs)) {
+            if (optimizeRepeatedStores(MBB, SubseqBegin, LastStoreIt, Address)) {
               Changed = true;
             }
           }
@@ -464,7 +376,7 @@ bool Z80RepeatedStoreOptPass::optimizeSubsequences(MachineBasicBlock &MBB,
     LLVM_DEBUG(dbgs() << "Optimizing final subsequence: "
                      << StoreCount << " stores in " << std::distance(SubseqBegin, End) << " instructions\n");
     if (StoreCount >= 2) {  // Only optimize if we have actual stores
-      if (optimizeRepeatedStores(MBB, SubseqBegin, LastStoreIt, Address, LiveRegs)) {
+      if (optimizeRepeatedStores(MBB, SubseqBegin, LastStoreIt, Address)) {
         Changed = true;
       }
     }
@@ -482,33 +394,6 @@ bool Z80RepeatedStoreOptPass::runOnMachineFunction(MachineFunction &MF) {
 
   for (auto &MBB : MF) {
     LLVM_DEBUG(dbgs() << "=== Processing Basic Block: " << MBB.getName() << " ===\n");
-
-    // Create a LiveRegUnits tracker to check if HL is live
-    LiveRegUnits LiveRegs(TRI);
-    LiveRegs.addLiveOuts(MBB);
-
-    LLVM_DEBUG(dbgs() << "Live-outs at end of block:\n");
-    LLVM_DEBUG({
-      for (unsigned Reg = 1; Reg < TRI.getNumRegs(); ++Reg) {
-        if (!LiveRegs.available(Reg)) {
-          dbgs() << "  " << TRI.getName(Reg) << "\n";
-        }
-      }
-    });
-
-    // Process the block backwards for liveness analysis
-    for (auto MI = MBB.rbegin(); MI != MBB.rend(); ++MI) {
-      LLVM_DEBUG(dbgs() << "Stepping backward through: " << *MI);
-      LiveRegs.stepBackward(*MI);
-      LLVM_DEBUG(dbgs() << "Live registers after stepping backward:\n");
-      LLVM_DEBUG({
-        for (unsigned Reg = 1; Reg < TRI.getNumRegs(); ++Reg) {
-          if (!LiveRegs.available(Reg)) {
-            dbgs() << "  " << TRI.getName(Reg) << "\n";
-          }
-        }
-      });
-    }
 
     LLVM_DEBUG(dbgs() << "=== Starting forward pass through block ===\n");
 
@@ -549,7 +434,7 @@ bool Z80RepeatedStoreOptPass::runOnMachineFunction(MachineFunction &MF) {
             LLVM_DEBUG(dbgs() << "Found subsequence of " << std::distance(Begin, End)
                               << " stores to address " << Address << " before HL conflict\n");
 
-            if (optimizeSubsequences(MBB, Begin, End, Address, LiveRegs)) {
+            if (optimizeSubsequences(MBB, Begin, End, Address)) {
               LLVM_DEBUG(dbgs() << "Successfully optimized subsequence before HL conflict\n");
               Changed = true;
             }
@@ -577,7 +462,7 @@ bool Z80RepeatedStoreOptPass::runOnMachineFunction(MachineFunction &MF) {
                           << " stores to address " << Address << "\n");
 
         // Optimize this sequence using subsequences (which handles HL conflicts internally)
-        if (optimizeSubsequences(MBB, Begin, End, Address, LiveRegs)) {
+        if (optimizeSubsequences(MBB, Begin, End, Address)) {
           LLVM_DEBUG(dbgs() << "Successfully optimized sequence/subsequences\n");
           Changed = true;
         } else {

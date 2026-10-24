@@ -13,6 +13,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "Z80AsmPrinter.h"
+#include "MCTargetDesc/Z80MCTargetDesc.h"
+#include "Z80Subtarget.h"
 #include <optional>
 
 #include "llvm/IR/Constants.h"
@@ -109,6 +111,105 @@ void Z80MCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
 }
 
 void Z80AsmPrinter::emitInstruction(const MachineInstr *MI) {
+  unsigned Opc = MI->getOpcode();
+  if (Opc == Z80::SADDSAT8ar || Opc == Z80::SADDSAT8ai ||
+      Opc == Z80::SADDSAT8ap) {
+    auto Emit = [&](unsigned Opcode, ArrayRef<MCOperand> Operands) {
+      MCInst Inst;
+      Inst.setOpcode(Opcode);
+      for (auto Operand : Operands)
+        Inst.addOperand(Operand);
+      EmitToStreamer(*OutStreamer, Inst);
+    };
+    bool Immediate = Opc == Z80::SADDSAT8ai;
+    Emit(Immediate ? Z80::ADD8ai
+                   : Opc == Z80::SADDSAT8ap ? Z80::ADD8ap : Z80::ADD8ar,
+         {Immediate ? MCOperand::createImm(MI->getOperand(0).getImm())
+                    : MCOperand::createReg(MI->getOperand(0).getReg())});
+    auto *Done = OutContext.createTempSymbol("sat");
+    Emit(getSubtarget().is24Bit() ? Z80::JP24CC : Z80::JP16CC,
+         {MCOperand::createExpr(MCSymbolRefExpr::create(Done, OutContext)),
+          MCOperand::createImm(Z80::COND_PO)});
+    // Overflow with carry is negative overflow; without carry it is positive.
+    Emit(Z80::LD8ri, {MCOperand::createReg(Z80::A), MCOperand::createImm(127)});
+    Emit(Z80::ADC8ai, {MCOperand::createImm(0)});
+    OutStreamer->emitLabel(Done);
+    return;
+  }
+  bool Save = Opc == Z80::ALT_SAVE8 || Opc == Z80::ALT_SAVE16 || Opc == Z80::ALT_SAVE24;
+  bool Load = Opc == Z80::ALT_LOAD8 || Opc == Z80::ALT_LOAD16 || Opc == Z80::ALT_LOAD24;
+  if (Save || Load) {
+    MCRegister Main = MI->getOperand(Load ? 0 : 1).getReg();
+    MCRegister Alt = MI->getOperand(Load ? 1 : 0).getReg();
+    bool Wide = getSubtarget().is24Bit();
+    bool Byte = Opc == Z80::ALT_SAVE8 || Opc == Z80::ALT_LOAD8;
+    bool CFI =
+        MF->needsFrameMoves() && !getSubtarget().getFrameLowering()->hasFP(*MF);
+    auto Emit = [&](unsigned Op, ArrayRef<MCRegister> Regs = {}) {
+      MCInst Inst;
+      Inst.setOpcode(Op);
+      for (MCRegister R : Regs)
+        Inst.addOperand(MCOperand::createReg(R));
+      EmitToStreamer(*OutStreamer, Inst);
+    };
+    auto Push = [&](MCRegister R) {
+      if (R == Z80::AF)
+        Emit(Wide ? Z80::PUSH24AF : Z80::PUSH16AF);
+      else
+        Emit(Wide ? Z80::PUSH24r : Z80::PUSH16r, {R});
+      if (CFI)
+        OutStreamer->emitCFIAdjustCfaOffset(Wide ? 3 : 2);
+    };
+    auto Pop = [&](MCRegister R) {
+      if (R == Z80::AF)
+        Emit(Wide ? Z80::POP24AF : Z80::POP16AF);
+      else
+        Emit(Wide ? Z80::POP24r : Z80::POP16r, {R});
+      if (CFI)
+        OutStreamer->emitCFIAdjustCfaOffset(Wide ? -3 : -2);
+    };
+    if (!Byte) {
+      MCRegister Bank = Alt == Z80::HL_ALT    ? Z80::HL
+                        : Alt == Z80::DE_ALT  ? Z80::DE
+                        : Alt == Z80::BC_ALT  ? Z80::BC
+                        : Alt == Z80::UHL_ALT ? Z80::UHL
+                        : Alt == Z80::UDE_ALT ? Z80::UDE
+                                              : Z80::UBC;
+      unsigned Exchange = Wide ? Z80::EXX24 : Z80::EXX16;
+      if (Load)
+        Emit(Exchange);
+      Push(Load ? Bank : Main);
+      Emit(Exchange);
+      Pop(Load ? Main : Bank);
+      if (Save)
+        Emit(Exchange);
+    } else if (Main == Z80::A && Save) {
+      Push(Z80::AF);
+      Emit(Z80::EXAF);
+      Pop(Z80::AF);
+      Emit(Z80::EXAF);
+    } else if (Main == Z80::A) {
+      // POP AF would corrupt the primary flags with the alternate flags.
+      // Use a preserved byte of BC instead, retaining both banks' flags.
+      MCRegister BC = Wide ? Z80::UBC : Z80::BC;
+      Push(BC);
+      Emit(Z80::EXAF);
+      Emit(Z80::LD8gg, {Z80::B, Z80::A});
+      Emit(Z80::EXAF);
+      Emit(Z80::LD8gg, {Z80::A, Z80::B});
+      Pop(BC);
+    } else {
+      unsigned Move =
+          Z80::I8RegClass.contains(Main)
+              ? (Z80::X8RegClass.contains(Main) ? Z80::LD8xx : Z80::LD8yy)
+              : Z80::LD8gg;
+      Emit(Z80::EXAF);
+      Emit(Move, {Load ? Main : MCRegister(Z80::A),
+                  Load ? MCRegister(Z80::A) : Main});
+      Emit(Z80::EXAF);
+    }
+    return;
+  }
   Z80MCInstLower MCInstLowering(*MF, *this);
 
   MCInst TmpInst;

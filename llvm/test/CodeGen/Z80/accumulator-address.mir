@@ -1,0 +1,78 @@
+# RUN: llc -run-pass=z80-machine-prera-opt -verify-machineinstrs %s -o - | FileCheck %s
+# Accumulator accesses can use BC/DE; other byte and displacement accesses
+# retain their original constraints. Volatile memory operands are preserved.
+--- |
+  target triple = "z80"
+  define void @store_a() { ret void }
+  define void @store_b() { ret void }
+  define void @mixed() { ret void }
+  define void @load_a() { ret void }
+  define void @indexed() { ret void }
+...
+---
+name: store_a
+tracksRegLiveness: true
+# CHECK-LABEL: name: store_a
+# CHECK: class: r16
+# CHECK: LD8pa %0, $a :: (volatile store (s8))
+body: |
+  bb.0:
+    liveins: $de, $a
+    %0:a16 = COPY $de
+    LD8pg %0, $a :: (volatile store (s8))
+    RET16 implicit-def $sps, implicit $sps
+...
+---
+name: store_b
+tracksRegLiveness: true
+# CHECK-LABEL: name: store_b
+# CHECK: class: a16
+# CHECK: LD8pg %0, $b
+body: |
+  bb.0:
+    liveins: $de, $b
+    %0:a16 = COPY $de
+    LD8pg %0, $b
+    RET16 implicit-def $sps, implicit $sps
+...
+---
+name: mixed
+tracksRegLiveness: true
+# CHECK-LABEL: name: mixed
+# CHECK: class: a16
+# CHECK: LD8pa %0, $a
+# CHECK: LD8pg %0, $b
+body: |
+  bb.0:
+    liveins: $de, $a, $b
+    %0:a16 = COPY $de
+    LD8pg %0, $a
+    LD8pg %0, $b
+    RET16 implicit-def $sps, implicit $sps
+...
+---
+name: load_a
+tracksRegLiveness: true
+# CHECK-LABEL: name: load_a
+# CHECK: class: r16
+# CHECK: $a = LD8ap %0 :: (volatile load (s8))
+body: |
+  bb.0:
+    liveins: $de
+    %0:a16 = COPY $de
+    $a = LD8gp %0 :: (volatile load (s8))
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...
+---
+name: indexed
+tracksRegLiveness: true
+# CHECK-LABEL: name: indexed
+# CHECK: class: i16
+# CHECK: LD8og %0, 1, $a
+body: |
+  bb.0:
+    liveins: $de, $a
+    %0:i16 = COPY $de
+    LD8og %0, 1, $a
+    RET16 implicit-def $sps, implicit $sps
+...

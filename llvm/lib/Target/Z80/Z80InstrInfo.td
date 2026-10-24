@@ -628,11 +628,13 @@ let Defs = [SPL] in {
                     (outs), (ins A24:$src)>;
 }
 
-let Defs = [AF], Uses = [AF] in
+let Defs = [AF, AF_ALT], Uses = [AF, AF_ALT] in
 def EXAF   : I  <NoPre, 0x08, "ex", "\taf, af'">;
-let Defs = [HL, DE, BC], Uses = [HL, DE, BC] in
+let Defs = [HL, DE, BC, HL_ALT, DE_ALT, BC_ALT],
+    Uses = [HL, DE, BC, HL_ALT, DE_ALT, BC_ALT] in
 def EXX16  : I16<NoPre, 0xD9, "exx">;
-let Defs = [UHL, UDE, UBC], Uses = [UHL, UDE, UBC] in
+let Defs = [UHL, UDE, UBC, UHL_ALT, UDE_ALT, UBC_ALT],
+    Uses = [UHL, UDE, UBC, UHL_ALT, UDE_ALT, UBC_ALT] in
 def EXX24  : I24<NoPre, 0xD9, "exx">;
 
 let Defs = [DE, HL], Uses = [DE, HL] in
@@ -640,10 +642,10 @@ def EX16DE : I16<NoPre, 0xEB, "ex", "\tde, hl">;
 let Defs = [UDE, UHL], Uses = [UDE, UHL] in
 def EX24DE : I24<NoPre, 0xEB, "ex", "\tde, hl">;
 
-let Uses = [SPS] in
+let Uses = [SPS], mayLoad = true, mayStore = true in
 def EX16sa : I16<Idx0Pre, 0xE3, "ex", "\t(sp), $dst", "$imp = $dst",
                  (outs A16:$dst), (ins A16:$imp)>;
-let Uses = [SPL] in
+let Uses = [SPL], mayLoad = true, mayStore = true in
 def EX24sa : I24<Idx0Pre, 0xE3, "ex", "\t(sp), $dst", "$imp = $dst",
                  (outs A24:$dst), (ins A24:$imp)>;
 
@@ -1406,3 +1408,24 @@ def : Pat<(srl R16:$src, (i8 8)),
 def : Pat<(bswap R16:$src),
           (REG_SEQUENCE R16, (i8 (EXTRACT_SUBREG R16:$src, sub_low)), sub_high,
                              (i8 (EXTRACT_SUBREG R16:$src, sub_high)), sub_low)>;
+
+// Preserve main-bank registers and flags, except the explicit load destination.
+// Expansion is deliberately after post-RA scheduling: each transfer restores
+// the primary bank before another instruction, call, or branch can execute.
+let hasSideEffects = 1 in {
+  def ALT_SAVE8 : Pseudo<"", "", "", (outs ALT8:$dst), (ins R8:$src)>;
+  def ALT_LOAD8 : Pseudo<"", "", "", (outs R8:$dst), (ins ALT8:$src)>;
+  def ALT_SAVE16 : Pseudo<"", "", "", (outs ALT16:$dst), (ins R16:$src)>;
+  def ALT_LOAD16 : Pseudo<"", "", "", (outs R16:$dst), (ins ALT16:$src)>;
+  def ALT_SAVE24 : Pseudo<"", "", "", (outs ALT24:$dst), (ins R24:$src)>;
+  def ALT_LOAD24 : Pseudo<"", "", "", (outs R24:$dst), (ins ALT24:$src)>;
+}
+
+// Signed byte saturation uses ADD's overflow/carry flags. Keep the short
+// internal branch atomic until emission, with an exact size for relaxation.
+let Defs = [A, F], Uses = [A], hasSideEffects = 0 in {
+  def SADDSAT8ar : Pseudo<"", "", "", (outs), (ins R8:$src)>;
+  def SADDSAT8ai : Pseudo<"", "", "", (outs), (ins i8imm:$src)>;
+  let mayLoad = 1 in
+  def SADDSAT8ap : Pseudo<"", "", "", (outs), (ins aptr:$src)>;
+}

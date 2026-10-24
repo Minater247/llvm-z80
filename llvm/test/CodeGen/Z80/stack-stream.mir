@@ -1,0 +1,303 @@
+# RUN: llc -run-pass=z80-stack-stream -verify-machineinstrs %s -o - | FileCheck %s
+--- |
+  target triple = "z80"
+  declare void @sink()
+  define void @allowed() nounwind "z80-expnoints" { ret void }
+  define void @reserved() nounwind { ret void }
+  define void @volatile_word() nounwind "z80-expnoints" { ret void }
+  define void @atomic_word() nounwind "z80-expnoints" { ret void }
+  define void @live_a() nounwind "z80-expnoints" { ret void }
+  define void @live_l() nounwind "z80-expnoints" { ret void }
+  define void @live_flags() nounwind "z80-expnoints" { ret void }
+  define void @uses_iy() nounwind "z80-expnoints" { ret void }
+  define void @uses_stack() nounwind "z80-expnoints" { ret void }
+  define void @calls() nounwind "z80-expnoints" { ret void }
+  define void @interrupt_control() nounwind "z80-expnoints" { ret void }
+  define void @implicit_pair_def() nounwind "z80-expnoints" { ret void }
+...
+---
+name: allowed
+tracksRegLiveness: true
+# CHECK-LABEL: name: allowed
+# CHECK: $iy = LD16ri 0
+# CHECK: LD16sa $hl
+# CHECK: $bc = POP16r
+# CHECK: LD16sa $iy
+body: |
+  bb.0:
+    liveins: $bc, $de, $hl, $a, $f, $ix
+    frame-setup PUSH16r $ix, implicit-def $sps, implicit $sps
+    $iyl = LD8yy $c
+    $iyh = LD8yy $b, implicit-def $iy
+    $c = LD8gp $iy :: (load (s8))
+    $b = LD8go $iy, 1 :: (load (s8))
+    $l = LD8gg $c
+    $a = LD8ap $de :: (load (s8))
+    SADDSAT8ap $hl, implicit-def $a, implicit-def $f, implicit $a :: (load (s8))
+    LD8pa $de, $a :: (store (s8))
+    $ix = frame-destroy POP16r implicit-def $sps, implicit $sps
+    RET16 implicit-def $sps, implicit $sps
+...
+---
+name: reserved
+tracksRegLiveness: true
+# CHECK-LABEL: name: reserved
+# CHECK-NOT: LD16sa
+# CHECK: $c = LD8gp $iy
+# CHECK: $b = LD8go
+# CHECK-NOT: LD16sa
+body: |
+  bb.0:
+    liveins: $bc, $de, $hl, $a, $f, $ix
+    frame-setup PUSH16r $ix, implicit-def $sps, implicit $sps
+    $iyl = LD8yy $c
+    $iyh = LD8yy $b, implicit-def $iy
+    $c = LD8gp $iy :: (load (s8))
+    $b = LD8go $iy, 1 :: (load (s8))
+    $l = LD8gg $c
+    $a = LD8ap $de :: (load (s8))
+    SADDSAT8ap $hl, implicit-def $a, implicit-def $f, implicit $a :: (load (s8))
+    LD8pa $de, $a :: (store (s8))
+    $ix = frame-destroy POP16r implicit-def $sps, implicit $sps
+    RET16 implicit-def $sps, implicit $sps
+...
+---
+name: volatile_word
+tracksRegLiveness: true
+# CHECK-LABEL: name: volatile_word
+# CHECK-NOT: LD16sa
+# CHECK: $c = LD8gp $iy
+# CHECK: $b = LD8go
+# CHECK-NOT: LD16sa
+body: |
+  bb.0:
+    liveins: $bc, $de, $hl, $a, $f, $ix
+    frame-setup PUSH16r $ix, implicit-def $sps, implicit $sps
+    $iyl = LD8yy $c
+    $iyh = LD8yy $b, implicit-def $iy
+    $c = LD8gp $iy :: (volatile load (s8))
+    $b = LD8go $iy, 1 :: (volatile load (s8))
+    $l = LD8gg $c
+    $a = LD8ap $de :: (load (s8))
+    SADDSAT8ap $hl, implicit-def $a, implicit-def $f, implicit $a :: (load (s8))
+    LD8pa $de, $a :: (store (s8))
+    $ix = frame-destroy POP16r implicit-def $sps, implicit $sps
+    RET16 implicit-def $sps, implicit $sps
+...
+---
+name: atomic_word
+tracksRegLiveness: true
+# CHECK-LABEL: name: atomic_word
+# CHECK-NOT: LD16sa
+# CHECK: $c = LD8gp $iy
+# CHECK: $b = LD8go
+# CHECK-NOT: LD16sa
+body: |
+  bb.0:
+    liveins: $bc, $de, $hl, $a, $f, $ix
+    frame-setup PUSH16r $ix, implicit-def $sps, implicit $sps
+    $iyl = LD8yy $c
+    $iyh = LD8yy $b, implicit-def $iy
+    $c = LD8gp $iy :: (load unordered (s8))
+    $b = LD8go $iy, 1 :: (load unordered (s8))
+    $l = LD8gg $c
+    $a = LD8ap $de :: (load (s8))
+    SADDSAT8ap $hl, implicit-def $a, implicit-def $f, implicit $a :: (load (s8))
+    LD8pa $de, $a :: (store (s8))
+    $ix = frame-destroy POP16r implicit-def $sps, implicit $sps
+    RET16 implicit-def $sps, implicit $sps
+...
+---
+name: live_a
+tracksRegLiveness: true
+# CHECK-LABEL: name: live_a
+# CHECK-NOT: LD16sa
+# CHECK: $c = LD8gp $iy
+# CHECK: $b = LD8go
+# CHECK-NOT: LD16sa
+body: |
+  bb.0:
+    liveins: $bc, $de, $hl, $a, $f, $ix
+    frame-setup PUSH16r $ix, implicit-def $sps, implicit $sps
+    $iyl = LD8yy $c
+    $iyh = LD8yy $b, implicit-def $iy
+    $c = LD8gp $iy :: (load (s8))
+    $b = LD8go $iy, 1 :: (load (s8))
+    $e = LD8gg $a
+    $l = LD8gg $c
+    $a = LD8ap $de :: (load (s8))
+    SADDSAT8ap $hl, implicit-def $a, implicit-def $f, implicit $a :: (load (s8))
+    LD8pa $de, $a :: (store (s8))
+    $ix = frame-destroy POP16r implicit-def $sps, implicit $sps
+    RET16 implicit-def $sps, implicit $sps
+...
+---
+name: live_l
+tracksRegLiveness: true
+# CHECK-LABEL: name: live_l
+# CHECK-NOT: LD16sa
+# CHECK: $c = LD8gp $iy
+# CHECK: $b = LD8go
+# CHECK-NOT: LD16sa
+body: |
+  bb.0:
+    liveins: $bc, $de, $hl, $a, $f, $ix
+    frame-setup PUSH16r $ix, implicit-def $sps, implicit $sps
+    $iyl = LD8yy $c
+    $iyh = LD8yy $b, implicit-def $iy
+    $c = LD8gp $iy :: (load (s8))
+    $b = LD8go $iy, 1 :: (load (s8))
+    $e = LD8gg $l
+    $l = LD8gg $c
+    $a = LD8ap $de :: (load (s8))
+    SADDSAT8ap $hl, implicit-def $a, implicit-def $f, implicit $a :: (load (s8))
+    LD8pa $de, $a :: (store (s8))
+    $ix = frame-destroy POP16r implicit-def $sps, implicit $sps
+    RET16 implicit-def $sps, implicit $sps
+...
+---
+name: live_flags
+tracksRegLiveness: true
+# CHECK-LABEL: name: live_flags
+# CHECK-NOT: LD16sa
+# CHECK: $c = LD8gp $iy
+# CHECK: $b = LD8go
+# CHECK-NOT: LD16sa
+body: |
+  bb.0:
+    liveins: $bc, $de, $hl, $a, $f, $ix
+    frame-setup PUSH16r $ix, implicit-def $sps, implicit $sps
+    $iyl = LD8yy $c
+    $iyh = LD8yy $b, implicit-def $iy
+    $c = LD8gp $iy :: (load (s8))
+    $b = LD8go $iy, 1 :: (load (s8))
+    $a = LD8ri 0
+    ADC8ai 0, implicit-def $a, implicit-def $f, implicit $a, implicit $f
+    $l = LD8gg $c
+    $a = LD8ap $de :: (load (s8))
+    SADDSAT8ap $hl, implicit-def $a, implicit-def $f, implicit $a :: (load (s8))
+    LD8pa $de, $a :: (store (s8))
+    $ix = frame-destroy POP16r implicit-def $sps, implicit $sps
+    RET16 implicit-def $sps, implicit $sps
+...
+---
+name: uses_iy
+tracksRegLiveness: true
+# CHECK-LABEL: name: uses_iy
+# CHECK-NOT: LD16sa
+# CHECK: $c = LD8gp $iy
+# CHECK: $b = LD8go
+# CHECK-NOT: LD16sa
+body: |
+  bb.0:
+    liveins: $bc, $de, $hl, $a, $f, $ix
+    frame-setup PUSH16r $ix, implicit-def $sps, implicit $sps
+    $iyl = LD8yy $c
+    $iyh = LD8yy $b, implicit-def $iy
+    $c = LD8gp $iy :: (load (s8))
+    $b = LD8go $iy, 1 :: (load (s8))
+    $a = LD8yy $iyl
+    $l = LD8gg $c
+    $a = LD8ap $de :: (load (s8))
+    SADDSAT8ap $hl, implicit-def $a, implicit-def $f, implicit $a :: (load (s8))
+    LD8pa $de, $a :: (store (s8))
+    $ix = frame-destroy POP16r implicit-def $sps, implicit $sps
+    RET16 implicit-def $sps, implicit $sps
+...
+---
+name: uses_stack
+tracksRegLiveness: true
+# CHECK-LABEL: name: uses_stack
+# CHECK-NOT: LD16sa
+# CHECK: $c = LD8gp $iy
+# CHECK: $b = LD8go
+# CHECK-NOT: LD16sa
+body: |
+  bb.0:
+    liveins: $bc, $de, $hl, $a, $f, $ix
+    frame-setup PUSH16r $ix, implicit-def $sps, implicit $sps
+    $iyl = LD8yy $c
+    $iyh = LD8yy $b, implicit-def $iy
+    $c = LD8gp $iy :: (load (s8))
+    $b = LD8go $iy, 1 :: (load (s8))
+    PUSH16AF implicit-def $sps, implicit $sps, implicit $af
+    POP16AF implicit-def $sps, implicit-def $af, implicit $sps
+    $l = LD8gg $c
+    $a = LD8ap $de :: (load (s8))
+    SADDSAT8ap $hl, implicit-def $a, implicit-def $f, implicit $a :: (load (s8))
+    LD8pa $de, $a :: (store (s8))
+    $ix = frame-destroy POP16r implicit-def $sps, implicit $sps
+    RET16 implicit-def $sps, implicit $sps
+...
+---
+name: calls
+tracksRegLiveness: true
+# CHECK-LABEL: name: calls
+# CHECK-NOT: LD16sa
+# CHECK: $c = LD8gp $iy
+# CHECK: $b = LD8go
+# CHECK-NOT: LD16sa
+body: |
+  bb.0:
+    liveins: $bc, $de, $hl, $a, $f, $ix
+    frame-setup PUSH16r $ix, implicit-def $sps, implicit $sps
+    $iyl = LD8yy $c
+    $iyh = LD8yy $b, implicit-def $iy
+    $c = LD8gp $iy :: (load (s8))
+    $b = LD8go $iy, 1 :: (load (s8))
+    CALL16 @sink, csr_z80_allregs, implicit $sps
+    $l = LD8gg $c
+    $a = LD8ap $de :: (load (s8))
+    SADDSAT8ap $hl, implicit-def $a, implicit-def $f, implicit $a :: (load (s8))
+    LD8pa $de, $a :: (store (s8))
+    $ix = frame-destroy POP16r implicit-def $sps, implicit $sps
+    RET16 implicit-def $sps, implicit $sps
+...
+---
+name: interrupt_control
+tracksRegLiveness: true
+# CHECK-LABEL: name: interrupt_control
+# CHECK-NOT: LD16sa
+# CHECK: $c = LD8gp $iy
+# CHECK: $b = LD8go
+# CHECK-NOT: LD16sa
+body: |
+  bb.0:
+    liveins: $bc, $de, $hl, $a, $f, $ix
+    frame-setup PUSH16r $ix, implicit-def $sps, implicit $sps
+    $iyl = LD8yy $c
+    $iyh = LD8yy $b, implicit-def $iy
+    $c = LD8gp $iy :: (load (s8))
+    $b = LD8go $iy, 1 :: (load (s8))
+    EI
+    $l = LD8gg $c
+    $a = LD8ap $de :: (load (s8))
+    SADDSAT8ap $hl, implicit-def $a, implicit-def $f, implicit $a :: (load (s8))
+    LD8pa $de, $a :: (store (s8))
+    $ix = frame-destroy POP16r implicit-def $sps, implicit $sps
+    RET16 implicit-def $sps, implicit $sps
+...
+---
+name: implicit_pair_def
+tracksRegLiveness: true
+# A high-byte move's implicit pair definition does not overwrite L in hardware.
+# CHECK-LABEL: name: implicit_pair_def
+# CHECK-NOT: LD16sa
+# CHECK: $c = LD8gp $iy
+# CHECK-NOT: LD16sa
+body: |
+  bb.0:
+    liveins: $bc, $de, $hl, $ix
+    frame-setup PUSH16r $ix, implicit-def $sps, implicit $sps
+    $iyl = LD8yy $c
+    $iyh = LD8yy $b, implicit-def $iy
+    $c = LD8gp $iy :: (load (s8))
+    $b = LD8go $iy, 1 :: (load (s8))
+    $h = LD8gg $c, implicit-def $hl
+    $a = LD8ap $hl :: (load (s8))
+    $l = LD8gg $b
+    SADDSAT8ap $hl, implicit-def $a, implicit-def $f, implicit $a :: (load (s8))
+    LD8pa $de, $a :: (store (s8))
+    $ix = frame-destroy POP16r implicit-def $sps, implicit $sps
+    RET16 implicit-def $sps, implicit $sps
+...

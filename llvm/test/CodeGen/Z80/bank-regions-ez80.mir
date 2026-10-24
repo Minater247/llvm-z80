@@ -1,0 +1,103 @@
+# RUN: llc -mattr=+alternate-regs -run-pass=z80-bank-regions -verify-machineinstrs %s -o - | FileCheck %s
+# RUN: llc -mattr=-alternate-regs -run-pass=z80-bank-regions -verify-machineinstrs %s -o - | FileCheck %s --check-prefix=OFF
+# OFF-NOT: EXX24
+# CHECK-LABEL: name: wide
+# CHECK: EXX24
+# CHECK-NEXT: $ubc = INC24r $ubc
+# CHECK-NEXT: $ubc = DEC24r $ubc
+# CHECK-NEXT: LD8pa $ubc, $a
+# CHECK-NEXT: EXX24
+# CHECK-NEXT: $uhl = ALT_LOAD24 $ubc_alt
+# CHECK-LABEL: name: byte_result
+# CHECK: EXX24
+# CHECK-NEXT: $a = LD8ap $ude
+# CHECK-NEXT: $ude = INC24r $ude
+# CHECK-NEXT: EXX24
+# CHECK-NEXT: $c = LD8gg $a
+# CHECK-LABEL: name: live_flags
+# CHECK: $uhl = ALT_LOAD24 $uhl_alt
+# CHECK: $c = INC8r $c
+# CHECK: $uhl_alt = ALT_SAVE24 $uhl
+# CHECK-LABEL: name: call_boundary
+# CHECK-NOT: EXX24
+# CHECK: CALL24
+# CHECK-LABEL: name: joined
+# CHECK: EXX24
+# CHECK-NEXT: $ubc = INC24r $ubc
+# CHECK-NEXT: ADD8ai 7
+# CHECK-NEXT: LD8pa $uhl, $a
+# CHECK-NEXT: $uhl = INC24r $uhl
+# CHECK-NEXT: EXX24
+# CHECK-NEXT: RET24
+--- |
+  target triple = "ez80"
+  define void @wide() { ret void }
+  define void @byte_result() { ret void }
+  define void @live_flags() { ret void }
+  define void @call_boundary() { ret void }
+  define void @joined() { ret void }
+  declare void @callee()
+...
+---
+name: wide
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $af, $ubc, $ude
+    $uhl = ALT_LOAD24 $ubc_alt
+    $uhl = INC24r $uhl
+    $uhl = DEC24r $uhl
+    LD8pa $uhl, $a
+    $ubc_alt = ALT_SAVE24 $uhl
+    RET24 implicit-def $spl, implicit $spl, implicit $af, implicit $ubc, implicit $ude, implicit $uhl
+...
+---
+name: byte_result
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $ubc, $ude
+    $uhl = ALT_LOAD24 $ude_alt
+    $c = LD8gp $uhl
+    $uhl = INC24r $uhl
+    $ude_alt = ALT_SAVE24 $uhl
+    RET24 implicit-def $spl, implicit $spl, implicit $ubc, implicit $ude
+...
+---
+name: live_flags
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $af, $ubc, $ude
+    $uhl = ALT_LOAD24 $uhl_alt
+    $c = LD8gp $uhl
+    $c = INC8r $c, implicit-def $f
+    $uhl_alt = ALT_SAVE24 $uhl
+    RET24 implicit-def $spl, implicit $spl, implicit $af, implicit $ubc, implicit $ude
+...
+---
+name: call_boundary
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $uhl = ALT_LOAD24 $uhl_alt
+    CALL24 @callee, csr_z80_c, implicit-def $spl, implicit $spl, implicit $uhl, implicit-def $uhl
+    $uhl_alt = ALT_SAVE24 $uhl
+    RET24 implicit-def $spl, implicit $spl
+...
+---
+name: joined
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $af, $ubc, $ude
+    $uhl = ALT_LOAD24 $ubc_alt
+    $uhl = INC24r $uhl
+    $ubc_alt = ALT_SAVE24 $uhl
+    ADD8ai 7, implicit-def $a, implicit-def $f, implicit $a
+    $uhl = ALT_LOAD24 $uhl_alt
+    LD8pa $uhl, $a
+    $uhl = INC24r $uhl
+    $uhl_alt = ALT_SAVE24 $uhl
+    RET24 implicit-def $spl, implicit $spl, implicit $af, implicit $ubc, implicit $ude
+...

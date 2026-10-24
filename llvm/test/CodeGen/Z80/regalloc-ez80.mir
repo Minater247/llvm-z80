@@ -1,0 +1,24 @@
+# RUN: llc -run-pass=z80-regalloc,virtregrewriter -verify-machineinstrs %s -o - | FileCheck %s
+# 24-bit registers alias their 16-bit and byte subregisters.
+# CHECK-LABEL: name: triples_and_bytes
+# CHECK: $ubc = LD24ri 1234
+# CHECK-NEXT: $e = LD8ri 7
+# CHECK-NEXT: $a = LD8ri 8
+# CHECK-NEXT: $uhl = LD24ri 5678
+# CHECK: KILL killed $ubc, killed $e, killed $a, killed $uhl
+--- |
+  target triple = "ez80"
+  define void @triples_and_bytes() { ret void }
+...
+---
+name: triples_and_bytes
+tracksRegLiveness: true
+body: |
+  bb.0:
+    %0:r24 = LD24ri 1234
+    %1:r8 = LD8ri 7
+    %2:r8 = LD8ri 8
+    %3:r24 = LD24ri 5678
+    KILL %0, %1, %2, %3
+    RET24 implicit-def $spl, implicit $spl
+...

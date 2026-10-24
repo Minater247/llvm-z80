@@ -28,6 +28,11 @@ def FeatureEZ80    : SubtargetFeature<"ez80", "HasEZ80Ops", "true",
                                       "Support ez80 instructions">;
 def FeatureIdxHalf : SubtargetFeature<"idxhalf", "HasIdxHalfRegs", "true",
                                       "Support index half registers">;
+// This is an environment permission, not an instruction-set capability.
+def FeatureAlternateRegs : SubtargetFeature<"alternate-regs",
+    "UseAlternateRegs", "true", "Allow compiler use of the alternate register bank">;
+def FeatureExpNoInts : SubtargetFeature<"expnoints", "ExpectNoInterrupts", "true",
+    "Promise no interrupts, permitting SP to be used as a data cursor">;
 def FeatureSli     : SubtargetFeature<"sli", "HasSliOp", "true",
                                       "Support SLI instruction">;
 

@@ -1,0 +1,1 @@
+# RUN: %python %S/Inputs/bank-regions.py --llc llc --work %t

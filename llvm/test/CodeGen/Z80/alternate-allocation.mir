@@ -1,0 +1,181 @@
+# RUN: llc -mattr=+alternate-regs -run-pass=z80-alternate-regalloc -verify-machineinstrs %s -o - | FileCheck %s
+# RUN: llc -mattr=-alternate-regs -run-pass=z80-alternate-regalloc -verify-machineinstrs %s -o - | FileCheck %s --check-prefix=OFF
+# OFF-NOT: ALT_SAVE
+# OFF-NOT: ALT_LOAD
+# CHECK-LABEL: name: reuse
+# CHECK: $hl_alt = ALT_SAVE16 $hl
+# CHECK: $de = ALT_LOAD16 $hl_alt
+# CHECK: $hl_alt = ALT_SAVE16 $bc
+# CHECK: $de = ALT_LOAD16 $hl_alt
+# CHECK-LABEL: name: dead_store
+# CHECK: $hl_alt = ALT_SAVE16 $hl
+# CHECK: $de_alt = ALT_SAVE16 $bc
+# CHECK: $de = ALT_LOAD16 $hl_alt
+# CHECK-LABEL: name: call_live
+# CHECK-NOT: ALT_
+# CHECK: LD88or %stack.0
+# CHECK: CALL16
+# CHECK: LD88ro %stack.0
+# CHECK-LABEL: name: call_dead
+# CHECK: CALL16
+# CHECK: $hl_alt = ALT_SAVE16 $hl
+# CHECK: $de = ALT_LOAD16 $hl_alt
+# CHECK-LABEL: name: loop_call
+# CHECK-NOT: ALT_
+# CHECK: LD88or %stack.0
+# CHECK: bb.1:
+# CHECK: LD88ro %stack.0
+# CHECK: CALL16
+# CHECK: JP16 %bb.1
+# CHECK-LABEL: name: byte_bank
+# CHECK: $a_alt = ALT_SAVE8 $b
+# CHECK: $c = ALT_LOAD8 $a_alt
+# CHECK-LABEL: name: loop_bank
+# CHECK: $hl_alt = ALT_SAVE16 $hl
+# CHECK: bb.1:
+# CHECK: $de = ALT_LOAD16 $hl_alt
+# CHECK-LABEL: name: capacity
+# CHECK: $hl_alt = ALT_SAVE16 $hl
+# CHECK: $de_alt = ALT_SAVE16 $hl
+# CHECK: $bc_alt = ALT_SAVE16 $hl
+# CHECK: LD88or %stack.3
+--- |
+  target triple = "z80"
+  declare void @callee()
+  define void @reuse() { ret void }
+  define void @dead_store() { ret void }
+  define void @call_live() { ret void }
+  define void @call_dead() { ret void }
+  define void @loop_call() { ret void }
+  define void @byte_bank() { ret void }
+  define void @loop_bank() { ret void }
+  define void @capacity() { ret void }
+...
+---
+name: reuse
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 2, alignment: 1 }
+  - { id: 1, type: spill-slot, size: 2, alignment: 1 }
+body: |
+  bb.0:
+    liveins: $hl, $bc
+    LD88or %stack.0, 0, $hl :: (store (s16) into %stack.0)
+    $de = LD88ro %stack.0, 0 :: (load (s16) from %stack.0)
+    KILL $de
+    LD88or %stack.1, 0, $bc :: (store (s16) into %stack.1)
+    $de = LD88ro %stack.1, 0 :: (load (s16) from %stack.1)
+    KILL $de
+    RET16 implicit-def $sps, implicit $sps
+...
+---
+name: dead_store
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 2, alignment: 1 }
+  - { id: 1, type: spill-slot, size: 2, alignment: 1 }
+body: |
+  bb.0:
+    liveins: $hl, $bc
+    LD88or %stack.0, 0, $hl :: (store (s16) into %stack.0)
+    LD88or %stack.1, 0, $bc :: (store (s16) into %stack.1)
+    $de = LD88ro %stack.0, 0 :: (load (s16) from %stack.0)
+    KILL $de
+    RET16 implicit-def $sps, implicit $sps
+...
+---
+name: call_live
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 2, alignment: 1 }
+body: |
+  bb.0:
+    liveins: $hl
+    LD88or %stack.0, 0, $hl :: (store (s16) into %stack.0)
+    CALL16 @callee, csr_z80_c, implicit-def $sps, implicit $sps
+    $de = LD88ro %stack.0, 0 :: (load (s16) from %stack.0)
+    KILL $de
+    RET16 implicit-def $sps, implicit $sps
+...
+---
+name: call_dead
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 2, alignment: 1 }
+body: |
+  bb.0:
+    CALL16 @callee, csr_z80_c, implicit-def $sps, implicit $sps, implicit-def $hl
+    LD88or %stack.0, 0, $hl :: (store (s16) into %stack.0)
+    $de = LD88ro %stack.0, 0 :: (load (s16) from %stack.0)
+    KILL $de
+    RET16 implicit-def $sps, implicit $sps
+...
+---
+name: loop_call
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 2, alignment: 1 }
+body: |
+  bb.0:
+    liveins: $hl
+    LD88or %stack.0, 0, $hl :: (store (s16) into %stack.0)
+    JP16 %bb.1
+  bb.1:
+    $de = LD88ro %stack.0, 0 :: (load (s16) from %stack.0)
+    KILL $de
+    CALL16 @callee, csr_z80_c, implicit-def $sps, implicit $sps
+    JP16 %bb.1
+...
+---
+name: byte_bank
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 1, alignment: 1 }
+body: |
+  bb.0:
+    liveins: $b
+    LD8or %stack.0, 0, $b :: (store (s8) into %stack.0)
+    $c = LD8ro %stack.0, 0 :: (load (s8) from %stack.0)
+    KILL $c
+    RET16 implicit-def $sps, implicit $sps
+...
+---
+name: loop_bank
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 2, alignment: 1 }
+body: |
+  bb.0:
+    liveins: $hl
+    LD88or %stack.0, 0, $hl :: (store (s16) into %stack.0)
+    JP16 %bb.1
+  bb.1:
+    $de = LD88ro %stack.0, 0 :: (load (s16) from %stack.0)
+    KILL $de
+    JP16 %bb.1
+...
+---
+name: capacity
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 2, alignment: 1 }
+  - { id: 1, type: spill-slot, size: 2, alignment: 1 }
+  - { id: 2, type: spill-slot, size: 2, alignment: 1 }
+  - { id: 3, type: spill-slot, size: 2, alignment: 1 }
+body: |
+  bb.0:
+    liveins: $hl
+    LD88or %stack.0, 0, $hl :: (store (s16) into %stack.0)
+    LD88or %stack.1, 0, $hl :: (store (s16) into %stack.1)
+    LD88or %stack.2, 0, $hl :: (store (s16) into %stack.2)
+    LD88or %stack.3, 0, $hl :: (store (s16) into %stack.3)
+    $de = LD88ro %stack.0, 0 :: (load (s16) from %stack.0)
+    KILL $de
+    $de = LD88ro %stack.1, 0 :: (load (s16) from %stack.1)
+    KILL $de
+    $de = LD88ro %stack.2, 0 :: (load (s16) from %stack.2)
+    KILL $de
+    $de = LD88ro %stack.3, 0 :: (load (s16) from %stack.3)
+    KILL $de
+    RET16 implicit-def $sps, implicit $sps
+...

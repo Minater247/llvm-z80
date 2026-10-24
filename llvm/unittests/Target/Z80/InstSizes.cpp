@@ -44,7 +44,7 @@ constexpr struct Immediate {
 class Encoding {
 public:
   uint8_t Size[2];
-  uint8_t Bytes[6];
+  uint8_t Bytes[12];
 
   constexpr uint8_t init(uint8_t Byte) {
     init(bi);
@@ -84,6 +84,22 @@ constexpr struct TestInstr {
 #define imp_def_u(r) " implicit-def " u(r)
 #define imp(r) " implicit $" #r
 #define imp_u(r) " implicit " u(r)
+    // Saturation and alternate transfers remain atomic until assembly emission.
+    {{0x81, 0xE2, wi, 0x3E, bi, 0xCE, bi}, "SADDSAT8ar $c, implicit-def $a, implicit-def $f, implicit $a"},
+    {{0xDD, 0x84, 0xE2, wi, 0x3E, bi, 0xCE, bi}, "SADDSAT8ar $ixh, implicit-def $a, implicit-def $f, implicit $a"},
+    {{0xC6, bi, 0xE2, wi, 0x3E, bi, 0xCE, bi}, "SADDSAT8ai -1, implicit-def $a, implicit-def $f, implicit $a"},
+    {{0x86, 0xE2, wi, 0x3E, bi, 0xCE, bi}, "SADDSAT8ap " u(hl) ", implicit-def $a, implicit-def $f, implicit $a"},
+    {{0xDD, 0x86, bi, 0xE2, wi, 0x3E, bi, 0xCE, bi}, "SADDSAT8ap " u(ix) ", implicit-def $a, implicit-def $f, implicit $a"},
+    {{0xE5, 0xD9, 0xE1, 0xD9}, u(hl_alt) " = ALT_SAVE" w " " u(hl)},
+    {{0xD9, 0xE5, 0xD9, 0xD1}, u(de) " = ALT_LOAD" w " " u(hl_alt)},
+    {{0xDD, 0xE5, 0xD9, 0xC1, 0xD9}, u(bc_alt) " = ALT_SAVE" w " " u(ix)},
+    {{0xD9, 0xD5, 0xD9, 0xFD, 0xE1}, u(iy) " = ALT_LOAD" w " " u(de_alt)},
+    {{0x08, 0x78, 0x08}, "$a_alt = ALT_SAVE8 $b"},
+    {{0x08, 0x4F, 0x08}, "$c = ALT_LOAD8 $a_alt"},
+    {{0x08, 0xDD, 0x7D, 0x08}, "$a_alt = ALT_SAVE8 $ixl"},
+    {{0x08, 0xFD, 0x67, 0x08}, "$iyh = ALT_LOAD8 $a_alt"},
+    {{0xF5, 0x08, 0xF1, 0x08}, "$a_alt = ALT_SAVE8 $a"},
+    {{0xC5, 0x08, 0x47, 0x08, 0x78, 0xC1}, "$a = ALT_LOAD8 $a_alt"},
     {{0x00}, "NOP"},
     {{0x01, wi}, u(bc) " = LD" w "ri i" w " 0"},
     {{0x02}, "LD8pa " u(bc) ", $a"},
@@ -92,7 +108,7 @@ constexpr struct TestInstr {
     {{0x05}, "$b = DEC8r $b," imp_def(f)},
     {{0x06, bi}, "$b = LD8ri i8 0"},
     {{0x07}, "RLCA" imp_def(a) "," imp_def(f) "," imp(a)},
-    {{0x08}, "EXAF" imp_def(af) "," imp(af)},
+    {{0x08}, "EXAF" imp_def(af) "," imp_def(af_alt) "," imp(af) "," imp(af_alt)},
     {{0x09}, u(hl) " = ADD" w "ao " u(hl) ", " u(bc) "," imp_def(f)},
     {{0x0A}, "$a = LD8ap " u(bc)},
     {{0x0B}, u(bc) " = DEC" w "r " u(bc) ""},
@@ -556,7 +572,7 @@ constexpr struct TestInstr {
     {{0xD6, bi}, "SUB8ai 0," imp_def(a) "," imp_def(f) "," imp(a)},
     {{0xD7}, "RST" w " 16," imp_def(sp) l "," imp(sp) l},
     {{0xD8}, "RET" w "CC" c "," imp_def(sp) l "," imp(f) "," imp(sp) l def_bb},
-    {{0xD9}, "EXX" w imp_def_u(hl) "," imp_def_u(de) "," imp_def_u(bc) "," imp_u(hl) "," imp_u(de) "," imp_u(bc)},
+    {{0xD9}, "EXX" w imp_def_u(hl) "," imp_def_u(de) "," imp_def_u(bc) "," imp_u(hl) "," imp_u(de) "," imp_u(bc) "," imp_def_u(hl_alt) "," imp_def_u(de_alt) "," imp_def_u(bc_alt) "," imp_u(hl_alt) "," imp_u(de_alt) "," imp_u(bc_alt)},
     {{0xDA, wi}, "JP" w "CC" bb "," c "," imp(f) def_bb},
     {{0xDB, bi}, "IN8am 0," imp_def(a)},
     {{0xDC, wi}, "CALL" w "CC 0," c "," csr "," imp(f) "," imp(sp) l},
@@ -1539,7 +1555,9 @@ void checkInstructionSizes(StringRef T) {
   auto TI = std::begin(TestInstrs);
   for (const auto &MBB : MF)
     for (const auto &MI : MBB) {
-      EXPECT_FALSE(MI.isPseudo());
+      EXPECT_EQ(MI.isPseudo(),
+                (TII->getName(MI.getOpcode()).starts_with("ALT_") ||
+                 TII->getName(MI.getOpcode()).starts_with("SADDSAT")));
       unsigned ActualSize = unsigned(TI++->Enc.Size[Is24Bit]);
       EXPECT_EQ(TII->getInstSizeInBytes(MI), ActualSize) << MI;
     }

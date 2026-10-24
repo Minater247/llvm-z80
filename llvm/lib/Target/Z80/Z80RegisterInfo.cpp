@@ -36,6 +36,17 @@ Z80RegisterInfo::Z80RegisterInfo(const Triple &TT)
   StackPtr = Is24Bit ? Z80::SPL : Z80::SPS;
 }
 
+ArrayRef<MCPhysReg> Z80RegisterInfo::getIntraCallClobberedRegs(
+    const MachineFunction *) const {
+  // IPRA collects usage before bank-region and stack-stream expansion. Those
+  // passes can introduce primary-bank scratch registers and AF' exchanges.
+  // Keep these clobbers conservative; the alternate pairs are described by
+  // ALT_SAVE pseudos, so unused pairs can still hold caller values across calls.
+  static const MCPhysReg Clobbers[] = {Z80::AF, Z80::UBC, Z80::UDE,
+                                     Z80::UHL, Z80::UIY, Z80::AF_ALT};
+  return Clobbers;
+}
+
 const TargetRegisterClass *
 Z80RegisterInfo::getPointerRegClass(unsigned Kind) const {
   switch (Kind) {
@@ -138,6 +149,11 @@ const uint32_t *Z80RegisterInfo::getNoPreservedMask() const {
 BitVector Z80RegisterInfo::getReservedRegs(const MachineFunction &MF) const {
   BitVector Reserved(getNumRegs());
 
+  // Alternate storage is allocated by the bank allocator, not by the
+  // instruction allocator or register scavenger, even when enabled.
+  for (MCRegister R : {Z80::AF_ALT, Z80::UBC_ALT, Z80::UDE_ALT, Z80::UHL_ALT})
+    for (MCRegAliasIterator A(R, this, true); A.isValid(); ++A)
+      Reserved.set(*A);
   const Z80FrameLowering *TFI = getFrameLowering(MF);
   // Set the stack-pointer registers as reserved.
   Reserved.set(Z80::SPS);

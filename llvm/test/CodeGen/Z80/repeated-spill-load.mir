@@ -1,0 +1,212 @@
+# RUN: llc -run-pass=z80-post-rewrite -verify-machineinstrs %s -o - | FileCheck %s
+# CHECK-LABEL: name: repeated
+# CHECK: $e = LD8ro %stack.0, 0
+# CHECK-NEXT: $a = COPY $e
+# CHECK: $e = LD8ro %stack.0, 0 :: (volatile load
+# CHECK-NEXT: $a = LD8ro %stack.0, 0 :: (volatile load
+--- |
+  target triple = "z80"
+  declare void @opaque()
+  define void @repeated() { ret void }
+  define void @reused_address() { ret void }
+  define void @partial_clobber() { ret void }
+  define void @changed_spill() { ret void }
+  define void @call_clobber() { ret void }
+  define void @unknown_store() { ret void }
+  define void @ordered_reload() { ret void }
+  define void @offset_reload() { ret void }
+  define void @pair_reload_copy() { ret void }
+  define void @pair_reload_clobber() { ret void }
+  define void @pair_reload_volatile() { ret void }
+...
+---
+name: repeated
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 1, alignment: 1 }
+body: |
+  bb.0:
+    $e = LD8ro %stack.0, 0
+    $a = LD8ro %stack.0, 0
+    KILL $e, $a
+    $e = LD8ro %stack.0, 0 :: (volatile load (s8) from %stack.0)
+    $a = LD8ro %stack.0, 0 :: (volatile load (s8) from %stack.0)
+    KILL $e, $a
+    RET16 implicit-def $sps, implicit $sps
+...
+---
+name: reused_address
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 3, alignment: 1 }
+body: |
+  bb.0:
+    liveins: $de, $a
+    $iy = LD88ro %stack.0, 0
+    $a = LD8ap killed $iy
+    $iy = LD88ro %stack.0, 0
+    RET16 implicit-def $sps, implicit $sps, implicit $iy
+# CHECK-LABEL: name: reused_address
+# CHECK: $iy = LD88ro %stack.0, 0
+# CHECK: $a = LD8ap $iy
+# CHECK-NOT: $iy = LD88ro %stack.0, 0
+# CHECK: RET16
+...
+---
+name: partial_clobber
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 3, alignment: 1 }
+body: |
+  bb.0:
+    liveins: $de, $a
+    $iy = LD88ro %stack.0, 0
+    $iyl = LD8ri 7
+    $iy = LD88ro %stack.0, 0
+    RET16 implicit-def $sps, implicit $sps, implicit $iy
+# CHECK-LABEL: name: partial_clobber
+# CHECK: $iy = LD88ro %stack.0, 0
+# CHECK: $iyl = LD8ri 7
+# CHECK: $iy = LD88ro %stack.0, 0
+# CHECK: RET16
+...
+---
+name: changed_spill
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 3, alignment: 1 }
+body: |
+  bb.0:
+    liveins: $de, $a
+    $iy = LD88ro %stack.0, 0
+    LD88or %stack.0, 0, $de
+    $iy = LD88ro %stack.0, 0
+    RET16 implicit-def $sps, implicit $sps, implicit $iy
+# CHECK-LABEL: name: changed_spill
+# CHECK: $iy = LD88ro %stack.0, 0
+# CHECK: LD88or %stack.0, 0, $de
+# CHECK: $iy = COPY $de
+# CHECK: RET16
+...
+---
+name: call_clobber
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 3, alignment: 1 }
+body: |
+  bb.0:
+    liveins: $de, $a
+    $iy = LD88ro %stack.0, 0
+    CALL16 @opaque, csr_z80_c, implicit-def $sps, implicit $sps
+    $iy = LD88ro %stack.0, 0
+    RET16 implicit-def $sps, implicit $sps, implicit $iy
+# CHECK-LABEL: name: call_clobber
+# CHECK: $iy = LD88ro %stack.0, 0
+# CHECK: CALL16 @opaque, csr_z80_c, implicit-def $sps, implicit $sps
+# CHECK: $iy = LD88ro %stack.0, 0
+# CHECK: RET16
+...
+---
+name: unknown_store
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 3, alignment: 1 }
+body: |
+  bb.0:
+    liveins: $de, $a
+    $iy = LD88ro %stack.0, 0
+    LD8pa $de, $a
+    $iy = LD88ro %stack.0, 0
+    RET16 implicit-def $sps, implicit $sps, implicit $iy
+# CHECK-LABEL: name: unknown_store
+# CHECK: $iy = LD88ro %stack.0, 0
+# CHECK: LD8pa $de, $a
+# CHECK: $iy = LD88ro %stack.0, 0
+# CHECK: RET16
+...
+---
+name: ordered_reload
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 3, alignment: 1 }
+body: |
+  bb.0:
+    liveins: $de, $a
+    $iy = LD88ro %stack.0, 0 :: (volatile load (s16) from %stack.0)
+    $a = LD8ap $iy
+    $iy = LD88ro %stack.0, 0 :: (volatile load (s16) from %stack.0)
+    RET16 implicit-def $sps, implicit $sps, implicit $iy
+# CHECK-LABEL: name: ordered_reload
+# CHECK: $iy = LD88ro %stack.0, 0
+# CHECK: $a = LD8ap $iy
+# CHECK: $iy = LD88ro %stack.0, 0
+# CHECK: RET16
+...
+---
+name: offset_reload
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 3, alignment: 1 }
+body: |
+  bb.0:
+    liveins: $de, $a
+    $iy = LD88ro %stack.0, 0
+    $a = LD8ap $iy
+    $iy = LD88ro %stack.0, 1
+    RET16 implicit-def $sps, implicit $sps, implicit $iy
+# CHECK-LABEL: name: offset_reload
+# CHECK: $iy = LD88ro %stack.0, 0
+# CHECK: $a = LD8ap $iy
+# CHECK: $iy = LD88ro %stack.0, 1
+# CHECK: RET16
+...
+---
+name: pair_reload_copy
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 2, alignment: 1 }
+body: |
+  bb.0:
+    $hl = LD88ro %stack.0, 0
+    $a = COPY killed $l
+    $iy = LD88ro %stack.0, 0
+    RET16 implicit-def $sps, implicit $sps, implicit $iy
+# The low-half kill is cleared because the new copy uses the complete pair.
+# CHECK-LABEL: name: pair_reload_copy
+# CHECK: $hl = LD88ro %stack.0, 0
+# CHECK-NEXT: $a = COPY $l
+# CHECK-NEXT: $iy = COPY $hl
+# CHECK-NEXT: RET16
+...
+---
+name: pair_reload_clobber
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 2, alignment: 1 }
+body: |
+  bb.0:
+    $hl = LD88ro %stack.0, 0
+    $h = LD8ri 7
+    $iy = LD88ro %stack.0, 0
+    RET16 implicit-def $sps, implicit $sps, implicit $iy
+# CHECK-LABEL: name: pair_reload_clobber
+# CHECK: $hl = LD88ro %stack.0, 0
+# CHECK-NEXT: $h = LD8ri 7
+# CHECK-NEXT: $iy = LD88ro %stack.0, 0
+# CHECK-NEXT: RET16
+...
+---
+name: pair_reload_volatile
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 2, alignment: 1 }
+body: |
+  bb.0:
+    $hl = LD88ro %stack.0, 0 :: (volatile load (s16) from %stack.0)
+    $iy = LD88ro %stack.0, 0
+    RET16 implicit-def $sps, implicit $sps, implicit $iy
+# CHECK-LABEL: name: pair_reload_volatile
+# CHECK: $hl = LD88ro %stack.0, 0 :: (volatile load
+# CHECK-NEXT: $iy = LD88ro %stack.0, 0
+# CHECK-NEXT: RET16
+...

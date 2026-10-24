@@ -1701,6 +1701,19 @@ optimizations are enabled (e.g. with -fno-standalone-debug), and is C++-only.
   }];
 }
 
+def Z80ExpNoIntsDocs : Documentation {
+  let Category = DocCatFunction;
+  let Content = [{
+On Z80/eZ80, ``expnoints`` promises that no interrupt (including NMI) can occur
+while the function executes. It permits optimizations that temporarily use SP
+as a data cursor. It does not emit DI/EI, change interrupt state, or grant use
+of the alternate register bank. The caller/environment must satisfy the
+promise. ``-mexpnoints`` makes the same promise for a translation unit;
+``-mno-expnoints`` restores the default policy, while explicit function
+attributes still apply.
+  }];
+}
+
 def NoDuplicateDocs : Documentation {
   let Category = DocCatFunction;
   let Content = [{

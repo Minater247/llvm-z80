@@ -2344,6 +2344,15 @@ def StandaloneDebug : InheritableAttr {
   let LangOpts = [CPlusPlus];
 }
 
+def Z80ExpNoInts : InheritableAttr,
+                   TargetSpecificAttr<TargetArch<["z80", "ez80"]>> {
+  let Spellings = [GNU<"expnoints">, CXX11<"clang", "expnoints">,
+                   C23<"clang", "expnoints">];
+  let Subjects = SubjectList<[Function]>;
+  let Documentation = [Z80ExpNoIntsDocs];
+  let SimpleHandler = 1;
+}
+
 def NoDuplicate : InheritableAttr {
   let Spellings = [Clang<"noduplicate">];
   let Subjects = SubjectList<[Function]>;

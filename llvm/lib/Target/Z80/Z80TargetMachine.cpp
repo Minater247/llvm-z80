@@ -45,10 +45,16 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeZ80Target() {
   initializeZ80PostLegalizerCombinerPass(PR);
   initializeZ80PostSelectCombinerPass(PR);
   initializeZ80MachineEarlyOptimizationPass(PR);
+  initializeZ80MachinePreRAOptimizationPass(PR);
   initializeZ80MachineLateOptimizationPass(PR);
   initializeZ80BranchSelectorPass(PR);
   initializeZ80RepeatedStoreOptPass(PR);
   initializeZ80ExIncOptPass(PR);
+  initializeZ80RegisterAllocatorPass(PR);
+  initializeZ80AlternateRegAllocatorPass(PR);
+  initializeZ80BankRegionAllocatorPass(PR);
+  initializeZ80LateCopyPropagationPass(PR);
+  initializeZ80StackStreamPass(PR);
 }
 
 static std::string computeDataLayout(const Triple &TT) {
@@ -156,6 +162,7 @@ public:
   bool addGlobalInstructionSelect() override;
   void addMachineSSAOptimization() override;
   void addFastRegAlloc() override;
+  FunctionPass *createTargetRegisterAllocator(bool Optimized) override;
   bool addRegAssignAndRewriteOptimized() override;
   void addMachineLateOptimization() override;
   void addPreEmitPass2() override;
@@ -228,6 +235,11 @@ bool Z80PassConfig::addRegAssignAndRewriteOptimized() {
   return TargetPassConfig::addRegAssignAndRewriteOptimized();
 }
 
+FunctionPass *Z80PassConfig::createTargetRegisterAllocator(bool Optimized) {
+  return Optimized ? createZ80RegisterAllocator()
+                   : TargetPassConfig::createTargetRegisterAllocator(false);
+}
+
 void Z80PassConfig::addMachineLateOptimization() {
   TargetPassConfig::addMachineLateOptimization();
   addPass(createZ80RepeatedStoreOptPass());
@@ -238,13 +250,17 @@ void Z80PassConfig::addMachineLateOptimization() {
 
 void Z80PassConfig::addPreEmitPass2() {
   TargetPassConfig::addPreEmitPass2();
-  addPass(createZ80BranchSelectorPass());
   addPass(createZ80DanglingRegPass());
   addPass(createZ80ExIncOptPass());
+  addPass(createZ80BankRegionAllocator());
+  addPass(createZ80LateCopyPropagation());
+  addPass(createZ80StackStream());
+  addPass(createZ80BranchSelectorPass());
 }
 
 void Z80PassConfig::addPostRewrite() {
   TargetPassConfig::addPostRewrite();
+  addPass(createZ80AlternateRegAllocator());
   addPass(createZ80PostRewritePass());
   addPass(createZ80StaticStackPass());
   addPass(createZ80DanglingRegPass());

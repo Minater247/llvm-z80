@@ -302,9 +302,11 @@ Z80LegalizerInfo::Z80LegalizerInfo(const Z80Subtarget &STI,
 
   getActionDefinitionsBuilder(
       {G_SDIVREM, G_UDIVREM, G_ABS, G_DYN_STACKALLOC, G_SEXT_INREG, G_SMULO,
-       G_SMULH, G_UMULH, G_SMIN, G_SMAX, G_UMIN, G_UMAX, G_UADDSAT, G_SADDSAT,
-       G_USUBSAT, G_SSUBSAT, G_USHLSAT, G_SSHLSAT, G_FPOWI})
+       G_SMULH, G_UMULH, G_SMIN, G_SMAX, G_UMIN, G_UMAX, G_UADDSAT, G_USUBSAT,
+       G_SSUBSAT, G_USHLSAT, G_SSHLSAT, G_FPOWI})
       .lower();
+
+  getActionDefinitionsBuilder(G_SADDSAT).legalFor({s8}).lower();
 
   getActionDefinitionsBuilder({G_CTTZ, G_CTTZ_ZERO_UNDEF, G_CTLZ_ZERO_UNDEF})
       .lowerForCartesianProduct({s8}, LegalLibcallScalars)
@@ -681,14 +683,15 @@ Z80LegalizerInfo::legalizeShift(LegalizerHelper &Helper, MachineInstr &MI,
       return LegalizerHelper::AlreadyLegal;
 
     unsigned MaxLegalSize = Subtarget.is24Bit() ? 24 : 16;
-    if (Opc == G_SHL && Ty.isScalar() && Ty.getSizeInBits() <= MaxLegalSize &&
+    if ((Opc == G_SHL || (Opc == G_ASHR && Ty == LLT::scalar(8))) &&
+        Ty.isScalar() && Ty.getSizeInBits() <= MaxLegalSize &&
         ShiftVal < Ty.getSizeInBits()) {
       Builder.setInstrAndDebugLoc(MI);
       Register SrcReg = MI.getOperand(1).getReg();
       Register OneReg = Builder.buildConstant(AmtTy, 1).getReg(0);
       while (--ShiftVal)
         SrcReg =
-            Builder.buildInstr(TargetOpcode::G_SHL, {Ty}, {SrcReg, OneReg})
+            Builder.buildInstr(Opc, {Ty}, {SrcReg, OneReg})
                 .getReg(0);
       Observer.changingInstr(MI);
       MI.getOperand(1).setReg(SrcReg);
@@ -747,6 +750,31 @@ Z80LegalizerInfo::legalizeShift(LegalizerHelper &Helper, MachineInstr &MI,
         }
       }
     }
+  }
+
+  // There is no byte-sized shift libcall. Lower a variable byte shift to
+  // three conditional constant steps, all supported by native selection.
+  // Counts >= 8 are poison in LLVM IR, so choosing their low three bits is a
+  // valid refinement. This also handles masks such as 1u << channel.
+  if (Ty == LLT::scalar(8) &&
+      !getIConstantVRegValWithLookThrough(MI.getOperand(2).getReg(), MRI)) {
+    Register Value = MI.getOperand(1).getReg();
+    Register Amount = MI.getOperand(2).getReg();
+    LLT AmtTy = MRI.getType(Amount);
+    auto One = Builder.buildConstant(AmtTy, 1);
+    auto Zero = Builder.buildConstant(AmtTy, 0);
+    for (unsigned Step : {4u, 2u, 1u}) {
+      Register Shifted = Value;
+      for (unsigned N = 0; N != Step; ++N)
+        Shifted = Builder.buildInstr(Opc, {Ty}, {Shifted, One}).getReg(0);
+      auto Bit = Builder.buildAnd(AmtTy, Amount,
+                                   Builder.buildConstant(AmtTy, Step));
+      auto Test = Builder.buildICmp(CmpInst::ICMP_NE, LLT::scalar(1), Bit, Zero);
+      Value = Builder.buildSelect(Ty, Test, Shifted, Value).getReg(0);
+    }
+    Builder.buildCopy(DstReg, Value);
+    MI.eraseFromParent();
+    return LegalizerHelper::Legalized;
   }
 
   if (Ty.isScalar() && Ty.getSizeInBits() == 16)

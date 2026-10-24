@@ -34,6 +34,7 @@ public:
                    std::optional<CodeModel::Model> CM, CodeGenOptLevel OL,
                    bool JIT);
   ~Z80TargetMachine() override = default;
+  bool useIPRA() const override { return true; }
   void reset() override;
   const Z80Subtarget *getSubtargetImpl(const Function &F) const override;
 

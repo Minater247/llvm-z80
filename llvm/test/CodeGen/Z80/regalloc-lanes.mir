@@ -1,0 +1,52 @@
+# RUN: llc -mattr=+undoc -run-pass=z80-regalloc,virtregrewriter -verify-machineinstrs %s -o - | FileCheck %s
+# A pair's independent lanes can share HL. A whole-interval alias test would
+# reject legal packing. Also exercise reversed virtual-register order and
+# a copy between two subregisters of the same virtual register.
+# CHECK-LABEL: name: lanes
+# CHECK: $l = LD8ri 1
+# CHECK-NEXT: $h = LD8ri 2
+# CHECK-NEXT: KILL killed $l, killed $h
+# CHECK-LABEL: name: transpose
+# CHECK: $e = LD8ri 42
+# CHECK-NEXT: $l = COPY $e
+# CHECK-LABEL: name: self_copy
+# CHECK: $hl = LD16ri 1234
+# CHECK-NEXT: $l = COPY $h
+--- |
+  target triple = "z80"
+  define void @lanes() { ret void }
+  define void @transpose() { ret void }
+  define void @self_copy() { ret void }
+...
+---
+name: lanes
+tracksRegLiveness: true
+body: |
+  bb.0:
+    undef %0.sub_low:r16 = LD8ri 1
+    undef %1.sub_high:r16 = LD8ri 2
+    KILL %0.sub_low, %1.sub_high
+    RET16 implicit-def $sps, implicit $sps
+...
+---
+name: transpose
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $a
+    %1:r8 = LD8ri 42
+    %0:g8 = COPY %1
+    %0:g8 = INC8r %0, implicit-def dead $f
+    KILL %1, %0, $a
+    RET16 implicit-def $sps, implicit $sps
+...
+---
+name: self_copy
+tracksRegLiveness: true
+body: |
+  bb.0:
+    %0:r16 = LD16ri 1234
+    %0.sub_low = COPY %0.sub_high
+    KILL %0
+    RET16 implicit-def $sps, implicit $sps
+...

@@ -63,6 +63,12 @@ public:
 
   bool hasFPImpl(const MachineFunction &MF) const override;
   bool isFPSaved(const MachineFunction &MF) const;
+  void getCalleeSaves(const MachineFunction &MF,
+                     BitVector &SavedRegs) const override;
+  bool isProfitableForNoCSROpt(const Function &) const override {
+    // Frame lowering saves the frame pointer independently of the CSR list.
+    return false;
+  }
   bool hasReservedCallFrame(const MachineFunction &MF) const override;
   bool needsFrameIndexResolution(const MachineFunction &MF) const override;
   unsigned getSlotSize() const { return SlotSize; }

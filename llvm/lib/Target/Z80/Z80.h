@@ -45,6 +45,11 @@ FunctionPass *createZ80UnrollLd();
 FunctionPass *createZ80RegisterOptPass();
 FunctionPass *createZ80RepeatedStoreOptPass();
 FunctionPass *createZ80ExIncOptPass();
+FunctionPass *createZ80RegisterAllocator();
+FunctionPass *createZ80AlternateRegAllocator();
+FunctionPass *createZ80BankRegionAllocator();
+FunctionPass *createZ80LateCopyPropagation();
+FunctionPass *createZ80StackStream();
 
 void initializeZ80PreLegalizerCombinerPass(PassRegistry &);
 void initializeZ80PostLegalizerCombinerPass(PassRegistry &);
@@ -55,6 +60,11 @@ void initializeZ80MachineLateOptimizationPass(PassRegistry &);
 void initializeZ80BranchSelectorPass(PassRegistry &);
 void initializeZ80RepeatedStoreOptPass(PassRegistry &);
 void initializeZ80ExIncOptPass(PassRegistry &);
+void initializeZ80RegisterAllocatorPass(PassRegistry &);
+void initializeZ80AlternateRegAllocatorPass(PassRegistry &);
+void initializeZ80BankRegionAllocatorPass(PassRegistry &);
+void initializeZ80LateCopyPropagationPass(PassRegistry &);
+void initializeZ80StackStreamPass(PassRegistry &);
 
 } // namespace llvm
 

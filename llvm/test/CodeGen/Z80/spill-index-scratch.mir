@@ -1,0 +1,19 @@
+# RUN: llc -run-pass=postrapseudos -verify-machineinstrs %s -o - | FileCheck %s
+--- |
+  target triple = "z80"
+  define void @spill_index() { ret void }
+...
+---
+name: spill_index
+tracksRegLiveness: true
+# CHECK-LABEL: name: spill_index
+# CHECK: $hl = EX16sa undef $hl
+# CHECK: LD8og $ix, -2, $l
+# CHECK: LD8og $ix, -1, $h
+# CHECK: $hl = EX16sa undef $hl
+body: |
+  bb.0:
+    liveins: $ix, $iy
+    LD88or $ix, -2, $iy :: (store (s16))
+    RET16 implicit-def $sps, implicit $sps
+...

@@ -1,0 +1,49 @@
+# RUN: llc -run-pass=z80-dangling-reg -verify-machineinstrs %s -o - | FileCheck %s
+--- |
+  target triple = "z80"
+  define void @stack_exchange() { ret void }
+  define void @flags_live() { ret void }
+  define void @dead_copy() { ret void }
+...
+---
+name: stack_exchange
+tracksRegLiveness: true
+# The stack result is used even though the register result is overwritten.
+# CHECK-LABEL: name: stack_exchange
+# CHECK: $hl = EX16sa $hl
+# CHECK: $iy = POP16r
+body: |
+  bb.0:
+    liveins: $hl
+    PUSH16r undef $hl, implicit-def $sps, implicit $sps
+    $hl = LD16ri 1234
+    $hl = EX16sa $hl, implicit $sps
+    $iy = POP16r implicit-def $sps, implicit $sps
+    $hl = LD16ri 0
+    RET16 implicit-def $sps, implicit $sps, implicit $iy, implicit $hl
+...
+---
+name: flags_live
+tracksRegLiveness: true
+# CHECK-LABEL: name: flags_live
+# CHECK: $b = INC8r
+body: |
+  bb.0:
+    liveins: $a, $b
+    $b = INC8r $b, implicit-def $f
+    $b = LD8ri 0
+    RET16 implicit-def $sps, implicit $sps, implicit $b, implicit $f
+...
+---
+name: dead_copy
+tracksRegLiveness: true
+# CHECK-LABEL: name: dead_copy
+# CHECK-NOT: COPY
+# CHECK: $hl = LD16ri 0
+body: |
+  bb.0:
+    liveins: $bc
+    $hl = COPY $bc
+    $hl = LD16ri 0
+    RET16 implicit-def $sps, implicit $sps, implicit $hl
+...

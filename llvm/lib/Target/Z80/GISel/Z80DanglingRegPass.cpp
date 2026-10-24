@@ -126,7 +126,16 @@ bool Z80DanglingRegPass::runOnMachineFunction(MachineFunction &MF)
         } else {
           LLVM_DEBUG(dbgs() << "Z80DanglingRegPass: defined " << TRI->getName(Defined) << ": "; MI.dump());
         }
-        DefinedRegs[Defined] = &MI;
+        // A dead register result does not make a memory access, stack exchange,
+        // or an instruction with another result dead. In particular EX (SP),HL
+        // must still write the stack even when its HL result is overwritten.
+        DefinedRegs.erase(Defined);
+        bool SawStore = false;
+        if (MI.isSafeToMove(SawStore) &&
+            llvm::count_if(MI.operands(), [](const MachineOperand &MO) {
+              return MO.isReg() && MO.isDef() && !MO.isDead();
+            }) == 1)
+          DefinedRegs[Defined] = &MI;
       }
     }
   }

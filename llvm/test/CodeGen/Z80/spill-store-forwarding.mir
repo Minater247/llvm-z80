@@ -1,0 +1,233 @@
+# RUN: llc -run-pass=z80-post-rewrite -verify-machineinstrs %s -o - | FileCheck %s
+--- |
+  target triple = "z80"
+  declare void @opaque()
+  define void @distinct_spills() { ret void }
+  define void @forward_pair_copy() { ret void }
+  define void @changed_source() { ret void }
+  define void @forward_word() { ret void }
+  define void @overwrite_word() { ret void }
+  define void @changed_half() { ret void }
+  define void @partial_overwrite() { ret void }
+  define void @observed_store() { ret void }
+  define void @ordered_store() { ret void }
+  define void @call_barrier() { ret void }
+  define void @offset_store() { ret void }
+...
+---
+name: distinct_spills
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 2, alignment: 1 }
+  - { id: 1, type: spill-slot, size: 2, alignment: 1 }
+# CHECK-LABEL: name: distinct_spills
+# CHECK: LD88or %stack.1, 0, $de
+# CHECK-NEXT: $bc = COPY $hl
+# CHECK-NEXT: $h = LD8ri 7
+# CHECK-NEXT: LD88or %stack.0, 0, $hl
+# CHECK-NEXT: RET16
+body: |
+  bb.0:
+    liveins: $hl, $de
+    LD88or %stack.0, 0, $hl
+    LD88or %stack.1, 0, $de
+    $bc = LD88ro %stack.0, 0
+    $h = LD8ri 7
+    LD88or %stack.0, 0, $hl
+    RET16 implicit-def $sps, implicit $sps, implicit $bc
+...
+---
+name: forward_pair_copy
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 2, alignment: 1 }
+# CHECK-LABEL: name: forward_pair_copy
+# CHECK: LD88or %stack.0, 0, $hl
+# CHECK-NEXT: $a = COPY $b
+# CHECK-NEXT: $de = COPY $hl
+# CHECK-NEXT: RET16
+body: |
+  bb.0:
+    liveins: $hl, $b
+    LD88or %stack.0, 0, killed $hl
+    $a = COPY $b
+    $de = LD88ro %stack.0, 0
+    RET16 implicit-def $sps, implicit $sps, implicit $de
+...
+---
+name: changed_source
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 2, alignment: 1 }
+# CHECK-LABEL: name: changed_source
+# CHECK: LD88or %stack.0, 0, $hl
+# CHECK-NEXT: $l = LD8ri 7
+# CHECK-NEXT: $de = LD88ro %stack.0, 0
+# CHECK-NEXT: RET16
+body: |
+  bb.0:
+    liveins: $hl
+    LD88or %stack.0, 0, $hl
+    $l = LD8ri 7
+    $de = LD88ro %stack.0, 0
+    RET16 implicit-def $sps, implicit $sps, implicit $de
+...
+---
+name: forward_word
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 3, alignment: 1 }
+# CHECK-LABEL: name: forward_word
+# CHECK: bb.0:
+# CHECK: liveins:
+# CHECK: LD88or %stack.0, 0, $hl
+# CHECK-NEXT: $a = COPY $b
+# CHECK-NEXT: RET16
+body: |
+  bb.0:
+    liveins: $hl, $b
+    LD88or %stack.0, 0, killed $hl
+    $a = COPY $b
+    $hl = LD88ro %stack.0, 0
+    RET16 implicit-def $sps, implicit $sps, implicit $hl
+...
+---
+name: overwrite_word
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 3, alignment: 1 }
+# CHECK-LABEL: name: overwrite_word
+# CHECK: bb.0:
+# CHECK: liveins:
+# CHECK: $h = COPY $b
+# CHECK-NEXT: LD88or %stack.0, 0, $hl
+# CHECK-NEXT: RET16
+body: |
+  bb.0:
+    liveins: $hl, $b
+    LD88or %stack.0, 0, $hl
+    $hl = LD88ro %stack.0, 0
+    $h = COPY $b
+    LD88or %stack.0, 0, $hl
+    RET16 implicit-def $sps, implicit $sps
+...
+---
+name: changed_half
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 3, alignment: 1 }
+# CHECK-LABEL: name: changed_half
+# CHECK: bb.0:
+# CHECK: liveins:
+# CHECK: LD88or %stack.0, 0, $hl
+# CHECK-NEXT: $h = LD8ri 7
+# CHECK-NEXT: $hl = LD88ro %stack.0, 0
+# CHECK-NEXT: RET16
+body: |
+  bb.0:
+    liveins: $hl
+    LD88or %stack.0, 0, $hl
+    $h = LD8ri 7
+    $hl = LD88ro %stack.0, 0
+    RET16 implicit-def $sps, implicit $sps, implicit $hl
+...
+---
+name: partial_overwrite
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 3, alignment: 1 }
+# CHECK-LABEL: name: partial_overwrite
+# CHECK: bb.0:
+# CHECK: liveins:
+# CHECK: LD88or %stack.0, 0, $hl
+# CHECK-NEXT: LD8or %stack.0, 0, $l
+# CHECK-NEXT: $hl = LD88ro %stack.0, 0
+# CHECK-NEXT: RET16
+body: |
+  bb.0:
+    liveins: $hl
+    LD88or %stack.0, 0, $hl
+    LD8or %stack.0, 0, $l
+    $hl = LD88ro %stack.0, 0
+    RET16 implicit-def $sps, implicit $sps, implicit $hl
+...
+---
+name: observed_store
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 3, alignment: 1 }
+# CHECK-LABEL: name: observed_store
+# CHECK: bb.0:
+# CHECK: liveins:
+# CHECK: LD88or %stack.0, 0, $hl
+# CHECK-NEXT: $a = LD8ap $de
+# CHECK-NEXT: LD88or %stack.0, 0, $hl
+# CHECK-NEXT: RET16
+body: |
+  bb.0:
+    liveins: $hl, $de
+    LD88or %stack.0, 0, $hl
+    $a = LD8ap $de
+    LD88or %stack.0, 0, $hl
+    RET16 implicit-def $sps, implicit $sps
+...
+---
+name: ordered_store
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 3, alignment: 1 }
+# CHECK-LABEL: name: ordered_store
+# CHECK: bb.0:
+# CHECK: liveins:
+# CHECK: LD88or %stack.0, 0, $hl :: (volatile store
+# CHECK-NEXT: $hl = LD88ro %stack.0, 0
+# CHECK-NEXT: LD88or %stack.0, 0, $hl
+# CHECK-NEXT: RET16
+body: |
+  bb.0:
+    liveins: $hl
+    LD88or %stack.0, 0, $hl :: (volatile store (s16) into %stack.0)
+    $hl = LD88ro %stack.0, 0
+    LD88or %stack.0, 0, $hl
+    RET16 implicit-def $sps, implicit $sps
+...
+---
+name: call_barrier
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 3, alignment: 1 }
+# CHECK-LABEL: name: call_barrier
+# CHECK: bb.0:
+# CHECK: liveins:
+# CHECK: LD88or %stack.0, 0, $hl
+# CHECK-NEXT: CALL16 @opaque
+# CHECK-NEXT: $hl = LD88ro %stack.0, 0
+# CHECK-NEXT: RET16
+body: |
+  bb.0:
+    liveins: $hl
+    LD88or %stack.0, 0, $hl
+    CALL16 @opaque, csr_z80_c, implicit-def $sps, implicit $sps
+    $hl = LD88ro %stack.0, 0
+    RET16 implicit-def $sps, implicit $sps, implicit $hl
+...
+---
+name: offset_store
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 3, alignment: 1 }
+# CHECK-LABEL: name: offset_store
+# CHECK: bb.0:
+# CHECK: liveins:
+# CHECK: LD88or %stack.0, 1, $hl
+# CHECK-NEXT: $hl = LD88ro %stack.0, 0
+# CHECK-NEXT: LD88or %stack.0, 0, $hl
+# CHECK-NEXT: RET16
+body: |
+  bb.0:
+    liveins: $hl
+    LD88or %stack.0, 1, $hl
+    $hl = LD88ro %stack.0, 0
+    LD88or %stack.0, 0, $hl
+    RET16 implicit-def $sps, implicit $sps
+...

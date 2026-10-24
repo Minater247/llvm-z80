@@ -1,0 +1,1 @@
+# RUN: %python %S/Inputs/alternate-transfers.py --llc llc --work %t

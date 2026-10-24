@@ -1,0 +1,55 @@
+# RUN: llc -run-pass=peephole-opt -verify-machineinstrs %s -o - | FileCheck %s
+# Keep the first byte load near its address calculation. Folding it across
+# another memory access would retain a word address instead of one byte.
+# CHECK-LABEL: name: distant
+# CHECK: %1:g8 = LD8gp %0 :: (load (s8))
+# CHECK: ADD8ar %1
+# CHECK-LABEL: name: adjacent
+# CHECK-NOT: LD8gp
+# CHECK: ADD8ap %0
+--- |
+  target triple = "z80"
+  define void @distant() { ret void }
+  define void @adjacent() { ret void }
+  define void @volatile_sat() { ret void }
+...
+---
+name: distant
+tracksRegLiveness: true
+body: |
+  bb.0:
+    %0:a16 = LD16ri 4096
+    %1:g8 = LD8gp %0 :: (load (s8))
+    %2:a16 = LD16ri 8192
+    %3:g8 = LD8gp %2 :: (load (s8))
+    $a = COPY %3
+    ADD8ar %1, implicit-def $a, implicit-def dead $f, implicit $a
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...
+---
+name: adjacent
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $a
+    %0:a16 = LD16ri 4096
+    %1:g8 = LD8gp %0 :: (load (s8))
+    ADD8ar %1, implicit-def $a, implicit-def dead $f, implicit $a
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...
+---
+name: volatile_sat
+tracksRegLiveness: true
+# CHECK-LABEL: name: volatile_sat
+# CHECK: [[BYTE:%[0-9]+]]:g8 = LD8gp %0 :: (volatile load (s8))
+# CHECK: $a = LD8ap {{%[0-9]+}} :: (volatile load (s8))
+# CHECK: SADDSAT8ar [[BYTE]]
+body: |
+  bb.0:
+    %0:a16 = LD16ri 4096
+    %2:r16 = LD16ri 8192
+    %1:g8 = LD8gp %0 :: (volatile load (s8))
+    $a = LD8ap %2 :: (volatile load (s8))
+    SADDSAT8ar %1, implicit-def $a, implicit-def $f, implicit $a
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...

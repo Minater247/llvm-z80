@@ -1,0 +1,113 @@
+# Exercise 24-bit bank masks with the Z80 transfer cost model. Native eZ80
+# stack accesses are smaller than pair transfers, so they should stay on stack.
+# RUN: llc -mattr=+alternate-regs -run-pass=z80-alternate-regalloc -verify-machineinstrs %s -o - | FileCheck %s --check-prefix=NATIVE
+# NATIVE-NOT: ALT_
+# RUN: llc -mcpu=z80 -mattr=+alternate-regs -run-pass=z80-alternate-regalloc -verify-machineinstrs %s -o - | FileCheck %s
+# CHECK-LABEL: name: preserved
+# CHECK: $ude_alt = ALT_SAVE24 $uhl
+# CHECK: CALL24
+# CHECK: $ude = ALT_LOAD24 $ude_alt
+# CHECK-LABEL: name: intersection
+# CHECK-NOT: ALT_
+# CHECK: LD24or %stack.0
+# CHECK: CALL24
+# CHECK: CALL24
+# CHECK: LD24ro %stack.0
+# CHECK-LABEL: name: unknown
+# CHECK-NOT: ALT_
+# CHECK: LD24or %stack.0
+# CHECK: CALL24
+# CHECK: LD24ro %stack.0
+# CHECK-LABEL: name: explicit_clobber
+# CHECK-NOT: ALT_
+# CHECK: LD24or %stack.0
+# CHECK: CALL24
+# CHECK: LD24ro %stack.0
+# CHECK-LABEL: name: loop_preserved
+# CHECK: $ude_alt = ALT_SAVE24 $uhl
+# CHECK: bb.1:
+# CHECK: $ude = ALT_LOAD24 $ude_alt
+# CHECK: CALL24
+# CHECK: JP24 %bb.1
+--- |
+  target triple = "ez80"
+  declare void @callee()
+  define void @preserved() { ret void }
+  define void @intersection() { ret void }
+  define void @unknown() { ret void }
+  define void @explicit_clobber() { ret void }
+  define void @loop_preserved() { ret void }
+...
+---
+name: preserved
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 3, alignment: 1 }
+body: |
+  bb.0:
+    liveins: $uhl
+    LD24or %stack.0, 0, $uhl
+    CALL24 @callee, CustomRegMask($ude_alt), implicit-def $spl, implicit $spl
+    $ude = LD24ro %stack.0, 0
+    KILL $ude
+    RET24 implicit-def $spl, implicit $spl
+...
+---
+name: intersection
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 3, alignment: 1 }
+body: |
+  bb.0:
+    liveins: $uhl
+    LD24or %stack.0, 0, $uhl
+    CALL24 @callee, CustomRegMask($ude_alt), implicit-def $spl, implicit $spl
+    CALL24 @callee, CustomRegMask($ubc_alt), implicit-def $spl, implicit $spl
+    $ude = LD24ro %stack.0, 0
+    KILL $ude
+    RET24 implicit-def $spl, implicit $spl
+...
+---
+name: unknown
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 3, alignment: 1 }
+body: |
+  bb.0:
+    liveins: $uhl
+    LD24or %stack.0, 0, $uhl
+    CALL24 @callee, implicit-def $spl, implicit $spl
+    $ude = LD24ro %stack.0, 0
+    KILL $ude
+    RET24 implicit-def $spl, implicit $spl
+...
+---
+name: explicit_clobber
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 3, alignment: 1 }
+body: |
+  bb.0:
+    liveins: $uhl
+    LD24or %stack.0, 0, $uhl
+    CALL24 @callee, CustomRegMask($ude_alt), implicit-def $ude_alt, implicit-def $spl, implicit $spl
+    $ude = LD24ro %stack.0, 0
+    KILL $ude
+    RET24 implicit-def $spl, implicit $spl
+...
+---
+name: loop_preserved
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 3, alignment: 1 }
+body: |
+  bb.0:
+    liveins: $uhl
+    LD24or %stack.0, 0, $uhl
+    JP24 %bb.1
+  bb.1:
+    $ude = LD24ro %stack.0, 0
+    KILL $ude
+    CALL24 @callee, CustomRegMask($ude_alt), implicit-def $spl, implicit $spl
+    JP24 %bb.1
+...

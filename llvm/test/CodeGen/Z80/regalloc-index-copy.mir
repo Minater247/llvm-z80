@@ -1,0 +1,30 @@
+# RUN: llc -mattr=+undoc -run-pass=z80-regalloc,virtregrewriter -verify-machineinstrs %s -o - | FileCheck %s --check-prefix=Z80
+# RUN: llc -mattr=+undoc -run-pass=greedy,virtregrewriter -verify-machineinstrs %s -o - | FileCheck %s --check-prefix=GREEDY
+# RUN: llc -mattr=+undoc -run-pass=z80-regalloc,virtregrewriter -z80-regalloc-search-budget=0 -verify-machineinstrs %s -o - | FileCheck %s --check-prefix=Z80
+#
+# A is live throughout. Greedy chooses L, which needs EX DE,HL on both sides
+# of the index-half copy. Choosing E saves two bytes and eight Z80 T-states.
+# Z80-LABEL: name: index_to_byte
+# Z80: $iyl = LD8ri 42
+# Z80-NEXT: $e = COPY killed $iyl
+# Z80-NEXT: $e = INC8r killed $e
+# GREEDY-LABEL: name: index_to_byte
+# GREEDY: $iyl = LD8ri 42
+# GREEDY-NEXT: $l = COPY killed $iyl
+# GREEDY-NEXT: $l = INC8r killed $l
+--- |
+  target triple = "z80"
+  define void @index_to_byte() { ret void }
+...
+---
+name: index_to_byte
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $a
+    %0:i8 = LD8ri 42
+    %1:g8 = COPY killed %0
+    %1:g8 = INC8r %1, implicit-def dead $f
+    KILL %1, $a
+    RET16 implicit-def $sps, implicit $sps
+...

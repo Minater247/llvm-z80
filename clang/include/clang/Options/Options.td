@@ -6554,6 +6554,18 @@ def mdynamic_no_pic : Joined<["-"], "mdynamic-no-pic">, Group<m_Group>;
 } // let Vis = [Default, FlangOption]
 } // let Flags = [TargetSpecific]
 
+// Z80 execution-environment policy. The alternate bank may belong to the OS.
+let Flags = [TargetSpecific] in {
+def mexpnoints : Flag<["-"], "mexpnoints">, Group<m_Group>,
+  HelpText<"Promise that no interrupts occur during Z80/eZ80 code execution">;
+def mno_expnoints : Flag<["-"], "mno-expnoints">, Group<m_Group>,
+  HelpText<"Do not assume interrupts are absent in Z80/eZ80 code (default)">;
+def malternate_registers : Flag<["-"], "malternate-registers">, Group<m_Group>,
+  HelpText<"Allow compiler use of the alternate register bank (Z80/eZ80 only)">;
+def mno_alternate_registers : Flag<["-"], "mno-alternate-registers">, Group<m_Group>,
+  HelpText<"Reserve the alternate register bank for the environment (Z80/eZ80 default)">;
+}
+
 // Hexagon feature flags.
 let Flags = [TargetSpecific] in {
 def mieee_rnd_near : Flag<["-"], "mieee-rnd-near">,

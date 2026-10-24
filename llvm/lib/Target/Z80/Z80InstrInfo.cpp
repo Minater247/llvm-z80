@@ -18,6 +18,8 @@
 #include "llvm/ADT/Sequence.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
+#include "llvm/CodeGen/MachineInstrBundle.h"
+#include "llvm/CodeGen/LiveRegUnits.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/RegisterScavenging.h"
 #include "llvm/MC/MCDwarf.h"
@@ -98,23 +100,6 @@ static bool isIndex(const MachineOperand &MO, const MCRegisterInfo &RI) {
   return false;
 }
 
-static bool hasMeaningfulHighLane(Register Reg,
-                                  const MachineRegisterInfo &MRI) {
-  if (!Reg.isVirtual())
-    return true;
-
-  for (const MachineOperand &MO : MRI.def_operands(Reg)) {
-    if (!MO.isReg() || !MO.isDef() || MO.isImplicit() || MO.isUndef())
-      continue;
-
-    unsigned SubIdx = MO.getSubReg();
-    if (!SubIdx || SubIdx == Z80::sub_high || SubIdx == Z80::sub_short)
-      return true;
-  }
-
-  return false;
-}
-
 static void markUseUndef(MachineInstr &MI, Register Reg,
                          const TargetRegisterInfo &TRI) {
   if (MachineOperand *MO = MI.findRegisterUseOperand(Reg, &TRI))
@@ -133,7 +118,50 @@ static void markDefDead(MachineInstr &MI, Register Reg,
     MO->setIsDead();
 }
 
+static void splitWordMemRefs(MachineInstr &Low, MachineInstr &High) {
+  MachineFunction &MF = *High.getMF();
+  SmallVector<MachineMemOperand *, 2> LowRefs, HighRefs;
+  for (auto *MMO : High.memoperands()) {
+    LowRefs.push_back(MF.getMachineMemOperand(MMO, 0, 1));
+    HighRefs.push_back(MF.getMachineMemOperand(MMO, 1, 1));
+  }
+  Low.setMemRefs(MF, LowRefs);
+  High.setMemRefs(MF, HighRefs);
+}
+
 unsigned Z80InstrInfo::getInstSizeInBytes(const MachineInstr &MI) const {
+  // These atomic pseudos are expanded by the assembly printer, after
+  // scheduling and liveness-based optimizations. Branch relaxation needs their
+  // exact encoded size, including an index prefix on the main-bank operand.
+  switch (MI.getOpcode()) {
+  case Z80::SADDSAT8ar:
+    return 8 + unsigned(Subtarget.is24Bit()) +
+           unsigned(Z80::I8RegClass.contains(MI.getOperand(0).getReg()));
+  case Z80::SADDSAT8ai:
+    return 9 + unsigned(Subtarget.is24Bit());
+  case Z80::SADDSAT8ap:
+    return 8 + unsigned(Subtarget.is24Bit()) +
+           2 * unsigned(isIndex(MI.getOperand(0), getRegisterInfo()));
+  case Z80::ALT_SAVE16:
+  case Z80::ALT_SAVE24:
+  case Z80::ALT_LOAD16:
+  case Z80::ALT_LOAD24: {
+    bool Load =
+        MI.getOpcode() == Z80::ALT_LOAD16 || MI.getOpcode() == Z80::ALT_LOAD24;
+    MCRegister R = MI.getOperand(Load ? 0 : 1).getReg();
+    return 4 + unsigned(Z80::I16RegClass.contains(R) ||
+                        Z80::I24RegClass.contains(R));
+  }
+  case Z80::ALT_SAVE8:
+  case Z80::ALT_LOAD8: {
+    bool Load = MI.getOpcode() == Z80::ALT_LOAD8;
+    MCRegister R = MI.getOperand(Load ? 0 : 1).getReg();
+    return R == Z80::A ? (Load ? 6 : 4)
+                       : 3 + unsigned(Z80::I8RegClass.contains(R));
+  }
+  default:
+    break;
+  }
   unsigned Size = 0;
   const MCInstrDesc &Desc = MI.getDesc();
   auto TSFlags = Desc.TSFlags;
@@ -566,9 +594,20 @@ void Z80InstrInfo::copyPhysReg(MachineBasicBlock &MBB,
       } else {
         // We are copying between different index registers, so we need to use
         // an intermediate register.
+        LiveRegUnits Preserve(TRI);
+        Preserve.addLiveOuts(MBB);
+        for (auto I = MBB.end(); I != MI;)
+          Preserve.stepBackward(*--I);
         MachineInstr &PushAF = applySPAdjust(
           *BuildMI(MBB, MI, DL, get(Is24Bit ? Z80::PUSH24AF : Z80::PUSH16AF)));
         markUseUndef(PushAF, Z80::AF, TRI);
+        // The stack save carries these values across the scratch use of A.
+        // Marking the whole AF input undef lets copy propagation delete a
+        // live incoming A definition, even though POP AF restores it later.
+        for (MCRegister R : {Z80::A, Z80::F})
+          if (!Preserve.available(R))
+            MachineInstrBuilder(*MBB.getParent(), &PushAF)
+                .addReg(R, RegState::Implicit);
         BuildMI(MBB, MI, DL, get(Z80::X8RegClass.contains(SrcReg) ? Z80::LD8xx
                                                                   : Z80::LD8yy),
                 Z80::A).addReg(SrcReg, getKillRegState(KillSrc));
@@ -582,6 +621,7 @@ void Z80InstrInfo::copyPhysReg(MachineBasicBlock &MBB,
       assert(Subtarget.hasIndexHalfRegs() && "Need  index half registers");
       // Only one is an index register, which isn't directly possible if one of
       // them is from HL.  If so, surround with EX DE,HL and use DE instead.
+      Register OriginalDst = DstReg, OriginalSrc = SrcReg;
       bool NeedEX = false;
       for (Register *Reg : {&DstReg, &SrcReg}) {
         switch (*Reg) {
@@ -590,22 +630,54 @@ void Z80InstrInfo::copyPhysReg(MachineBasicBlock &MBB,
         }
       }
       unsigned ExOpc = Is24Bit ? Z80::EX24DE : Z80::EX16DE;
+      // The exchanges preserve the other pair. Keep its live byte uses
+      // explicit so bank-region export analysis can see that preservation.
+      std::optional<LiveRegUnits> Preserve;
+      if (NeedEX) {
+        Preserve.emplace(TRI);
+        Preserve->addLiveOuts(MBB);
+        for (auto I = MBB.end(); I != MI;)
+          Preserve->stepBackward(*--I);
+        Preserve->addReg(OriginalSrc);
+      }
+      auto ExchangeUses = [&](MachineInstrBuilder Ex, bool Restore) {
+        markUseUndef(*Ex, Is24Bit ? Z80::UDE : Z80::DE, TRI);
+        markUseUndef(*Ex, Is24Bit ? Z80::UHL : Z80::HL, TRI);
+        for (auto Pair : {std::pair{Z80::D, Z80::H},
+                          std::pair{Z80::E, Z80::L}}) {
+          for (MCRegister R : {Pair.first, Pair.second})
+            if (!Preserve->available(R))
+              Ex.addReg(Restore ? (R == Pair.first ? Pair.second : Pair.first)
+                                : R,
+                        RegState::Implicit);
+        }
+        if (Is24Bit) {
+          LiveRegUnits Upper = *Preserve;
+          Upper.removeReg(Z80::DE);
+          Upper.removeReg(Z80::HL);
+          if (!Upper.available(Z80::UDE))
+            Ex.addReg(Restore ? Z80::UHL : Z80::UDE, RegState::Implicit);
+          if (!Upper.available(Z80::UHL))
+            Ex.addReg(Restore ? Z80::UDE : Z80::UHL, RegState::Implicit);
+        }
+      };
       if (NeedEX) {
         // If the prev instr was an EX DE,HL, just kill it.
         if (MI == MBB.begin() || std::prev(MI)->getOpcode() != ExOpc) {
           auto Ex = BuildMI(MBB, MI, DL, get(ExOpc));
-          markUseUndef(*Ex, Is24Bit ? Z80::UDE : Z80::DE, TRI);
-          markUseUndef(*Ex, Is24Bit ? Z80::UHL : Z80::HL, TRI);
+          ExchangeUses(Ex, false);
         } else
           std::prev(MI)->eraseFromParent();
       }
+      // COPY expansion attaches the original source's kill to the final
+      // exchange. Do not kill its last live byte before that.
       BuildMI(MBB, MI, DL,
               get(Z80::X8RegClass.contains(DstReg, SrcReg) ? Z80::LD8xx
                                                            : Z80::LD8yy),
-              DstReg).addReg(SrcReg, getKillRegState(KillSrc));
+              DstReg).addReg(SrcReg, getKillRegState(KillSrc && !NeedEX));
       if (NeedEX) {
-        MachineInstr *Ex = BuildMI(MBB, MI, DL, get(ExOpc));
-        markUseUndef(*Ex, Is24Bit ? Z80::UHL : Z80::HL, TRI);
+        Preserve->addReg(OriginalDst);
+        ExchangeUses(BuildMI(MBB, MI, DL, get(ExOpc)), true);
       }
     }
     return;
@@ -885,19 +957,9 @@ void Z80InstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
     if (Subtarget.has16BitEZ80Ops()) {
       Opc = Z80::LD16or;
     } else {
-      MachineRegisterInfo &MRI = MBB.getParent()->getRegInfo();
-      if (!hasMeaningfulHighLane(SrcReg, MRI)) {
-        BuildMI(MBB, MI, DL, get(Z80::LD8or))
-            .addFrameIndex(FI)
-            .addImm(0)
-            .addReg(SrcReg, getKillRegState(IsKill), Z80::sub_low);
-
-        BuildMI(MBB, MI, DL, get(Z80::LD8oi))
-            .addFrameIndex(FI)
-            .addImm(1)
-            .addImm(0);
-        return;
-      }
+      // Keep a spill as a full-register store. InlineSpiller updates lane
+      // liveness for that operand; synthesizing a subregister store here can
+      // leave the low lane dead at its new use after split/rematerialization.
       Opc = Z80::LD88or;
     }
     break;
@@ -1442,6 +1504,7 @@ bool Z80InstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
                                                   &Z80::R24RegClass)
                         : OrigReg
               : ScratchReg));
+    splitWordMemRefs(*MIB, MI);
     expandPostRAPseudo(*MIB);
     expandPostRAPseudo(MI);
     break;
@@ -1477,6 +1540,27 @@ bool Z80InstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
     MCRegister AddrReg = AddrOp.getReg();
     MachineOperand &SrcOp = MI.getOperand(MI.getNumExplicitOperands() - 1);
     MCRegister OrigReg = SrcOp.getReg();
+    // A spilled pair may have only one defined byte. The unsplit pair use is
+    // legal in that case; keep the undefined lane explicit when expanding it
+    // into separate byte uses. An inconclusive bounded scan stays conservative.
+    auto UndefLane = [&](MCRegister R) {
+      auto I = MI.getIterator();
+      unsigned Budget = 32;
+      while (I != MBB.begin() && Budget--) {
+        auto Info = AnalyzePhysRegInBundle(*--I, R, &TRI);
+        if (Info.DeadDef || Info.Clobbered || (Info.Killed && !Info.Defined))
+          return true;
+        if (Info.Defined || Info.Read)
+          return false;
+      }
+      if (I != MBB.begin())
+        return false;
+      LiveRegUnits Live(TRI);
+      Live.addLiveIns(MBB);
+      return Live.available(R);
+    };
+    bool UndefLow = UndefLane(TRI.getSubReg(OrigReg, Z80::sub_low));
+    bool UndefHigh = UndefLane(TRI.getSubReg(OrigReg, Z80::sub_high));
     MCRegister Reg = OrigReg;
     unsigned LowOpc = Opc == Z80::LD88pr ? Z80::LD8pr : Z80::LD8or;
     unsigned HighOpc =
@@ -1504,19 +1588,39 @@ bool Z80InstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
       MCRegister OrigSuperReg =
           TRI.getMatchingSuperReg(OrigReg, Z80::sub_short, &Z80::R24RegClass);
       // Save scratch register or prepare to set scratch register
+      MCRegister SavedReg = UseLEA || Reg == Z80::DE ? ScratchReg
+                            : Is24Bit              ? OrigSuperReg
+                                                   : OrigReg;
       applySPAdjust(
           *BuildMI(MBB, MI, DL, get(Is24Bit ? Z80::PUSH24r : Z80::PUSH16r))
-               .addReg(UseLEA || Reg == Z80::DE ? ScratchReg
-                       : Is24Bit                ? OrigSuperReg
-                                                : OrigReg));
+               .addReg(SavedReg, SavedReg == ScratchReg &&
+                                        !isLive(ScratchReg, MI)
+                                    ? RegState::Undef
+                                    : 0));
       if (UseLEA)
         // Set scratch register
         BuildMI(MBB, MI, DL, get(Z80::LEA24ro), ScratchReg)
             .addReg(OrigSuperReg).addImm(0);
       else if (Reg == Z80::HL) {
-        // Save and set scratch register using the stack.
-        BuildMI(MBB, MI, DL, get(Is24Bit ? Z80::EX24sa : Z80::EX16sa),
-                ScratchReg).addReg(ScratchReg);
+        // A dead scratch value may be undefined on entry to this block. Its
+        // saved stack bytes are only read back to restore that dead value.
+        bool PreserveLow = !Is24Bit && !UndefLane(Z80::L) && isLive(Z80::L, MI);
+        bool PreserveHigh =
+            !Is24Bit && !UndefLane(Z80::H) && isLive(Z80::H, MI);
+        auto Exchange =
+            BuildMI(MBB, MI, DL, get(Is24Bit ? Z80::EX24sa : Z80::EX16sa),
+                    ScratchReg)
+                .addReg(ScratchReg, Is24Bit && isLive(ScratchReg, MI)
+                                        ? 0
+                                        : RegState::Undef);
+        if (!Is24Bit)
+          // A later partially defined pair spill can look like a use of the
+          // incoming scratch even when that lane has no incoming definition.
+          // Preserve only the defined, live byte inputs of the exchange.
+          for (auto Lane : {std::pair{Z80::L, PreserveLow},
+                            std::pair{Z80::H, PreserveHigh}})
+            if (Lane.second)
+              Exchange.addReg(Lane.first, RegState::Implicit);
         SavedScratchOnStack = true;
       } else
         // Set scratch register directly
@@ -1538,6 +1642,7 @@ bool Z80InstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
       MIB.addReg(HighReg);
     } else
       SrcOp.setReg(HighReg);
+    MI.getOperand(MI.getNumExplicitOperands() - 1).setIsUndef(UndefHigh);
     MIB = BuildMI(MBB, MI, DL, get(LowOpc)).addReg(AddrReg);
     if (HighOpc == Z80::LD8pr) {
       if (Overlap) {
@@ -1559,7 +1664,8 @@ bool Z80InstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
       OffsetMO.setImm(OffsetMO.getImm() + 1);
       assert(isInt<8>(OffsetMO.getImm()) && "LD88 can't have maximum offset.");
     }
-    MIB.addReg(TRI.getSubReg(Reg, Z80::sub_low));
+    MIB.addReg(TRI.getSubReg(Reg, Z80::sub_low),
+               UndefLow ? RegState::Undef : 0);
   if (SavedScratchOnStack) {
     // Swap back the saved value and drop the temporary stack entry.
     BuildMI(MBB, Next, DL, get(Is24Bit ? Z80::EX24sa : Z80::EX16sa),
@@ -1577,6 +1683,7 @@ bool Z80InstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
       // Restore A
       applySPAdjust(
           *BuildMI(MBB, Next, DL, get(Is24Bit ? Z80::POP24AF : Z80::POP16AF)));
+    splitWordMemRefs(*MIB, MI);
     expandPostRAPseudo(*MIB);
     expandPostRAPseudo(MI);
     break;
@@ -1948,6 +2055,40 @@ MachineInstr *Z80InstrInfo::optimizeLoadInstr(MachineInstr &MI,
   if (!DefMI || !DefMI->isSafeToMove(SawStore))
     return nullptr;
 
+  // Folding a byte load can extend a scarce address-pair live range in place
+  // of one byte. In lookup/mixing loops, keeping several such addresses alive
+  // across subsequent loads costs far more in spills than the folded ALU
+  // instruction saves. Retain the early load when its address dies there and
+  // another memory access separates it from the consumer.
+  if (DefMI->getParent() == MI.getParent() &&
+      getRegisterInfo().getRegSizeInBits(*MRI->getRegClass(FoldAsLoadDefReg)) ==
+          8) {
+    bool Dies =
+        llvm::any_of(DefMI->explicit_uses(), [&](const MachineOperand &MO) {
+          return MO.isReg() && MO.getReg().isVirtual() &&
+                 getRegisterInfo().getRegSizeInBits(
+                     *MRI->getRegClass(MO.getReg())) > 8 &&
+                 llvm::all_of(MRI->use_nodbg_instructions(MO.getReg()),
+                              [&](const MachineInstr &Use) {
+                                // Two-address rewriting adds a read of the old
+                                // value to the address definition. It does not
+                                // keep this loaded address live.
+                                return &Use == DefMI ||
+                                       Use.definesRegister(MO.getReg(),
+                                                           &getRegisterInfo());
+                              });
+        });
+    if (Dies) {
+      unsigned Distance = 0;
+      for (auto I = std::next(DefMI->getIterator()); I != MI.getIterator();
+           ++I) {
+        if (I == MI.getParent()->end() || ++Distance > 32 || I->mayLoad() ||
+            I->mayStore())
+          return nullptr;
+      }
+    }
+  }
+
   // Collect information about virtual register operands of MI.
   SmallVector<unsigned, 1> SrcOperandIds;
   for (unsigned i = 0, e = MI.getNumOperands(); i != e; ++i) {
@@ -2041,6 +2182,11 @@ MachineInstr *Z80InstrInfo::foldMemoryOperandImpl(
     default: return nullptr;
     case Z80::BIT8gb: Opc = IsOff ? Z80::BIT8ob : Z80::BIT8pb; break;
     case Z80::ADD8ar: Opc = IsOff ? Z80::ADD8ao : Z80::ADD8ap; break;
+    case Z80::SADDSAT8ar:
+      if (IsOff)
+        return nullptr;
+      Opc = Z80::SADDSAT8ap;
+      break;
     case Z80::ADC8ar: Opc = IsOff ? Z80::ADC8ao : Z80::ADC8ap; break;
     case Z80::SUB8ar: Opc = IsOff ? Z80::SUB8ao : Z80::SUB8ap; break;
     case Z80::SBC8ar: Opc = IsOff ? Z80::SBC8ao : Z80::SBC8ap; break;
