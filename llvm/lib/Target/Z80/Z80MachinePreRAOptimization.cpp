@@ -181,11 +181,11 @@ static bool selectBankInstructions(MachineFunction &MF) {
   return changed;
 }
 
-/// Keep constant-high words byte-sized between their word uses. Each whole
-/// use receives a local pair assembled from the low byte and known high byte.
-/// Whole-register definitions, opaque uses and unknown high bytes retain their
-/// original representation; byte definitions and memory ordering are preserved.
-static bool separateConstantLanes(MachineFunction &MF) {
+/// Allocate independently changing byte lanes between word uses. Constant
+/// high bytes are rematerialized; a high byte with one definition can stay in
+/// a byte register across blocks while low bytes change. Whole definitions and
+/// opaque uses retain their original pairs. Memory operations stay in place.
+static bool separateStableHighLanes(MachineFunction &MF) {
   if (!MF.getSubtarget<Z80Subtarget>().is16Bit())
     return false;
   auto &MRI = MF.getRegInfo();
@@ -227,30 +227,40 @@ static bool separateConstantLanes(MachineFunction &MF) {
     Constants[Key] = Value;
     return Value;
   };
-  SmallVector<std::pair<Register, int64_t>, 16> Candidates;
+  SmallVector<std::pair<Register, std::optional<int64_t>>, 16> Candidates;
   for (unsigned I = 0; I != MRI.getNumVirtRegs(); ++I) {
     Register R = Register::index2VirtReg(I);
     if (MRI.reg_nodbg_empty(R) ||
         !Z80::R16RegClass.hasSubClassEq(MRI.getRegClass(R)))
       continue;
     auto HighValue = Constant(Constant, R, Z80::sub_high, 0);
-    if (!HighValue)
+    bool Eligible = true, ShortUses = true, CrossBlock = false;
+    const MachineBasicBlock *HighBlock = nullptr;
+    unsigned LowDefs = 0, HighDefs = 0, FullUses = 0;
+    for (const auto &MO : MRI.def_operands(R)) {
+      if (MO.getSubReg() == Z80::sub_low)
+        ++LowDefs;
+      else if (MO.getSubReg() == Z80::sub_high) {
+        ++HighDefs;
+        HighBlock = MO.getParent()->getParent();
+      } else
+        Eligible = false;
+    }
+    if (!Eligible || !LowDefs || (!HighValue && (HighDefs != 1 || LowDefs < 2)))
       continue;
-    bool Eligible = true, ShortUses = true;
-    unsigned LowDefs = 0, FullUses = 0;
     for (const auto &MO : MRI.reg_nodbg_operands(R)) {
       if (MO.getParent()->isBundled() || MO.getParent()->isInlineAsm()) {
         Eligible = false;
         break;
       }
-      if (MO.isDef()) {
-        if (MO.getSubReg() == Z80::sub_low)
-          ++LowDefs;
-        else if (MO.getSubReg() != Z80::sub_high)
-          Eligible = false;
-      } else if (!MO.getSubReg()) {
+      if (MO.isDef())
+        continue;
+      if (!MO.getSubReg()) {
         Eligible &= !MO.isUndef();
         ++FullUses;
+        CrossBlock |= MO.getParent()->getParent() != HighBlock;
+        if (!HighValue)
+          continue;
         auto I = MO.getParent()->getIterator();
         auto Begin = MO.getParent()->getParent()->begin();
         bool NearbyDef = false;
@@ -273,16 +283,19 @@ static bool separateConstantLanes(MachineFunction &MF) {
     }
     /* A nearby word use saves little live-register space, while rebuilding
        a simple loop-carried counter would reload its constant high byte on
-       every iteration. Keep these compact pair ranges intact. */
-    if (Eligible && LowDefs && FullUses && !ShortUses &&
-        !(LowDefs > 1 && FullUses == 1))
-      Candidates.emplace_back(R, *HighValue);
+       every iteration. Keep these compact pair ranges intact. A nonconstant
+       high byte pays for separation when its definition spans blocks and
+       multiple low-byte definitions and word uses share that lifetime. */
+    if (Eligible && LowDefs && FullUses &&
+        (HighValue ? (!ShortUses && !(LowDefs > 1 && FullUses == 1))
+                   : (HighDefs == 1 && LowDefs > 1 && FullUses > 1 && CrossBlock)))
+      Candidates.emplace_back(R, HighValue);
   }
   for (auto [R, HighValue] : Candidates) {
     const auto *RC = MRI.getRegClass(R);
-    /* Coalescing can tie one shared constant byte to unrelated low-byte
+    /* Coalescing can tie one shared high byte to unrelated low-byte
        definitions. Rebuild only the pairs needed by word instructions, so
-       the low values can occupy or spill individual byte registers. */
+       the lanes can occupy or spill individual byte registers. */
     Register Low = MRI.createVirtualRegister(&Z80::G8RegClass);
     Register High = MRI.createVirtualRegister(&Z80::G8RegClass);
     SmallVector<MachineOperand *, 16> Operands;
@@ -305,17 +318,28 @@ static bool separateConstantLanes(MachineFunction &MF) {
                   TII.get(TargetOpcode::COPY))
               .addReg(Pair, RegState::Define | RegState::Undef, Z80::sub_low)
               .addReg(Low);
-          BuildMI(*MI.getParent(), MI, MI.getDebugLoc(), TII.get(Z80::LD8ri))
-              .addReg(Pair, RegState::Define, Z80::sub_high)
-              .addImm(HighValue);
+          if (HighValue)
+            BuildMI(*MI.getParent(), MI, MI.getDebugLoc(), TII.get(Z80::LD8ri))
+                .addReg(Pair, RegState::Define, Z80::sub_high)
+                .addImm(*HighValue);
+          else
+            BuildMI(*MI.getParent(), MI, MI.getDebugLoc(),
+                    TII.get(TargetOpcode::COPY))
+                .addReg(Pair, RegState::Define, Z80::sub_high)
+                .addReg(High);
         }
         MO->setReg(Pair);
       }
     }
+    /* A range may originally require an index pair for an offset load. Its
+       other word uses, such as call arguments, can use ordinary pairs once
+       separated. Retaining the old class would add unnecessary transfers. */
+    for (const auto &Entry : Pairs)
+      MRI.recomputeRegClass(Entry.second);
     MRI.recomputeRegClass(Low);
     SmallVector<MachineInstr *, 16> ConstantCopies;
     for (auto &MI : MRI.use_nodbg_instructions(High)) {
-      if (!MI.isCopy())
+      if (!HighValue || !MI.isCopy())
         continue;
       const auto &Dst = MI.getOperand(0);
       Register D = Dst.getReg();
@@ -330,7 +354,7 @@ static bool separateConstantLanes(MachineFunction &MF) {
     }
     for (auto *MI : ConstantCopies) {
       MI->setDesc(TII.get(Z80::LD8ri));
-      MI->getOperand(1).ChangeToImmediate(HighValue);
+      MI->getOperand(1).ChangeToImmediate(*HighValue);
     }
     MRI.recomputeRegClass(High);
     Changed = true;
@@ -845,7 +869,7 @@ bool Z80MachinePreRAOptimization::runOnMachineFunction(MachineFunction &MF) {
     }
   }
 
-  Changed |= separateConstantLanes(MF);
+  Changed |= separateStableHighLanes(MF);
   return selectBankInstructions(MF) || Changed;
 }
 

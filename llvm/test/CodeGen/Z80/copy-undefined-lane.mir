@@ -3,6 +3,7 @@
   target triple = "z80"
   define void @partial() { ret void }
   define void @defined() { ret void }
+  define void @distant_partial_store() { ret void }
 ...
 ---
 name: partial
@@ -31,4 +32,52 @@ body: |
     $l = LD8gp $hl
     $bc = COPY $hl
     RET16 implicit-def $sps, implicit $sps, implicit $bc
+...
+---
+name: distant_partial_store
+tracksRegLiveness: true
+# A single defined byte makes a pair use legal. Expanding the store must keep
+# its other byte undefined even when its last definition is over 32 steps away.
+# CHECK-LABEL: name: distant_partial_store
+# CHECK: LD8og $ix, 0, undef $c
+# CHECK-NEXT: LD8og $ix, 1, $b
+body: |
+  bb.0:
+    liveins: $ix
+    $b = LD8ri 42
+    $a = LD8ri 1
+    $a = LD8ri 1
+    $a = LD8ri 1
+    $a = LD8ri 1
+    $a = LD8ri 1
+    $a = LD8ri 1
+    $a = LD8ri 1
+    $a = LD8ri 1
+    $a = LD8ri 1
+    $a = LD8ri 1
+    $a = LD8ri 1
+    $a = LD8ri 1
+    $a = LD8ri 1
+    $a = LD8ri 1
+    $a = LD8ri 1
+    $a = LD8ri 1
+    $a = LD8ri 1
+    $a = LD8ri 1
+    $a = LD8ri 1
+    $a = LD8ri 1
+    $a = LD8ri 1
+    $a = LD8ri 1
+    $a = LD8ri 1
+    $a = LD8ri 1
+    $a = LD8ri 1
+    $a = LD8ri 1
+    $a = LD8ri 1
+    $a = LD8ri 1
+    $a = LD8ri 1
+    $a = LD8ri 1
+    $a = LD8ri 1
+    $a = LD8ri 1
+    $a = LD8ri 1
+    LD88or $ix, 0, $bc :: (store (s16))
+    RET16 implicit-def $sps, implicit $sps
 ...

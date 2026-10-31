@@ -20,6 +20,7 @@
 #include "llvm/ADT/BitVector.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/CodeGen/LiveRegUnits.h"
 #include "llvm/CodeGen/MachineBlockFrequencyInfo.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
@@ -44,7 +45,7 @@ struct Slot {
   bool Valid = true;
   double Saving = 0;
   MCRegister Assigned;
-  unsigned CallClobbers = 0;
+  unsigned UnavailableBanks = 0;
 };
 
 static unsigned bankBit(MCRegister R) {
@@ -248,29 +249,43 @@ bool Z80AlternateRegAllocator::runOnMachineFunction(MachineFunction &MF) {
 
   SmallVector<BitVector, 16> Conflicts(N, BitVector(N));
   const auto &TRI = *ST.getRegisterInfo();
+  const MCRegister Banks[] = {
+      Z80::A_ALT, ST.is24Bit() ? Z80::UHL_ALT : Z80::HL_ALT,
+      ST.is24Bit() ? Z80::UDE_ALT : Z80::DE_ALT,
+      ST.is24Bit() ? Z80::UBC_ALT : Z80::BC_ALT};
+  bool HasFixedBanks = llvm::any_of(Banks, [&](MCRegister R) {
+    return MF.getRegInfo().isPhysRegUsed(R, true);
+  });
   for (const auto &MBB : MF) {
     BitVector Live = Out[MBB.getNumber()];
+    /* Fixed assignments from the main allocator only exclude storage while
+       they are live. Include reads and dead definitions at an access itself:
+       a dead bank write still destroys a spill stored there. Call masks enter
+       the same conflict calculation; unknown calls clobber every bank. */
+    LiveRegUnits FixedLive(TRI);
+    if (HasFixedBanks)
+      FixedLive.addLiveOuts(MBB);
     for (const auto &MI : reverse(MBB)) {
       bool HasMask = llvm::any_of(MI.operands(), [](const MachineOperand &MO) {
         return MO.isRegMask();
       });
-      if (MI.isCall() || HasMask) {
-        // Unknown calls clobber every bank. A precise call mask can leave some
-        // pairs untouched, allowing ordinary spilled values to survive a call.
-        unsigned Clobbers = MI.isCall() && !HasMask ? 15 : 0;
-        for (MCRegister R :
-             {Z80::A_ALT, ST.is24Bit() ? Z80::UHL_ALT : Z80::HL_ALT,
-              ST.is24Bit() ? Z80::UDE_ALT : Z80::DE_ALT,
-              ST.is24Bit() ? Z80::UBC_ALT : Z80::BC_ALT})
-          if (MI.modifiesRegister(R, &TRI))
-            Clobbers |= bankBit(R);
-        for (int I : Live.set_bits())
-          Slots[I].CallClobbers |= Clobbers;
-      }
+      unsigned FixedBanks = 0;
+      if (HasFixedBanks || HasMask)
+        for (MCRegister R : Banks)
+          if ((HasFixedBanks && !FixedLive.available(R)) ||
+              MI.modifiesRegister(R, &TRI) || MI.readsRegister(R, &TRI))
+            FixedBanks |= bankBit(R);
+      if (MI.isCall() && !HasMask)
+        FixedBanks = 15;
+      if (HasFixedBanks)
+        FixedLive.stepBackward(MI);
+      for (int I : Live.set_bits())
+        Slots[I].UnavailableBanks |= FixedBanks;
       auto It = AccessIndex.find(&MI);
       if (It == AccessIndex.end())
         continue;
       const auto &A = Accesses[It->second];
+      Slots[A.Slot].UnavailableBanks |= FixedBanks;
       // Include dead definitions: a store still overwrites the physical bank.
       Conflicts[A.Slot] |= Live;
       if (A.Load)
@@ -296,8 +311,7 @@ bool Z80AlternateRegAllocator::runOnMachineFunction(MachineFunction &MF) {
                      : Slots[I].Width == 2 ? Z80::ALT16RegClass
                                            : Z80::ALT24RegClass;
     for (MCRegister R : RC) {
-      if (MF.getRegInfo().isPhysRegUsed(R, true) ||
-          (Slots[I].CallClobbers & bankBit(R)))
+      if (Slots[I].UnavailableBanks & bankBit(R))
         continue;
       bool Available = true;
       for (int J : Conflicts[I].set_bits())

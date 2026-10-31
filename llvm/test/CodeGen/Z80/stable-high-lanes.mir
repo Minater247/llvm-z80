@@ -1,0 +1,33 @@
+# RUN: llc -run-pass=z80-machine-prera-opt,z80-prepare-live-ranges -verify-machineinstrs %s -o - | FileCheck %s
+# RUN: %python %S/Inputs/stable-high-lanes.py --llc llc --mir %s --work %t
+--- |
+  target triple = "z80"
+  define void @lookup() { ret void }
+...
+---
+name: lookup
+tracksRegLiveness: true
+# CHECK-LABEL: name: lookup
+# CHECK: [[HIGH:%[0-9]+]]:r8 = COPY $d
+# CHECK: bb.1:
+# CHECK: [[LOW:%[0-9]+]]:r8 = COPY $c
+# CHECK: [[PAIR:%[0-9]+]].sub_low:r16 = COPY [[LOW]]
+# CHECK-NEXT: [[PAIR]].sub_high:r16 = COPY [[HIGH]]
+# CHECK-NEXT: $hl = COPY [[PAIR]]
+# CHECK: [[INDEX:%[0-9]+]].sub_low:i16 = COPY [[LOW]]
+# CHECK-NEXT: [[INDEX]].sub_high:i16 = COPY [[HIGH]]
+# CHECK-NEXT: $a = LD8ro [[INDEX]], 2
+body: |
+  bb.0:
+    liveins: $de, $c
+    undef %0.sub_high:i16 = COPY $d
+    %0.sub_low:i16 = COPY $e
+    JP16 %bb.1
+  bb.1:
+    liveins: $c
+    %0.sub_low:i16 = COPY $c
+    %1:g8 = LD8go %0, 2 :: (load (s8))
+    $hl = COPY %0
+    $a = COPY %1
+    RET16 implicit-def $sps, implicit $sps, implicit $hl, implicit $a
+...

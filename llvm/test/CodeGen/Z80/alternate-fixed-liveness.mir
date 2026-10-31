@@ -1,0 +1,87 @@
+# RUN: llc -mattr=+alternate-regs -run-pass=z80-alternate-regalloc -verify-machineinstrs %s -o - | FileCheck %s
+--- |
+  target triple = "z80"
+  define void @reuse_after() { ret void }
+  define void @reuse_before() { ret void }
+  define void @live_successor() { ret void }
+  define void @dead_clobber() { ret void }
+...
+---
+name: reuse_after
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 2, alignment: 1 }
+# CHECK-LABEL: name: reuse_after
+# CHECK: KILL killed $hl_alt
+# CHECK: $hl_alt = ALT_SAVE16 $hl
+# CHECK: $de = ALT_LOAD16 $hl_alt
+body: |
+  bb.0:
+    liveins: $hl, $hl_alt, $de_alt, $bc_alt
+    KILL killed $hl_alt, killed $de_alt, killed $bc_alt
+    LD88or %stack.0, 0, $hl
+    $de = LD88ro %stack.0, 0
+    RET16 implicit-def $sps, implicit $sps, implicit $de
+...
+---
+name: reuse_before
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 2, alignment: 1 }
+# CHECK-LABEL: name: reuse_before
+# CHECK: $hl_alt = ALT_SAVE16 $hl
+# CHECK: $de = ALT_LOAD16 $hl_alt
+# CHECK: $hl_alt = BANK_LD16ri 123
+body: |
+  bb.0:
+    liveins: $hl
+    LD88or %stack.0, 0, $hl
+    $de = LD88ro %stack.0, 0
+    $hl_alt = BANK_LD16ri 123
+    $de_alt = BANK_LD16ri 456
+    $bc_alt = BANK_LD16ri 789
+    RET16 implicit-def $sps, implicit $sps, implicit $de, implicit $hl_alt, implicit $de_alt, implicit $bc_alt
+...
+---
+name: live_successor
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 2, alignment: 1 }
+# CHECK-LABEL: name: live_successor
+# CHECK-NOT: ALT_SAVE
+# CHECK: LD88or %stack.0, 0, $hl
+# CHECK: $de = LD88ro %stack.0, 0
+# CHECK-NOT: ALT_LOAD
+body: |
+  bb.0:
+    liveins: $hl
+    $hl_alt = BANK_LD16ri 123
+    $de_alt = BANK_LD16ri 456
+    $bc_alt = BANK_LD16ri 789
+    LD88or %stack.0, 0, $hl
+    $de = LD88ro %stack.0, 0
+    JP16 %bb.1
+  bb.1:
+    liveins: $de, $hl_alt, $de_alt, $bc_alt
+    RET16 implicit-def $sps, implicit $sps, implicit $de, implicit $hl_alt, implicit $de_alt, implicit $bc_alt
+...
+---
+name: dead_clobber
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 2, alignment: 1 }
+# CHECK-LABEL: name: dead_clobber
+# CHECK-NOT: ALT_SAVE
+# CHECK: LD88or %stack.0, 0, $hl
+# CHECK: $de = LD88ro %stack.0, 0
+# CHECK-NOT: ALT_LOAD
+body: |
+  bb.0:
+    liveins: $hl
+    LD88or %stack.0, 0, $hl
+    dead $hl_alt = BANK_LD16ri 123
+    dead $de_alt = BANK_LD16ri 456
+    dead $bc_alt = BANK_LD16ri 789
+    $de = LD88ro %stack.0, 0
+    RET16 implicit-def $sps, implicit $sps, implicit $de
+...

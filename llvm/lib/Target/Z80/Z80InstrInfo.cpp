@@ -106,20 +106,18 @@ static void markUseUndef(MachineInstr &MI, Register Reg,
     MO->setIsUndef();
 }
 
-/// Identify an undefined physical lane before an instruction. An inconclusive
-/// scan preserves the use; block live-ins settle queries reaching block entry.
+/// Identify an undefined physical lane before an instruction. The nearest
+/// definition or use determines its state; block live-ins settle queries that
+/// reach block entry.
 static bool isUndefLane(MachineBasicBlock &MBB, MachineBasicBlock::iterator I,
                         MCRegister R, const TargetRegisterInfo &TRI) {
-  unsigned Budget = 32;
-  while (I != MBB.begin() && Budget--) {
+  while (I != MBB.begin()) {
     auto Info = AnalyzePhysRegInBundle(*--I, R, &TRI);
     if (Info.DeadDef || Info.Clobbered || (Info.Killed && !Info.Defined))
       return true;
     if (Info.Defined || Info.Read)
       return false;
   }
-  if (I != MBB.begin())
-    return false;
   LiveRegUnits Live(TRI);
   Live.addLiveIns(MBB);
   return Live.available(R);
@@ -1724,7 +1722,7 @@ bool Z80InstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
     MCRegister OrigReg = SrcOp.getReg();
     // A spilled pair may have only one defined byte. The unsplit pair use is
     // legal in that case; keep the undefined lane explicit when expanding it
-    // into separate byte uses. An inconclusive bounded scan stays conservative.
+    // into separate byte uses.
     auto UndefLane = [&](MCRegister R) { return isUndefLane(MBB, MI, R, TRI); };
     bool UndefLow = UndefLane(TRI.getSubReg(OrigReg, Z80::sub_low));
     bool UndefHigh = UndefLane(TRI.getSubReg(OrigReg, Z80::sub_high));
