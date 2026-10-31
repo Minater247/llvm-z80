@@ -100,9 +100,13 @@ unsigned copyCost(MCRegister Dst, MCRegister Src, bool KillSrc,
       if (ST.hasEZ80Ops() && isIndex(Src))
         return 3; // LEA dst,index+0.
       unsigned Indices = unsigned(isIndex(Dst)) + unsigned(isIndex(Src));
-      if (Is24 || (Indices == 1 && OptSize) ||
+      if (Is24 || Indices == 2 || (Indices == 1 && OptSize) ||
           (Indices && !ST.hasIndexHalfRegs()))
         return Bytes ? 2 + Indices : 21 + 4 * Indices; // PUSH src; POP dst.
+      // The two byte copies share their surrounding EX DE,HL instructions:
+      // EX; LD index-low,E; LD index-high,D; EX (or the reverse direction).
+      if (Indices == 1 && (Dst == HL || Src == HL))
+        return Bytes ? 6 : 24;
     }
     const auto &TRI = *ST.getRegisterInfo();
     return copyCost(TRI.getSubReg(Dst, Z80::sub_low),

@@ -669,6 +669,10 @@ Z80LegalizerInfo::legalizeShift(LegalizerHelper &Helper, MachineInstr &MI,
 
     if (Ty == LLT::scalar(8) && ShiftVal == 1)
       return LegalizerHelper::AlreadyLegal;
+    if (Ty == LLT::scalar(8) && (Opc == G_SHL || Opc == G_LSHR) &&
+        ShiftVal >= 5 && ShiftVal < 8) {
+      return LegalizerHelper::AlreadyLegal;
+    }
     if (Opc == G_SHL &&
         (Ty == LLT::scalar(16) ||
          (Subtarget.is24Bit() && Ty == LLT::scalar(24))) &&

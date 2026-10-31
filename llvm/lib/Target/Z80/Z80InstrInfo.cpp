@@ -830,6 +830,8 @@ void Z80InstrInfo::copyPhysReg(MachineBasicBlock &MBB,
     }
     // If both are 24-bit then the upper byte needs to be preserved.
     // Otherwise copies of index registers may need to use this method if:
+    // - Both are index registers: PUSH/POP avoids two byte transfers through
+    //   a saved accumulator and preserves AF in 29 T-states instead of 74.
     // - We are optimizing for size and exactly one reg is an index reg because
     //     PUSH SrcReg \ POP DstReg is (2 + NumIndexRegs) bytes but slower
     //     LD DstRegLo,SrcRegLo \ LD DstRegHi,SrcRegHi is 4 bytes but faster
@@ -838,7 +840,7 @@ void Z80InstrInfo::copyPhysReg(MachineBasicBlock &MBB,
                          Z80::I24RegClass.contains(DstReg);
     unsigned NumIndexRegs = IsSrcIndexReg + IsDstIndexReg;
     bool OptSize = MBB.getParent()->getFunction().hasOptSize();
-    if (Is24Bit || (NumIndexRegs == 1 && OptSize) ||
+    if (Is24Bit || NumIndexRegs == 2 || (NumIndexRegs == 1 && OptSize) ||
         (NumIndexRegs && !Subtarget.hasIndexHalfRegs())) {
       applySPAdjust(
           *BuildMI(MBB, MI, DL, get(Is24Bit ? Z80::PUSH24r : Z80::PUSH16r))

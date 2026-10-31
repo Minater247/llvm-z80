@@ -1,7 +1,7 @@
 """Compare allocation costs with independently enumerated legal assignments.
 
 All values interfere and A is fixed. Byte copies to IYL cost 8 T-states
-from B/C/D/E or 16 from H/L. Pair copies to IY cost 16 or 32 respectively;
+from B/C/D/E or 16 from H/L. Pair copies to IY cost 16 or 24 respectively;
 for size, the backend instead uses a three-byte PUSH/POP pair transfer.
 Mixed byte/pair cases also test the opportunity cost of occupying aliases.
 """
@@ -51,7 +51,7 @@ with tempfile.TemporaryDirectory() as tmp:
 
 def cost(reg, size):
     if len(reg) == 2:
-        return 3 if size else (32 if reg == 'hl' else 16)
+        return 3 if size else (24 if reg == 'hl' else 16)
     return (4 if reg in 'hl' else 2) if size else (16 if reg in 'hl' else 8)
 
 

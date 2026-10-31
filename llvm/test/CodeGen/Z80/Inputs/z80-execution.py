@@ -86,7 +86,14 @@ class CPU:
         """Hook for bus traces, at the end of an executed instruction."""
 
     def run(self, body, entry=None, untimed=(), aborts=(),
-            stop_on_reentry=False, max_steps=100000):
+            stop_on_reentry=False, max_steps=100000, checkpoints=None):
+        """Execute until return, an explicit stop, or the instruction limit.
+
+        Checkpoints map labels to callbacks receiving this CPU before the
+        labeled instruction. A truthy callback result stops execution there.
+        Untimed instructions apply only to the outer call; nested calls count.
+        Exceeding max_steps or encountering an unsupported instruction raises.
+        """
         program = Program(body) if isinstance(body, str) else body
         code, labels = program.code, program.labels
         pc = labels[entry] if entry else 0
@@ -96,6 +103,8 @@ class CPU:
         self.excluded_cycles = 0
         self.stop_reason = None
         abort_pcs = {labels[label]: label for label in aborts}
+        checkpoint_pcs = {labels[label]: (label, callback)
+                          for label, callback in (checkpoints or {}).items()}
         entry_pc = pc
         for step in range(max_steps):
             if step and stop_on_reentry and pc == entry_pc:
@@ -104,6 +113,11 @@ class CPU:
             if pc in abort_pcs:
                 self.stop_reason = 'abort:' + abort_pcs[pc]
                 return
+            if pc in checkpoint_pcs:
+                label, callback = checkpoint_pcs[pc]
+                if callback(self):
+                    self.stop_reason = 'checkpoint:' + label
+                    return
             before = self.cycles
             exclude = not returns and pc in untimed
             op, args = code[pc]

@@ -9,6 +9,8 @@
   define void @index_copy_preserves_f() { ret void }
   define void @scratch_undefined_future_lane() { ret void }
   define void @scratch_live_high() { ret void }
+  define void @index_pair_copy() { ret void }
+  define void @hl_index_pair_copy() { ret void }
 ...
 ---
 name: volatile_word
@@ -126,4 +128,33 @@ body: |
     LD88or $ix, 0, $iy
     $a = COPY $h
     RET16 implicit-def $sps, implicit $sps, implicit $a
+...
+---
+name: index_pair_copy
+tracksRegLiveness: true
+# CHECK-LABEL: name: index_pair_copy
+# CHECK: PUSH16r $ix
+# CHECK-NEXT: $iy = POP16r
+# CHECK-NOT: PUSH16AF
+# CHECK: RET16
+body: |
+  bb.0:
+    liveins: $ix, $af
+    $iy = COPY $ix
+    RET16 implicit-def $sps, implicit $sps, implicit $ix, implicit $iy, implicit $af
+...
+---
+name: hl_index_pair_copy
+tracksRegLiveness: true
+# CHECK-LABEL: name: hl_index_pair_copy
+# CHECK: EX16DE
+# CHECK-NEXT: $iyl = LD8yy $e
+# CHECK-NEXT: $iyh = LD8yy $d
+# CHECK-NEXT: EX16DE
+# CHECK: RET16
+body: |
+  bb.0:
+    liveins: $hl, $de, $af
+    $iy = COPY $hl
+    RET16 implicit-def $sps, implicit $sps, implicit $hl, implicit $de, implicit $iy, implicit $af
 ...

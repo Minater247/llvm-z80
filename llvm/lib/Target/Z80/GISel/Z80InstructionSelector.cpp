@@ -2364,8 +2364,35 @@ bool Z80InstructionSelector::selectShift(MachineInstr &I,
   if (!Ty.isScalar())
     return false;
 
-  if (Opc == TargetOpcode::G_LSHR && Ty == LLT::scalar(16) &&
-      Amt->Value == 8) {
+  if (Ty == LLT::scalar(8) &&
+      (Opc == TargetOpcode::G_SHL || Opc == TargetOpcode::G_LSHR) &&
+      Amt->Value.uge(5) && Amt->Value.ult(8)) {
+    // Rotate in the opposite direction, then clear the wrapped bits. Keeping
+    // the generic shift through legalization lets the combiner fold known
+    // zeros and share smaller shifts before this expansion introduces flags.
+    MachineIRBuilder MIB(I);
+    unsigned Count = Amt->Value.getZExtValue();
+    Register Rotated = SrcReg;
+    for (unsigned N = Count; N < 8; ++N) {
+      auto Rotate =
+          MIB.buildInstr(Opc == TargetOpcode::G_SHL ? Z80::RRC8g : Z80::RLC8g,
+                         {Ty}, {Rotated});
+      if (!constrainSelectedInstRegOperands(*Rotate, TII, TRI, RBI))
+        return false;
+      Rotated = Rotate.getReg(0);
+    }
+    MIB.buildCopy(Z80::A, Rotated);
+    auto Mask = MIB.buildInstr(
+        Z80::AND8ai, {},
+        {int64_t(Opc == TargetOpcode::G_SHL ? (0xff << Count) & 0xff
+                                            : 0xff >> Count)});
+    MIB.buildCopy(DstReg, Register(Z80::A));
+    I.eraseFromParent();
+    return constrainSelectedInstRegOperands(*Mask, TII, TRI, RBI) &&
+           RBI.constrainGenericRegister(DstReg, Z80::R8RegClass, MRI);
+  }
+
+  if (Opc == TargetOpcode::G_LSHR && Ty == LLT::scalar(16) && Amt->Value == 8) {
     MachineIRBuilder MIB(I);
     if (!RBI.constrainGenericRegister(DstReg, Z80::R16RegClass, MRI) ||
         !RBI.constrainGenericRegister(SrcReg, Z80::R16RegClass, MRI))
