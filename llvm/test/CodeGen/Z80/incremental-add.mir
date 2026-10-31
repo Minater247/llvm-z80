@@ -1,0 +1,21 @@
+# RUN: llc -run-pass=z80-incremental-loading -verify-machineinstrs %s -o - | FileCheck %s
+--- |
+  target triple = "z80"
+  define void @add_pair() { ret void }
+...
+---
+name: add_pair
+tracksRegLiveness: true
+# CHECK-LABEL: name: add_pair
+# CHECK: EX16DE
+# CHECK-NEXT: $hl = ADD16ao $hl, $bc, implicit-def $f
+# CHECK-NEXT: EX16DE
+# CHECK-NEXT: RET16
+body: |
+  bb.0:
+    liveins: $de, $bc, $hl
+    $iy = COPY $de
+    $iy = ADD16ao $iy, $bc, implicit-def $f
+    $de = COPY killed $iy
+    RET16 implicit-def $sps, implicit $sps, implicit $de, implicit $hl, implicit $bc, implicit $f
+...

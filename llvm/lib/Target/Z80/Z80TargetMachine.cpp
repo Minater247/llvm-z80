@@ -46,6 +46,7 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeZ80Target() {
   initializeZ80PostSelectCombinerPass(PR);
   initializeZ80MachineEarlyOptimizationPass(PR);
   initializeZ80MachinePreRAOptimizationPass(PR);
+  initializeZ80PrepareLiveRangesPass(PR);
   initializeZ80MachineLateOptimizationPass(PR);
   initializeZ80BranchSelectorPass(PR);
   initializeZ80RepeatedStoreOptPass(PR);
@@ -216,9 +217,10 @@ bool Z80PassConfig::addGlobalInstructionSelect() {
 void Z80PassConfig::addMachineSSAOptimization() {
   addPass(createZ80PostSelectCombiner());
   TargetPassConfig::addMachineSSAOptimization();
-  addPass(createZ80RegisterOptPass());
   addPass(createZ80MachineEarlyOptimizationPass());
   addPass(createZ80BlitFolder());
+  addPass(createZ80RegisterOptPass());
+  addPass(createZ80RepeatedStoreOptPass());
   addPass(&DeadMachineInstructionElimID);
 }
 
@@ -232,6 +234,7 @@ void Z80PassConfig::addFastRegAlloc() {
 
 bool Z80PassConfig::addRegAssignAndRewriteOptimized() {
   addPass(createZ80MachinePreRAOptimizationPass());
+  addPass(createZ80PrepareLiveRangesPass());
   return TargetPassConfig::addRegAssignAndRewriteOptimized();
 }
 
@@ -242,7 +245,6 @@ FunctionPass *Z80PassConfig::createTargetRegisterAllocator(bool Optimized) {
 
 void Z80PassConfig::addMachineLateOptimization() {
   TargetPassConfig::addMachineLateOptimization();
-  addPass(createZ80RepeatedStoreOptPass());
   addPass(createZ80MachineLateOptimizationPass());
   addPass(createZ80DanglingRegPass());
   addPass(createZ80IncrementalLoadingPass());

@@ -44,7 +44,7 @@ constexpr struct Immediate {
 class Encoding {
 public:
   uint8_t Size[2];
-  uint8_t Bytes[12];
+  uint8_t Bytes[16];
 
   constexpr uint8_t init(uint8_t Byte) {
     init(bi);
@@ -1486,6 +1486,28 @@ constexpr struct TestInstr {
 #undef w
 };
 
+constexpr TestInstr BankInstrs[] = {
+    {{0xD9, 0x21, wi, 0xD9}, "$hl_alt = BANK_LD16ri 0"},
+    {{0xD9, 0x13, 0xD9}, "$de_alt = BANK_INC16 $de_alt"},
+    {{0xD9, 0x0B, 0xD9}, "$bc_alt = BANK_DEC16 $bc_alt"},
+    {{0xD9, 0x1A, 0xD9}, "$a = BANK_LD8ap $de_alt"},
+    {{0xD9, 0x02, 0xD9}, "BANK_LD8pa $bc_alt, $a"},
+    {{0xD9, 0x69, 0x60, 0xD9}, "$hl_alt = ALT_COPY16 $bc_alt"},
+    {{0xD9, 0x09, 0xD9},
+     "$hl_alt = BANK_ADD16 $hl_alt, $bc_alt, implicit-def $f"},
+    {{0xD9, 0xEB, 0x09, 0xEB, 0xD9},
+     "$de_alt = BANK_ADD16 $de_alt, $bc_alt, implicit-def $f"},
+    {{0xD9, 0xE5, 0x69, 0x60, 0x19, 0x4D, 0x44, 0xE1, 0xD9},
+     "$bc_alt = BANK_ADD16 $bc_alt, $de_alt, implicit-def $f"},
+    {{0xE5, 0xD9, 0xE5, 0xD9, 0xE1, 0x19, 0xE5, 0xD9, 0xE1, 0xD9, 0xE1},
+     "$hl_alt = BANK_ADD16 $hl_alt, $de, implicit-def $f"},
+    {{0xC5, 0xD9, 0xC5, 0xD9, 0xC1, 0xFD, 0x09, 0xC1},
+     "$iy = BANK_ADD16 $iy, $bc_alt, implicit-def $f"},
+    {{0xD5, 0xD9, 0xD5, 0xD9, 0xD1, 0xE5, 0x69, 0x60, 0x19, 0x4D, 0x44, 0xE1,
+      0xD1},
+     "$bc = BANK_ADD16 $bc, $de_alt, implicit-def $f"},
+};
+
 void checkInstructionSizes(StringRef T) {
   Triple TT(Triple::normalize(T));
 
@@ -1507,6 +1529,13 @@ void checkInstructionSizes(StringRef T) {
   auto *TII = STI.getInstrInfo();
   ASSERT_TRUE(TII);
 
+  SmallVector<const TestInstr *, 0> Cases;
+  for (const auto &TI : TestInstrs)
+    Cases.push_back(&TI);
+  if (!Is24Bit)
+    for (const auto &TI : BankInstrs)
+      Cases.push_back(&TI);
+
   std::string MIR;
   {
     raw_string_ostream S(MIR);
@@ -1523,9 +1552,9 @@ void checkInstructionSizes(StringRef T) {
                  "body:             |\n"
                  "  {0:+}:\n",
                  BB);
-    for (const TestInstr &TI : TestInstrs)
+    for (const TestInstr *TI : Cases)
       S << "    "
-        << formatv(TI.MIR, Is24Bit ? 24 : 16, Is24Bit ? 'l' : 's',
+        << formatv(TI->MIR, Is24Bit ? 24 : 16, Is24Bit ? 'l' : 's',
                    Is24Bit ? "u" : "", Is24Bit ? "e" : "", BB)
         << '\n';
     S << "\n...\n";
@@ -1551,14 +1580,15 @@ void checkInstructionSizes(StringRef T) {
   ASSERT_TRUE(F);
   auto &MF = MMI.getOrCreateMachineFunction(*F);
 
-  ASSERT_EQ(MF.getInstructionCount(), std::size(TestInstrs));
-  auto TI = std::begin(TestInstrs);
+  ASSERT_EQ(MF.getInstructionCount(), Cases.size());
+  auto TI = Cases.begin();
   for (const auto &MBB : MF)
     for (const auto &MI : MBB) {
       EXPECT_EQ(MI.isPseudo(),
                 (TII->getName(MI.getOpcode()).starts_with("ALT_") ||
-                 TII->getName(MI.getOpcode()).starts_with("SADDSAT")));
-      unsigned ActualSize = unsigned(TI++->Enc.Size[Is24Bit]);
+                 TII->getName(MI.getOpcode()).starts_with("SADDSAT") ||
+                 TII->getName(MI.getOpcode()).starts_with("BANK_")));
+      unsigned ActualSize = unsigned((*TI++)->Enc.Size[Is24Bit]);
       EXPECT_EQ(TII->getInstSizeInBytes(MI), ActualSize) << MI;
     }
 }

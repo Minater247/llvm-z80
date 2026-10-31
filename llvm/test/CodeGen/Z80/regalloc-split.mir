@@ -10,6 +10,7 @@
 --- |
   target triple = "z80"
   define void @split_class() { ret void }
+  define void @grouped_uses() { ret void }
 ...
 ---
 name: split_class
@@ -23,4 +24,25 @@ body: |
     %1:g8 = LD8gp %0
     KILL %1, $ix, $iy
     RET16 implicit-def $sps, implicit $sps
+...
+---
+name: grouped_uses
+tracksRegLiveness: true
+# CHECK-LABEL: name: grouped_uses
+# CHECK: stack: []
+# CHECK: $hl = LD16ri 42
+# CHECK-NEXT: KILL $hl
+# CHECK-NEXT: $hl = COPY killed $de
+# CHECK-NEXT: $a = LD8gp $hl
+# CHECK-NEXT: $a = LD8gp killed $hl
+body: |
+  bb.0:
+    liveins: $de, $ix, $iy
+    %0:a16 = COPY $de
+    $hl = LD16ri 42
+    KILL $hl
+    $a = LD8gp %0 :: (volatile load (s8))
+    $a = LD8gp %0 :: (volatile load (s8))
+    KILL $ix, $iy
+    RET16 implicit-def $sps, implicit $sps, implicit $a
 ...

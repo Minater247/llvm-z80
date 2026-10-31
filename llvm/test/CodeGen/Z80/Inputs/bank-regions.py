@@ -105,7 +105,7 @@ name: f{i}
 tracksRegLiveness: true
 body: |
   bb.0:
-    liveins: $bc, $de, $hl, $af, $iy
+    liveins: $bc, $de, $hl, $af, $iy, $bc_alt, $de_alt, $hl_alt
     ${main} = ALT_LOAD16 ${bank}_alt
     {body}
     {save}

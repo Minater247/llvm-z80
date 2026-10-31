@@ -106,6 +106,25 @@ static void markUseUndef(MachineInstr &MI, Register Reg,
     MO->setIsUndef();
 }
 
+/// Identify an undefined physical lane before an instruction. An inconclusive
+/// scan preserves the use; block live-ins settle queries reaching block entry.
+static bool isUndefLane(MachineBasicBlock &MBB, MachineBasicBlock::iterator I,
+                        MCRegister R, const TargetRegisterInfo &TRI) {
+  unsigned Budget = 32;
+  while (I != MBB.begin() && Budget--) {
+    auto Info = AnalyzePhysRegInBundle(*--I, R, &TRI);
+    if (Info.DeadDef || Info.Clobbered || (Info.Killed && !Info.Defined))
+      return true;
+    if (Info.Defined || Info.Read)
+      return false;
+  }
+  if (I != MBB.begin())
+    return false;
+  LiveRegUnits Live(TRI);
+  Live.addLiveIns(MBB);
+  return Live.available(R);
+}
+
 static void markUseKill(MachineInstr &MI, Register Reg,
                         const TargetRegisterInfo &TRI) {
   if (MachineOperand *MO = MI.findRegisterUseOperand(Reg, &TRI))
@@ -129,6 +148,24 @@ static void splitWordMemRefs(MachineInstr &Low, MachineInstr &High) {
   High.setMemRefs(MF, HighRefs);
 }
 
+unsigned llvm::Z80::bankAddCost(MCRegister Dst, MCRegister Src, bool Bytes) {
+  bool DstAlt = ALT16RegClass.contains(Dst),
+       SrcAlt = ALT16RegClass.contains(Src);
+  if (DstAlt && !SrcAlt)
+    return Bytes ? 11 : 90;
+  if (DstAlt)
+    Dst = Dst == HL_ALT ? HL : Dst == DE_ALT ? DE : BC;
+  unsigned Extra = Dst == DE                   ? (Bytes ? 2 : 8)
+                   : Dst == BC                 ? (Bytes ? 6 : 37)
+                   : I16RegClass.contains(Dst) ? (Bytes ? 1 : 4)
+                                               : 0;
+  if (DstAlt && SrcAlt)
+    Extra += Bytes ? 2 : 8;
+  else if (SrcAlt)
+    Extra += Bytes ? 6 : 50;
+  return (Bytes ? 1 : 11) + Extra;
+}
+
 unsigned Z80InstrInfo::getInstSizeInBytes(const MachineInstr &MI) const {
   // These atomic pseudos are expanded by the assembly printer, after
   // scheduling and liveness-based optimizations. Branch relaxation needs their
@@ -142,6 +179,18 @@ unsigned Z80InstrInfo::getInstSizeInBytes(const MachineInstr &MI) const {
   case Z80::SADDSAT8ap:
     return 8 + unsigned(Subtarget.is24Bit()) +
            2 * unsigned(isIndex(MI.getOperand(0), getRegisterInfo()));
+  case Z80::BANK_ADD16:
+    return Z80::bankAddCost(MI.getOperand(0).getReg(),
+                            MI.getOperand(2).getReg(), true);
+  case Z80::BANK_LD16ri:
+    return 5;
+  case Z80::BANK_INC16:
+  case Z80::BANK_DEC16:
+  case Z80::BANK_LD8ap:
+  case Z80::BANK_LD8pa:
+    return 3;
+  case Z80::ALT_COPY16:
+    return 4;
   case Z80::ALT_SAVE16:
   case Z80::ALT_SAVE24:
   case Z80::ALT_LOAD16:
@@ -560,6 +609,18 @@ void Z80InstrInfo::copyPhysReg(MachineBasicBlock &MBB,
                                bool RenamableSrc) const {
   assert(DstReg.isPhysical() && SrcReg.isPhysical() &&
     "Expected physical registers");
+  bool DstAlt = Z80::ALT16RegClass.contains(DstReg);
+  bool SrcAlt = Z80::ALT16RegClass.contains(SrcReg);
+  if (DstAlt || SrcAlt) {
+    if (DstReg != SrcReg)
+      BuildMI(MBB, MI, DL,
+              get(DstAlt && SrcAlt ? Z80::ALT_COPY16
+                  : DstAlt         ? Z80::ALT_SAVE16
+                                   : Z80::ALT_LOAD16),
+              DstReg)
+          .addReg(SrcReg, getKillRegState(KillSrc));
+    return;
+  }
   (void)RenamableDest;
   (void)RenamableSrc;
   LLVM_DEBUG(dbgs() << RI.getName(DstReg) << " = " << RI.getName(SrcReg)
@@ -910,8 +971,15 @@ void Z80InstrInfo::copyPhysReg(MachineBasicBlock &MBB,
   } else*/ {
     // If SrcLoDstHiOverlap then copy out SrcLo before SrcHi overwrites it,
     // otherwise the order doesn't matter.
-    copyPhysReg(MBB, MI, DL, DstLoReg, SrcLoReg, KillSrc);
-    copyPhysReg(MBB, MI, DL, DstHiReg, SrcHiReg, KillSrc);
+    // A whole-pair COPY may carry only one defined byte. Preserve that
+    // information when exposing its byte uses to the machine verifier.
+    for (auto [Dst, Src] :
+         {std::pair{DstLoReg, SrcLoReg}, std::pair{DstHiReg, SrcHiReg}}) {
+      if (Z80::G8RegClass.contains(Dst, Src) && isUndefLane(MBB, MI, Src, TRI))
+        BuildMI(MBB, MI, DL, get(Z80::LD8gg), Dst).addReg(Src, RegState::Undef);
+      else
+        copyPhysReg(MBB, MI, DL, Dst, Src, KillSrc);
+    }
   }
   --MI;
   MI->addRegisterDefined(DstReg, &RI);
@@ -930,6 +998,15 @@ void Z80InstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
   (void)Flags;
   const DebugLoc &DL = MBB.findDebugLoc(MI);
   bool Is24Bit = Subtarget.is24Bit();
+
+  if (TRC->contains(Z80::HL_ALT) || TRC->contains(Z80::DE_ALT) ||
+      TRC->contains(Z80::BC_ALT)) {
+    BuildMI(MBB, MI, DL, get(Z80::BANK_LD16or))
+        .addFrameIndex(FI)
+        .addImm(0)
+        .addReg(SrcReg, getKillRegState(IsKill));
+    return;
+  }
 
   // Special cases
   switch (SrcReg) {
@@ -985,6 +1062,14 @@ void Z80InstrInfo::loadRegFromStackSlot(MachineBasicBlock &MBB,
   (void)Flags;
   const DebugLoc &DL = MBB.findDebugLoc(MI);
   bool Is24Bit = Subtarget.is24Bit();
+
+  if (TRC->contains(Z80::HL_ALT) || TRC->contains(Z80::DE_ALT) ||
+      TRC->contains(Z80::BC_ALT)) {
+    BuildMI(MBB, MI, DL, get(Z80::BANK_LD16ro), DstReg)
+        .addFrameIndex(FI)
+        .addImm(0);
+    return;
+  }
 
   // Special cases
   switch (DstReg) {
@@ -1046,6 +1131,8 @@ bool Z80InstrInfo::isFrameOperand(const MachineInstr &MI, unsigned int Op,
 
 static bool isFrameLoadOpcode(int Opcode) {
   switch (Opcode) {
+  case Z80::BANK_LD16ro:
+    return true;
   default:
     return false;
   case Z80::LD8ro:
@@ -1251,6 +1338,8 @@ void Z80InstrInfo::rewriteFrameIndex(MachineInstr &MI, unsigned FIOperandNum,
 
 static bool isFrameStoreOpcode(int Opcode) {
   switch (Opcode) {
+  case Z80::BANK_LD16or:
+    return true;
   default:
     return false;
   case Z80::LD8or:
@@ -1277,6 +1366,7 @@ bool Z80InstrInfo::isReMaterializableImpl(const MachineInstr &MI) const {
   case Z80::LD8ri:
   case Z80::LD16ri:
   case Z80::LD24ri:
+  case Z80::BANK_LD16ri:
     return true;
   }
   return false;
@@ -1334,6 +1424,96 @@ bool Z80InstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
   switch (unsigned Opc = MI.getOpcode()) {
   default:
     return false;
+  case Z80::BANK_ADD16:
+    if (Z80::ALT16RegClass.contains(MI.getOperand(0).getReg()) ||
+        Z80::ALT16RegClass.contains(MI.getOperand(2).getReg()))
+      return false;
+    MI.setDesc(get(Z80::ADD16rr));
+    return expandPostRAPseudo(MI);
+  case Z80::BANK_LD16ro:
+  case Z80::BANK_LD16or: {
+    bool Load = Opc == Z80::BANK_LD16ro;
+    unsigned Op = Load ? 0 : 2;
+    Register R = MI.getOperand(Op).getReg();
+    MI.setDesc(get(Load ? Z80::LD88ro : Z80::LD88or));
+    if (!Z80::ALT16RegClass.contains(R))
+      break;
+    // Lower bank spills before frame layout. The ordinary frame access can
+    // then select and scavenge its address with HL's temporary use visible.
+    auto Push = BuildMI(MBB, MI, DL, get(Z80::PUSH16r))
+                    .addReg(Z80::HL, RegState::Undef);
+    for (MCRegister Lane : {Z80::H, Z80::L})
+      if (!isUndefLane(MBB, Push->getIterator(), Lane, TRI))
+        Push.addReg(Lane, RegState::Implicit);
+    applySPAdjust(*Push);
+    if (Load) {
+      BuildMI(MBB, Next, DL, get(Z80::ALT_SAVE16))
+          .add(MI.getOperand(0))
+          .addReg(Z80::HL);
+      MI.getOperand(0).setIsDead(false);
+    } else
+      BuildMI(MBB, MI, DL, get(Z80::ALT_LOAD16), Z80::HL).addReg(R);
+    MI.getOperand(Op).setReg(Z80::HL);
+    applySPAdjust(*BuildMI(MBB, Next, DL, get(Z80::POP16r), Z80::HL));
+    break;
+  }
+  case Z80::BANK_LD16ri:
+  case Z80::BANK_INC16:
+  case Z80::BANK_DEC16:
+  case Z80::BANK_LD8ap:
+  case Z80::BANK_LD8pa: {
+    unsigned Op = Opc == Z80::BANK_LD8ap ? 1 : 0;
+    if (Z80::ALT16RegClass.contains(MI.getOperand(Op).getReg()))
+      return false;
+    unsigned MainOpc = Opc == Z80::BANK_LD16ri  ? Z80::LD16ri
+                       : Opc == Z80::BANK_INC16 ? Z80::INC16r
+                       : Opc == Z80::BANK_DEC16 ? Z80::DEC16r
+                       : Opc == Z80::BANK_LD8ap ? Z80::LD8ap
+                                                : Z80::LD8pa;
+    MI.setDesc(get(MainOpc));
+    break;
+  }
+  case Z80::ADD16rr: {
+    Register Dst = MI.getOperand(0).getReg();
+    Register Src = MI.getOperand(2).getReg();
+    MI.setDesc(get(Z80::ADD16ao));
+    if (Dst != Z80::DE && Dst != Z80::BC)
+      break;
+    bool KeepH = !isUndefLane(MBB, MI, Z80::H, TRI);
+    bool KeepL = !isUndefLane(MBB, MI, Z80::L, TRI);
+    if (Dst == Z80::DE) {
+      auto Exchange = [&](MachineBasicBlock::iterator Where, bool Restore) {
+        auto Ex = BuildMI(MBB, Where, DL, get(Z80::EX16DE));
+        Register Saved = Restore ? Z80::DE : Z80::HL;
+        markUseUndef(*Ex, Saved, TRI);
+        if (KeepH)
+          Ex.addReg(Restore ? Z80::D : Z80::H, RegState::Implicit);
+        if (KeepL)
+          Ex.addReg(Restore ? Z80::E : Z80::L, RegState::Implicit);
+      };
+      Exchange(MI, false);
+      Exchange(Next, true);
+      if (Src == Z80::DE) {
+        MI.setDesc(get(Z80::ADD16aa));
+        MI.removeOperand(2);
+      }
+    } else {
+      auto Push = BuildMI(MBB, MI, DL, get(Z80::PUSH16r))
+                      .addReg(Z80::HL, RegState::Undef);
+      if (KeepH)
+        Push.addReg(Z80::H, RegState::Implicit);
+      if (KeepL)
+        Push.addReg(Z80::L, RegState::Implicit);
+      applySPAdjust(*Push);
+      copyPhysReg(MBB, MI, DL, Z80::HL, Z80::BC);
+      copyPhysReg(MBB, Next, DL, Z80::BC, Z80::HL);
+      applySPAdjust(*BuildMI(MBB, Next, DL, get(Z80::POP16r), Z80::HL));
+    }
+    MI.getOperand(0).setReg(Z80::HL);
+    MI.getOperand(0).setIsDead(false);
+    MI.getOperand(1).setReg(Z80::HL);
+    break;
+  }
   case Z80::RCF:
     MI.setDesc(get(Z80::OR8aa));
     break;
@@ -1545,22 +1725,7 @@ bool Z80InstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
     // A spilled pair may have only one defined byte. The unsplit pair use is
     // legal in that case; keep the undefined lane explicit when expanding it
     // into separate byte uses. An inconclusive bounded scan stays conservative.
-    auto UndefLane = [&](MCRegister R) {
-      auto I = MI.getIterator();
-      unsigned Budget = 32;
-      while (I != MBB.begin() && Budget--) {
-        auto Info = AnalyzePhysRegInBundle(*--I, R, &TRI);
-        if (Info.DeadDef || Info.Clobbered || (Info.Killed && !Info.Defined))
-          return true;
-        if (Info.Defined || Info.Read)
-          return false;
-      }
-      if (I != MBB.begin())
-        return false;
-      LiveRegUnits Live(TRI);
-      Live.addLiveIns(MBB);
-      return Live.available(R);
-    };
+    auto UndefLane = [&](MCRegister R) { return isUndefLane(MBB, MI, R, TRI); };
     bool UndefLow = UndefLane(TRI.getSubReg(OrigReg, Z80::sub_low));
     bool UndefHigh = UndefLane(TRI.getSubReg(OrigReg, Z80::sub_high));
     MCRegister Reg = OrigReg;
@@ -2275,6 +2440,20 @@ Z80InstrInfo::foldMemoryOperandImpl(MachineFunction &MF, MachineInstr &MI,
 
   if (Ops.size() != 1)
     return nullptr;
+
+  // Fold a rematerialized constant address into an accumulator access. This
+  // lets allocation release a shared address when retaining it would spill.
+  if (LoadMI.getOpcode() == Z80::LD16ri) {
+    bool Store = MI.getOpcode() == Z80::LD8pa && Ops[0] == 0 &&
+                 MI.getOperand(1).getReg() == Z80::A;
+    bool Load = MI.getOpcode() == Z80::LD8ap && Ops[0] == 1 &&
+                MI.getOperand(0).getReg() == Z80::A;
+    if (Store || Load)
+      return BuildMI(*MI.getParent(), InsertPt, MI.getDebugLoc(),
+                     get(Store ? Z80::LD8ma : Z80::LD8am))
+          .add(LoadMI.getOperand(1));
+    return nullptr;
+  }
 
   auto MOs = LoadMI.explicit_uses();
   return foldMemoryOperandImpl(MF, MI, Ops[0], {MOs.begin(), MOs.end()},

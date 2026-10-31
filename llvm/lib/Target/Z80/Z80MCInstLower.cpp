@@ -136,6 +136,125 @@ void Z80AsmPrinter::emitInstruction(const MachineInstr *MI) {
     OutStreamer->emitLabel(Done);
     return;
   }
+  if (Opc == Z80::BANK_ADD16) {
+    auto Main = [](MCRegister R) -> MCRegister {
+      return R == Z80::HL_ALT   ? Z80::HL
+             : R == Z80::DE_ALT ? Z80::DE
+             : R == Z80::BC_ALT ? Z80::BC
+                                : R;
+    };
+    auto Emit = [&](unsigned Code, ArrayRef<MCRegister> Regs = {}) {
+      MCInst Inst;
+      Inst.setOpcode(Code);
+      for (MCRegister R : Regs)
+        Inst.addOperand(MCOperand::createReg(R));
+      EmitToStreamer(*OutStreamer, Inst);
+    };
+    bool CFI =
+        MF->needsFrameMoves() && !getSubtarget().getFrameLowering()->hasFP(*MF);
+    auto Push = [&](MCRegister R) {
+      Emit(Z80::PUSH16r, {R});
+      if (CFI)
+        OutStreamer->emitCFIAdjustCfaOffset(2);
+    };
+    auto Pop = [&](MCRegister R) {
+      Emit(Z80::POP16r, {R});
+      if (CFI)
+        OutStreamer->emitCFIAdjustCfaOffset(-2);
+    };
+    auto Load = [&](MCRegister Dst, MCRegister Src) {
+      Emit(Z80::EXX16);
+      Push(Main(Src));
+      Emit(Z80::EXX16);
+      Pop(Dst);
+    };
+    auto Save = [&](MCRegister Dst, MCRegister Src) {
+      Push(Src);
+      Emit(Z80::EXX16);
+      Pop(Main(Dst));
+      Emit(Z80::EXX16);
+    };
+    auto Add = [&](MCRegister Dst, MCRegister Src) {
+      if (Dst == Z80::DE) {
+        Emit(Z80::EX16DE);
+        if (Src == Z80::DE)
+          Emit(Z80::ADD16aa, {Z80::HL, Z80::HL});
+        else
+          Emit(Z80::ADD16ao, {Z80::HL, Z80::HL, Src});
+        Emit(Z80::EX16DE);
+      } else if (Dst == Z80::BC) {
+        Push(Z80::HL);
+        Emit(Z80::LD8gg, {Z80::L, Z80::C});
+        Emit(Z80::LD8gg, {Z80::H, Z80::B});
+        Emit(Z80::ADD16ao, {Z80::HL, Z80::HL, Src});
+        Emit(Z80::LD8gg, {Z80::C, Z80::L});
+        Emit(Z80::LD8gg, {Z80::B, Z80::H});
+        Pop(Z80::HL);
+      } else
+        Emit(Z80::ADD16ao, {Dst, Dst, Src});
+    };
+    MCRegister Dst = MI->getOperand(0).getReg(),
+               Src = MI->getOperand(2).getReg();
+    bool DstAlt = Main(Dst) != Dst, SrcAlt = Main(Src) != Src;
+    if (DstAlt && SrcAlt) {
+      Emit(Z80::EXX16);
+      Add(Main(Dst), Main(Src));
+      Emit(Z80::EXX16);
+    } else if (DstAlt) {
+      Push(Z80::HL);
+      Load(Z80::HL, Dst);
+      Add(Z80::HL, MI->getOperand(2).getReg());
+      Save(Dst, Z80::HL);
+      Pop(Z80::HL);
+    } else if (SrcAlt) {
+      MCRegister Scratch = Dst == Z80::BC ? Z80::DE : Z80::BC;
+      Push(Scratch);
+      Load(Scratch, Src);
+      Add(Dst, Scratch);
+      Pop(Scratch);
+    } else
+      Add(Dst, Src);
+    return;
+  }
+  if (Opc == Z80::BANK_LD16ri || Opc == Z80::BANK_INC16 ||
+      Opc == Z80::BANK_DEC16 || Opc == Z80::BANK_LD8ap ||
+      Opc == Z80::BANK_LD8pa || Opc == Z80::ALT_COPY16) {
+    auto Main = [](MCRegister R) -> MCRegister {
+      return R == Z80::HL_ALT ? Z80::HL : R == Z80::DE_ALT ? Z80::DE : Z80::BC;
+    };
+    auto Emit = [&](unsigned Code, ArrayRef<MCOperand> Ops = {}) {
+      MCInst Inst;
+      Inst.setOpcode(Code);
+      for (const auto &Op : Ops)
+        Inst.addOperand(Op);
+      EmitToStreamer(*OutStreamer, Inst);
+    };
+    auto Reg = [](MCRegister R) { return MCOperand::createReg(R); };
+    Emit(Z80::EXX16);
+    if (Opc == Z80::ALT_COPY16) {
+      auto Dst = Main(MI->getOperand(0).getReg());
+      auto Src = Main(MI->getOperand(1).getReg());
+      const auto &TRI = *getSubtarget().getRegisterInfo();
+      for (unsigned Sub : {Z80::sub_low, Z80::sub_high})
+        Emit(Z80::LD8gg,
+             {Reg(TRI.getSubReg(Dst, Sub)), Reg(TRI.getSubReg(Src, Sub))});
+    } else {
+      unsigned Op = Opc == Z80::BANK_LD8ap ? 1 : 0;
+      auto Pair = Reg(Main(MI->getOperand(Op).getReg()));
+      if (Opc == Z80::BANK_LD16ri) {
+        Z80MCInstLower Lower(*MF, *this);
+        Emit(Z80::LD16ri,
+             {Pair, *Lower.LowerMachineOperand(MI, MI->getOperand(1))});
+      } else if (Opc == Z80::BANK_INC16 || Opc == Z80::BANK_DEC16)
+        Emit(Opc == Z80::BANK_INC16 ? Z80::INC16r : Z80::DEC16r, {Pair, Pair});
+      else if (Opc == Z80::BANK_LD8ap)
+        Emit(Z80::LD8ap, {Reg(Z80::A), Pair});
+      else
+        Emit(Z80::LD8pa, {Pair, Reg(Z80::A)});
+    }
+    Emit(Z80::EXX16);
+    return;
+  }
   bool Save = Opc == Z80::ALT_SAVE8 || Opc == Z80::ALT_SAVE16 || Opc == Z80::ALT_SAVE24;
   bool Load = Opc == Z80::ALT_LOAD8 || Opc == Z80::ALT_LOAD16 || Opc == Z80::ALT_LOAD24;
   if (Save || Load) {

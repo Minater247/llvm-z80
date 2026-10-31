@@ -1,0 +1,18 @@
+# RUN: llc -run-pass=z80-machine-late-opt -verify-machineinstrs %s -o - | FileCheck %s
+--- |
+  target triple = "z80"
+  define void @constant_step() { ret void }
+...
+---
+name: constant_step
+tracksRegLiveness: true
+# CHECK-LABEL: name: constant_step
+# CHECK: $h = LD8ri 1
+# CHECK: $h = DEC8r
+body: |
+  bb.0:
+    $h = LD8ri 1
+    KILL $h
+    $h = LD8r0
+    RET16 implicit-def $sps, implicit $sps, implicit $h
+...

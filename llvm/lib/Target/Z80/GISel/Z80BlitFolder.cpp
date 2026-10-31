@@ -43,7 +43,6 @@ bool Z80BlitFolder::runOnMachineFunction(MachineFunction &MF)
   bool changes = false;
   const TargetInstrInfo *TII = MF.getSubtarget().getInstrInfo();
   MachineRegisterInfo &MRI = MF.getRegInfo();
-  const TargetRegisterInfo *TRI = MF.getSubtarget().getRegisterInfo();
 
   std::map<Register, std::vector<MachineInstr*>> todelete;
   std::set<Register> phi_registers;
@@ -188,65 +187,6 @@ bool Z80BlitFolder::runOnMachineFunction(MachineFunction &MF)
     for (auto *MI : e.second) {
       MI->removeFromParent();
       changes = true;
-    }
-  }
-
-  for (auto& MBB : MF) {
-    std::array<MachineInstr*, 3> MIStack = {0};
-    for (auto& MI : MBB) {
-      if (MIStack[0]) {
-        MachineInstr& MI0 = *MIStack[0];
-        MachineInstr& MI1 = *MIStack[1];
-        MachineInstr& MI2 = *MIStack[2];
-        MachineInstr& MI3 = MI;
-
-        // Replace $hl into %57 and iy into %12 in:
-        //    $a = LD8ro %12:i16, 4 :: (load (s8) from %ir.uglygep13, !tbaa !10)
-        //    AND8ap %57:a16, implicit-def $a, implicit-def $f, implicit $a :: (load (s8) from %ir.add.ptr32, !tbaa !10)
-        //    OR8ao %12:i16, -124, implicit-def $a, implicit-def $f, implicit $a :: (load (s8) from %ir.uglygep14, !tbaa !10)
-        //    LD8pg %57:a16, $a :: (store (s8) into %ir.add.ptr32, !tbaa !10)
-        do {
-          if (!(MI0.getOpcode() == Z80::LD8ro || MI0.getOpcode() == Z80::LD8rp || MI0.getOpcode() == Z80::LD8ap) ) {
-            break;
-          }
-          if (!(MI2.getOpcode() == Z80::OR8ao || MI2.getOpcode() == Z80::OR8ap)) {
-            break;
-          }
-          if (MI1.getOpcode() != Z80::AND8ap || MI3.getOpcode() != Z80::LD8pg) {
-            break;
-          }
-          Register SrcReg = MI0.getOperand(1).getReg();
-          Register DstReg = MI1.getOperand(0).getReg();
-          if (!SrcReg.isVirtual() || !DstReg.isVirtual()) {
-            break;
-          }
-          if (getSrcRegIgnoringCopies(DstReg, MRI) != getSrcRegIgnoringCopies(MI3.getOperand(0).getReg(), MRI)) {
-            break;
-          }
-          if (getSrcRegIgnoringCopies(SrcReg, MRI) != getSrcRegIgnoringCopies(MI2.getOperand(0).getReg(), MRI)) {
-            break;
-          }
-          MI1.getOperand(0).setReg(Z80::HL);
-          MI3.getOperand(0).setReg(Z80::HL);
-          //MI3.getOperand(0).setIsKill(true);
-          BuildMI(MBB, MI0, MI0.getDebugLoc(), TII->get(TargetOpcode::COPY))
-            .addDef(Z80::HL)
-            .addReg(DstReg);
-          MI0.getOperand(1).setReg(Z80::IY);
-          MI2.getOperand(0).setReg(Z80::IY);
-          //MI2.getOperand(0).setIsKill(true);
-          BuildMI(MBB, MI0, MI0.getDebugLoc(), TII->get(TargetOpcode::COPY))
-            .addDef(Z80::IY)
-            .addReg(SrcReg);
-          LLVM_DEBUG(dbgs() << "@Z80BlitFolder: rewrote to use $hl and $iy\n");
-          changes = true;
-        } while(false);
-      }
-
-      for (size_t i = 0; i < MIStack.size() - 1; ++i) {
-        MIStack[i] = MIStack[i + 1];
-      }
-      MIStack.back() = &MI;
     }
   }
 

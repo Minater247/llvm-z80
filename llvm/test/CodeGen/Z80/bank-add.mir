@@ -1,0 +1,54 @@
+# RUN: llc -mattr=+alternate-regs -run-pass=z80-regalloc,virtregrewriter -verify-machineinstrs %s -o - | FileCheck %s
+# RUN: llc -mattr=+alternate-regs -run-pass=z80-regalloc,virtregrewriter,postrapseudos,z80-bank-regions -verify-machineinstrs %s -o - | FileCheck %s --check-prefix=REGION
+--- |
+  target triple = "z80"
+  define void @resident_add() { ret void }
+  define void @mixed_bank_split() { ret void }
+...
+---
+name: resident_add
+tracksRegLiveness: true
+# Keeping both inputs in the alternate bank costs one EXX pair. Importing
+# either operand alone costs a transfer and preserving a primary scratch pair.
+# CHECK-LABEL: name: resident_add
+# CHECK: stack: []
+# CHECK: $hl_alt = BANK_ADD16 {{(killed )?}}$hl_alt, {{(killed )?}}$bc_alt
+# CHECK: $de = COPY {{(killed )?}}$hl_alt
+# REGION-LABEL: name: resident_add
+# REGION: EXX16
+# REGION-NEXT: $hl = ADD16ao $hl, $bc
+# REGION-NEXT: EXX16
+# REGION-NEXT: $de = ALT_LOAD16
+body: |
+  bb.0:
+    liveins: $hl_alt, $bc_alt
+    %0:b16 = COPY $hl_alt
+    %1:bo16 = COPY $bc_alt
+    %0:b16 = BANK_ADD16 %0, %1, implicit-def $f
+    $de = COPY %0
+    RET16 implicit-def $sps, implicit $sps, implicit $de, implicit $f
+...
+---
+name: mixed_bank_split
+tracksRegLiveness: true
+# The value needs a bank between its definition and use. At the add, one
+# transfer into BC is cheaper than preserving a scratch for mixed-bank ADD.
+# CHECK-LABEL: name: mixed_bank_split
+# CHECK: stack: []
+# CHECK: $[[ALT:de_alt|bc_alt]] = COPY $bc
+# CHECK: $bc = LD16ri 42
+# CHECK-NEXT: KILL $bc
+# CHECK-NEXT: $bc = COPY {{(killed )?}}$[[ALT]]
+# CHECK-NEXT: $hl = BANK_ADD16 $hl, {{(killed )?}}$bc
+# REGION-LABEL: name: mixed_bank_split
+# REGION: $bc = ALT_LOAD16
+body: |
+  bb.0:
+    liveins: $hl, $bc, $de, $ix, $iy
+    %0:bo16 = COPY $bc
+    $bc = LD16ri 42
+    KILL $bc
+    $hl = BANK_ADD16 $hl, %0, implicit-def $f
+    KILL $de, $ix, $iy
+    RET16 implicit-def $sps, implicit $sps, implicit $hl, implicit $f
+...

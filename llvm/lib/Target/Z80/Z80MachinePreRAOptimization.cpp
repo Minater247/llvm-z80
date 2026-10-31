@@ -14,12 +14,15 @@
 #include "MCTargetDesc/Z80MCTargetDesc.h"
 #include "Z80.h"
 #include "Z80InstrInfo.h"
+#include "Z80Subtarget.h"
+#include "llvm/ADT/DenseSet.h"
 #include <optional>
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/CodeGen/LiveRegUnits.h"
+#include "llvm/CodeGen/LiveIntervals.h"
 #include "llvm/CodeGen/MachineDominators.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
@@ -33,6 +36,340 @@
 using namespace llvm;
 
 namespace {
+/// Expose whole-pair bank choices after copy coalescing and before allocation.
+/// Partial-register consumers and opaque assembly retain primary operands.
+static bool selectBankInstructions(MachineFunction &MF) {
+  bool changed = false;
+  auto &MRI = MF.getRegInfo();
+  const auto *TII = MF.getSubtarget().getInstrInfo();
+  const auto &ST = MF.getSubtarget<Z80Subtarget>();
+  if (!ST.useAlternateRegs() || !ST.is16Bit() || ST.hasEZ80Ops() ||
+      MF.getFunction().hasFnAttribute("interrupt") ||
+      MF.getFunction().hasFnAttribute(Attribute::Naked) ||
+      MF.getFunction().getCallingConv() == CallingConv::PreserveAll)
+    return changed;
+  for (const auto &MBB : MF)
+    for (const auto &MI : MBB)
+      if (MI.isInlineAsm() && MI.getOperand(0).getSymbolName()[0])
+        return changed;
+
+  // Whole-pair pointer chains can stay in either bank. Subregister consumers
+  // and instructions requiring a primary pair keep their existing classes.
+  SmallDenseSet<Register, 32> Bankable;
+  for (unsigned I = 0; I != MRI.getNumVirtRegs(); ++I) {
+    Register R = Register::index2VirtReg(I);
+    if (MRI.reg_nodbg_empty(R) ||
+        !Z80::R16RegClass.hasSubClassEq(MRI.getRegClass(R)))
+      continue;
+    bool Eligible = true, HasBankOperation = false;
+    for (const auto &MO : MRI.reg_nodbg_operands(R)) {
+      const auto &MI = *MO.getParent();
+      if (MO.getSubReg() || MI.isBundled()) {
+        Eligible = false;
+        break;
+      }
+      unsigned Opc = MI.getOpcode();
+      if (MI.isCopy()) {
+        const auto &Other = MI.getOperand(MO.isDef() ? 1 : 0);
+        Register CopyReg = Other.getReg();
+        if (Other.getSubReg() ||
+            (CopyReg.isPhysical()
+                 ? !Z80::R16RegClass.contains(CopyReg)
+                 : !Z80::R16RegClass.hasSubClassEq(MRI.getRegClass(CopyReg)))) {
+          Eligible = false;
+          break;
+        }
+      }
+      HasBankOperation |= Opc == Z80::ADD16rr || Opc == Z80::INC16r ||
+                          Opc == Z80::DEC16r || Opc == Z80::LD8ap ||
+                          Opc == Z80::LD8pa;
+      if (Opc != TargetOpcode::COPY && Opc != Z80::LD16ri &&
+          Opc != Z80::ADD16rr && Opc != Z80::INC16r && Opc != Z80::DEC16r &&
+          Opc != Z80::LD8ap && Opc != Z80::LD8pa) {
+        Eligible = false;
+        break;
+      }
+    }
+    if (Eligible && HasBankOperation)
+      Bankable.insert(R);
+  }
+  // A tied update must admit the same bank on both sides. Propagate rejected
+  // endpoints through the chain before widening any register class.
+  SmallVector<Register, 16> Rejected;
+  auto Reject = [&](Register R) {
+    if (Bankable.erase(R))
+      Rejected.push_back(R);
+  };
+  for (auto &MBB : MF)
+    for (auto &MI : MBB)
+      if (MI.getOpcode() == Z80::INC16r || MI.getOpcode() == Z80::DEC16r) {
+        Register Dst = MI.getOperand(0).getReg(),
+                 Src = MI.getOperand(1).getReg();
+        if (!Bankable.contains(Dst) || !Bankable.contains(Src)) {
+          Reject(Dst);
+          Reject(Src);
+        }
+      }
+  while (!Rejected.empty()) {
+    Register R = Rejected.pop_back_val();
+    for (const auto &MI : MRI.reg_nodbg_instructions(R))
+      if (MI.getOpcode() == Z80::INC16r || MI.getOpcode() == Z80::DEC16r) {
+        Reject(MI.getOperand(0).getReg());
+        Reject(MI.getOperand(1).getReg());
+      }
+  }
+  // A value used only as the right input of primary-only adds would need
+  // a saved scratch pair at every use. Retain its primary class so spilling
+  // and rematerialization can provide the cheaper native input directly.
+  SmallVector<Register, 16> PrimaryInputs;
+  for (Register R : Bankable) {
+    bool HasBankUse = false;
+    for (const auto &MO : MRI.reg_nodbg_operands(R)) {
+      const auto &MI = *MO.getParent();
+      if (MI.getOpcode() == Z80::ADD16rr) {
+        unsigned Op = &MO - &MI.getOperand(0);
+        HasBankUse |= Op != 2 || Bankable.contains(MI.getOperand(0).getReg());
+      } else if (!MI.isCopy() && MI.getOpcode() != Z80::LD16ri)
+        HasBankUse = true;
+    }
+    if (!HasBankUse)
+      PrimaryInputs.push_back(R);
+  }
+  for (Register R : PrimaryInputs)
+    Bankable.erase(R);
+
+  for (Register R : Bankable)
+    MRI.setRegClass(R, &Z80::B16RegClass);
+  for (auto &MBB : MF)
+    for (auto &MI : MBB) {
+      unsigned Opc = MI.getOpcode(), NewOpc = 0, Op = 0;
+      if (Opc == Z80::ADD16rr) {
+        if (Bankable.contains(MI.getOperand(0).getReg()) ||
+            Bankable.contains(MI.getOperand(1).getReg()) ||
+            Bankable.contains(MI.getOperand(2).getReg())) {
+          MI.setDesc(TII->get(Z80::BANK_ADD16));
+          Register Src = MI.getOperand(2).getReg();
+          if (Src.isVirtual())
+            MRI.constrainRegClass(Src, &Z80::BO16RegClass);
+          changed = true;
+        }
+        continue;
+      }
+      switch (Opc) {
+      case Z80::LD16ri:
+        NewOpc = Z80::BANK_LD16ri;
+        break;
+      case Z80::INC16r:
+        NewOpc = Z80::BANK_INC16;
+        break;
+      case Z80::DEC16r:
+        NewOpc = Z80::BANK_DEC16;
+        break;
+      case Z80::LD8ap:
+        NewOpc = Z80::BANK_LD8ap;
+        Op = 1;
+        break;
+      case Z80::LD8pa:
+        NewOpc = Z80::BANK_LD8pa;
+        break;
+      }
+      if (NewOpc && Bankable.contains(MI.getOperand(Op).getReg())) {
+        MI.setDesc(TII->get(NewOpc));
+        changed = true;
+      }
+    }
+  return changed;
+}
+
+/// Keep constant-high words byte-sized between their word uses. Each whole
+/// use receives a local pair assembled from the low byte and known high byte.
+/// Whole-register definitions, opaque uses and unknown high bytes retain their
+/// original representation; byte definitions and memory ordering are preserved.
+static bool separateConstantLanes(MachineFunction &MF) {
+  if (!MF.getSubtarget<Z80Subtarget>().is16Bit())
+    return false;
+  auto &MRI = MF.getRegInfo();
+  const auto &TII = *MF.getSubtarget().getInstrInfo();
+  bool Changed = false;
+  DenseMap<std::pair<Register, unsigned>, std::optional<int64_t>> Constants;
+  auto Constant = [&](auto &&Self, Register R, unsigned Sub,
+                      unsigned Depth) -> std::optional<int64_t> {
+    if (!R.isVirtual() || Depth == 8)
+      return std::nullopt;
+    auto Key = std::make_pair(R, Sub);
+    auto Found = Constants.find(Key);
+    if (Found != Constants.end())
+      return Found->second;
+    auto Compute = [&]() -> std::optional<int64_t> {
+      std::optional<int64_t> Value;
+      for (const auto &MO : MRI.def_operands(R)) {
+        if (MO.getSubReg() != Sub) {
+          if (!MO.getSubReg() || !Sub)
+            return std::nullopt;
+          continue;
+        }
+        const auto &MI = *MO.getParent();
+        std::optional<int64_t> V;
+        if (MI.getOpcode() == Z80::LD8r0)
+          V = 0;
+        else if (MI.getOpcode() == Z80::LD8ri && MI.getOperand(1).isImm())
+          V = MI.getOperand(1).getImm();
+        else if (MI.isCopy() && !MI.getOperand(1).isUndef())
+          V = Self(Self, MI.getOperand(1).getReg(),
+                   MI.getOperand(1).getSubReg(), Depth + 1);
+        if (!V || (Value && (*Value & 255) != (*V & 255)))
+          return std::nullopt;
+        Value = *V & 255;
+      }
+      return Value;
+    };
+    auto Value = Compute();
+    Constants[Key] = Value;
+    return Value;
+  };
+  SmallVector<std::pair<Register, int64_t>, 16> Candidates;
+  for (unsigned I = 0; I != MRI.getNumVirtRegs(); ++I) {
+    Register R = Register::index2VirtReg(I);
+    if (MRI.reg_nodbg_empty(R) ||
+        !Z80::R16RegClass.hasSubClassEq(MRI.getRegClass(R)))
+      continue;
+    auto HighValue = Constant(Constant, R, Z80::sub_high, 0);
+    if (!HighValue)
+      continue;
+    bool Eligible = true, ShortUses = true;
+    unsigned LowDefs = 0, FullUses = 0;
+    for (const auto &MO : MRI.reg_nodbg_operands(R)) {
+      if (MO.getParent()->isBundled() || MO.getParent()->isInlineAsm()) {
+        Eligible = false;
+        break;
+      }
+      if (MO.isDef()) {
+        if (MO.getSubReg() == Z80::sub_low)
+          ++LowDefs;
+        else if (MO.getSubReg() != Z80::sub_high)
+          Eligible = false;
+      } else if (!MO.getSubReg()) {
+        Eligible &= !MO.isUndef();
+        ++FullUses;
+        auto I = MO.getParent()->getIterator();
+        auto Begin = MO.getParent()->getParent()->begin();
+        bool NearbyDef = false;
+        unsigned Distance = 0;
+        while (I != Begin && Distance < 3) {
+          --I;
+          if (I->isDebugInstr())
+            continue;
+          ++Distance;
+          for (const auto &Def : I->defs())
+            NearbyDef |= Def.isReg() && Def.getReg() == R &&
+                         Def.getSubReg() == Z80::sub_low;
+          if (NearbyDef)
+            break;
+        }
+        ShortUses &= NearbyDef;
+      } else if (MO.getSubReg() != Z80::sub_low &&
+                 MO.getSubReg() != Z80::sub_high)
+        Eligible = false;
+    }
+    /* A nearby word use saves little live-register space, while rebuilding
+       a simple loop-carried counter would reload its constant high byte on
+       every iteration. Keep these compact pair ranges intact. */
+    if (Eligible && LowDefs && FullUses && !ShortUses &&
+        !(LowDefs > 1 && FullUses == 1))
+      Candidates.emplace_back(R, *HighValue);
+  }
+  for (auto [R, HighValue] : Candidates) {
+    const auto *RC = MRI.getRegClass(R);
+    /* Coalescing can tie one shared constant byte to unrelated low-byte
+       definitions. Rebuild only the pairs needed by word instructions, so
+       the low values can occupy or spill individual byte registers. */
+    Register Low = MRI.createVirtualRegister(&Z80::G8RegClass);
+    Register High = MRI.createVirtualRegister(&Z80::G8RegClass);
+    SmallVector<MachineOperand *, 16> Operands;
+    for (auto &MO : MRI.reg_nodbg_operands(R))
+      Operands.push_back(&MO);
+    DenseMap<MachineInstr *, Register> Pairs;
+    MRI.markUsesInDebugValueAsUndef(R);
+    for (auto *MO : Operands) {
+      if (unsigned Sub = MO->getSubReg()) {
+        MO->setReg(Sub == Z80::sub_low ? Low : High);
+        MO->setSubReg(0);
+        if (MO->isDef())
+          MO->setIsUndef(false);
+      } else {
+        MachineInstr &MI = *MO->getParent();
+        Register &Pair = Pairs[&MI];
+        if (!Pair) {
+          Pair = MRI.createVirtualRegister(RC);
+          BuildMI(*MI.getParent(), MI, MI.getDebugLoc(),
+                  TII.get(TargetOpcode::COPY))
+              .addReg(Pair, RegState::Define | RegState::Undef, Z80::sub_low)
+              .addReg(Low);
+          BuildMI(*MI.getParent(), MI, MI.getDebugLoc(), TII.get(Z80::LD8ri))
+              .addReg(Pair, RegState::Define, Z80::sub_high)
+              .addImm(HighValue);
+        }
+        MO->setReg(Pair);
+      }
+    }
+    MRI.recomputeRegClass(Low);
+    SmallVector<MachineInstr *, 16> ConstantCopies;
+    for (auto &MI : MRI.use_nodbg_instructions(High)) {
+      if (!MI.isCopy())
+        continue;
+      const auto &Dst = MI.getOperand(0);
+      Register D = Dst.getReg();
+      bool ByteDestination =
+          D.isPhysical()
+              ? Z80::R8RegClass.contains(D)
+              : (Dst.getSubReg()
+                     ? Z80::R16RegClass.hasSubClassEq(MRI.getRegClass(D))
+                     : Z80::R8RegClass.hasSubClassEq(MRI.getRegClass(D)));
+      if (ByteDestination)
+        ConstantCopies.push_back(&MI);
+    }
+    for (auto *MI : ConstantCopies) {
+      MI->setDesc(TII.get(Z80::LD8ri));
+      MI->getOperand(1).ChangeToImmediate(HighValue);
+    }
+    MRI.recomputeRegClass(High);
+    Changed = true;
+  }
+  return Changed;
+}
+
+/// Give disconnected definitions independent intervals before allocation.
+/// Lane separation can expose components formerly joined by a constant byte.
+class Z80PrepareLiveRanges : public MachineFunctionPass {
+public:
+  static char ID;
+  Z80PrepareLiveRanges() : MachineFunctionPass(ID) {}
+  StringRef getPassName() const override { return "Z80 Prepare Live Ranges"; }
+  void getAnalysisUsage(AnalysisUsage &AU) const override {
+    AU.addRequired<SlotIndexesWrapperPass>();
+    AU.addPreserved<SlotIndexesWrapperPass>();
+    AU.addRequired<LiveIntervalsWrapperPass>();
+    AU.addPreserved<LiveIntervalsWrapperPass>();
+    AU.setPreservesCFG();
+    MachineFunctionPass::getAnalysisUsage(AU);
+  }
+  bool runOnMachineFunction(MachineFunction &MF) override {
+    auto &LIS = getAnalysis<LiveIntervalsWrapperPass>().getLIS();
+    auto &MRI = MF.getRegInfo();
+    SmallVector<LiveInterval *, 8> Split;
+    bool Changed = false;
+    for (unsigned I = 0, E = MRI.getNumVirtRegs(); I != E; ++I) {
+      Register R = Register::index2VirtReg(I);
+      if (LIS.hasInterval(R) && LIS.getInterval(R).getNumValNums() > 1) {
+        Split.clear();
+        LIS.splitSeparateComponents(LIS.getInterval(R), Split);
+        Changed |= !Split.empty();
+      }
+    }
+    return Changed;
+  }
+};
+
 class Z80MachinePreRAOptimization : public MachineFunctionPass {
 public:
   static char ID;
@@ -508,7 +845,8 @@ bool Z80MachinePreRAOptimization::runOnMachineFunction(MachineFunction &MF) {
     }
   }
 
-  return Changed;
+  Changed |= separateConstantLanes(MF);
+  return selectBankInstructions(MF) || Changed;
 }
 
 char Z80MachinePreRAOptimization::ID = 0;
@@ -517,4 +855,15 @@ INITIALIZE_PASS(Z80MachinePreRAOptimization, DEBUG_TYPE,
 
 FunctionPass *llvm::createZ80MachinePreRAOptimizationPass() {
   return new Z80MachinePreRAOptimization();
+}
+
+char Z80PrepareLiveRanges::ID = 0;
+INITIALIZE_PASS_BEGIN(Z80PrepareLiveRanges, "z80-prepare-live-ranges",
+                      "Prepare Z80 live ranges for allocation", false, false)
+INITIALIZE_PASS_DEPENDENCY(SlotIndexesWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(LiveIntervalsWrapperPass)
+INITIALIZE_PASS_END(Z80PrepareLiveRanges, "z80-prepare-live-ranges",
+                    "Prepare Z80 live ranges for allocation", false, false)
+FunctionPass *llvm::createZ80PrepareLiveRangesPass() {
+  return new Z80PrepareLiveRanges();
 }

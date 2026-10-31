@@ -96,7 +96,7 @@ let CostPerUse = [1] in {
 }
 
 // Storage in the alternate bank. These registers are never directly encoded
-// as instruction operands; bank-transfer pseudos provide access after RA.
+// as encoded operands; bank-aware instructions expand their exchanges.
 def A_ALT : Z80Reg<"a_alt">;
 def F_ALT : Z80Reg<"f_alt">;
 let SubRegs = [A_ALT, F_ALT], SubRegIndices = [sub_high, sub_low],
@@ -159,10 +159,14 @@ def R24 : Z80RC24<(add G24, I24)>;
 let CopyCost = -1 in
 def Z24 : Z80RC24<(add SPL, PC)>;
 
-// The bank allocator owns these classes; ordinary instructions cannot name
-// their members. Reserving them prevents scavenging and ordinary allocation.
+// Transfer pseudos name these storage classes. Ordinary instruction classes
+// exclude their members; B16 below offers whole pairs to bank-aware operations.
 let isAllocatable = 0 in {
   def ALT8 : Z80RC8<(add A_ALT)>;
   def ALT16 : Z80RC16<(add HL_ALT, DE_ALT, BC_ALT)>;
   def ALT24 : Z80RC24<(add UHL_ALT, UDE_ALT, UBC_ALT)>;
 }
+
+// Whole pairs whose operations can execute with either bank active.
+def B16 : Z80RC16<(add R16, HL_ALT, DE_ALT, BC_ALT)>;
+def BO16 : Z80RC16<(add O16, DE_ALT, BC_ALT)>;

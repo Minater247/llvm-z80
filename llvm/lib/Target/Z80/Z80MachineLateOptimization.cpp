@@ -168,7 +168,11 @@ class Z80MachineLateOptimization : public MachineFunctionPass {
   bool reuse(MCRegister Reg) {
     if (MachineInstr *DeadOrKilledBy = RegVals[Reg].takeDeadOrKilledBy()) {
       if (DeadOrKilledBy->registerDefIsDead(Reg, TRI)) {
-        DeadOrKilledBy->clearRegisterDeads(Reg);
+        /* A byte may be reused from a dead pair definition. Clear the dead
+           marker on the defining alias, which can be wider than Reg. */
+        for (auto &MO : DeadOrKilledBy->all_defs())
+          if (TRI->regsOverlap(MO.getReg(), Reg))
+            MO.setIsDead(false);
         return true;
       }
       if (DeadOrKilledBy->killsRegister(Reg, TRI)) {
@@ -775,10 +779,15 @@ bool Z80MachineLateOptimization::runOnMachineFunction(MachineFunction &MF) {
         if (NewOpc != Z80::INSTRUCTION_LIST_END) {
           LLVM_DEBUG(dbgs() << "Replacing: "; MIB->dump();
                      dbgs() << "     With: ");
-          MIB->setDesc(TII.get(NewOpc));
-          MIB->removeOperand(1);
-          MIB.addReg(DstReg, getKillRegState(reuse(DstReg)));
-          MIB->addImplicitDefUseOperands(MF);
+          // Constant-producing pseudos can have no source operand after dead
+          // flag removal. Build the tied instruction with its own operands.
+          auto Step = BuildMI(MBB, MIB->getIterator(), MIB->getDebugLoc(),
+                              TII.get(NewOpc), DstReg)
+                          .addReg(DstReg, getKillRegState(reuse(DstReg)));
+          Step->setFlags(MIB->getFlags());
+          MIB->eraseFromParent();
+          MIB = Step;
+          Changed = true;
         }
       }
 

@@ -1,0 +1,34 @@
+# RUN: llc -run-pass=postrapseudos -verify-machineinstrs %s -o - | FileCheck %s
+--- |
+  target triple = "z80"
+  define void @partial() { ret void }
+  define void @defined() { ret void }
+...
+---
+name: partial
+tracksRegLiveness: true
+# CHECK-LABEL: name: partial
+# CHECK: $c = LD8gg $l
+# CHECK-NEXT: $b = LD8gg undef $h, implicit-def $bc
+# CHECK-NEXT: $b = LD8ri 0
+body: |
+  bb.0:
+    liveins: $hl
+    $l = LD8gp killed $hl
+    $bc = COPY $hl
+    $b = LD8ri 0
+    RET16 implicit-def $sps, implicit $sps, implicit $bc
+...
+---
+name: defined
+tracksRegLiveness: true
+# CHECK-LABEL: name: defined
+# CHECK: $c = LD8gg $l
+# CHECK-NEXT: $b = LD8gg $h, implicit-def $bc
+body: |
+  bb.0:
+    liveins: $hl
+    $l = LD8gp $hl
+    $bc = COPY $hl
+    RET16 implicit-def $sps, implicit $sps, implicit $bc
+...

@@ -296,7 +296,8 @@ bool Z80AlternateRegAllocator::runOnMachineFunction(MachineFunction &MF) {
                      : Slots[I].Width == 2 ? Z80::ALT16RegClass
                                            : Z80::ALT24RegClass;
     for (MCRegister R : RC) {
-      if (Slots[I].CallClobbers & bankBit(R))
+      if (MF.getRegInfo().isPhysRegUsed(R, true) ||
+          (Slots[I].CallClobbers & bankBit(R)))
         continue;
       bool Available = true;
       for (int J : Conflicts[I].set_bits())
@@ -322,6 +323,12 @@ bool Z80AlternateRegAllocator::runOnMachineFunction(MachineFunction &MF) {
         .addReg(A.Load ? S.Assigned : A.Reg);
     A.MI->eraseFromParent();
     Any = true;
+  }
+  for (auto &MBB : MF) {
+    for (int I : In[MBB.getNumber()].set_bits())
+      if (Slots[I].Assigned)
+        MBB.addLiveIn(Slots[I].Assigned);
+    MBB.sortUniqueLiveIns();
   }
   for (unsigned I : Order)
     if (Slots[I].Assigned) {

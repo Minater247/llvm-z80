@@ -1,0 +1,29 @@
+# RUN: llc -mattr=+alternate-regs -run-pass=z80-post-rewrite -verify-machineinstrs %s -o - | FileCheck %s
+# RUN: llc -mattr=+alternate-regs -start-before=z80-post-rewrite -verify-machineinstrs %s -o /dev/null
+--- |
+  target triple = "z80"
+  define void @bank_spill() { ret void }
+...
+---
+name: bank_spill
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 2, alignment: 1 }
+# CHECK-LABEL: name: bank_spill
+# CHECK: PUSH16r undef $hl, implicit-def $sps, implicit $sps, implicit $h, implicit $l
+# CHECK-NEXT: $hl = ALT_LOAD16 $de_alt
+# CHECK-NEXT: LD88or %stack.0, 0, $hl
+# CHECK-NEXT: $hl = POP16r
+# CHECK: $de_alt = BANK_LD16ri 23
+# CHECK: PUSH16r undef $hl
+# CHECK-NEXT: $hl = LD88ro %stack.0, 0
+# CHECK-NEXT: $de_alt = ALT_SAVE16 $hl
+# CHECK-NEXT: $hl = POP16r
+body: |
+  bb.0:
+    liveins: $hl, $de_alt
+    BANK_LD16or %stack.0, 0, $de_alt :: (store (s16) into %stack.0)
+    $de_alt = BANK_LD16ri 23
+    $de_alt = BANK_LD16ro %stack.0, 0 :: (load (s16) from %stack.0)
+    RET16 implicit-def $sps, implicit $sps, implicit $hl, implicit $de_alt
+...

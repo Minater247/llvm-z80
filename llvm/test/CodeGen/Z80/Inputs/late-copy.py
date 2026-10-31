@@ -44,6 +44,17 @@ def main():
                 ['$a = LD8ap $hl', 'LD8pa $de, $a'],
                 ['$iyl = LD8yy $e', '$iyh = LD8yy $d, implicit-def $iy'],
                 ['$l = LD8gg $e', '$h = LD8gg $d, implicit-def $hl'],
+                ['$iyl = LD8yy $c', '$iyh = LD8yy $b, implicit-def $iy',
+                 'LD8og $iy, 0, $a', '$iy = LD16ri 17325'],
+                ['$ixl = LD8xx $e', '$ixh = LD8xx $d, implicit-def $ix',
+                 '$a = LD8go $ix, 0', '$ix = LD16ri 11984'],
+                ['$iyl = LD8yy $e', '$iyh = LD8yy $d, implicit-def $iy',
+                 '$a = LD8go $iy, 1', 'LD8pg $iy, $b'],
+                ['$iyl = LD8yy $e', '$iyh = LD8yy $d, implicit-def $iy',
+                 '$e = INC8r $e, implicit-def $f', '$a = LD8ap $iy'],
+                ['$iyl = LD8yy $e', '$iyh = LD8yy $d, implicit-def $iy',
+                 '$l = LD8gg $e', '$h = LD8gg $d, implicit-def $hl',
+                 '$l = LD8gp $iy', 'LD8pg $iy, $h'],
                 ['ADD8ai 3, implicit-def $a, implicit-def $f, implicit $a'],
             ])
             body.append(move)

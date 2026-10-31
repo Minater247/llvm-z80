@@ -1,0 +1,43 @@
+# RUN: llc -run-pass=z80-repeated-store-opt -verify-machineinstrs %s -o - | FileCheck %s
+# RUN: llc -run-pass=z80-repeated-store-opt,z80-regalloc,virtregrewriter -verify-machineinstrs %s -o - | FileCheck %s --check-prefix=RA
+--- |
+  target triple = "z80"
+  define void @shared() { ret void }
+  define void @pressure() { ret void }
+...
+---
+name: shared
+tracksRegLiveness: true
+# CHECK-LABEL: name: shared
+# CHECK: %0:g16 = LD16ri 16384
+# CHECK-NEXT: LD8pa %0, $a :: (volatile store (s8))
+# CHECK-NEXT: $a = LD8ri 12
+# CHECK-NEXT: LD8pa %0, $a :: (volatile store (s8))
+# RA-LABEL: name: shared
+# RA: $[[PAIR:de|bc]] = LD16ri 16384
+# RA-NEXT: LD8pa $[[PAIR]], $a
+# RA: LD8pa {{(killed )?}}$[[PAIR]], $a
+body: |
+  bb.0:
+    liveins: $a, $hl
+    LD8ma 16384, implicit $a :: (volatile store (s8))
+    $a = LD8ri 12
+    LD8ma 16384, implicit $a :: (volatile store (s8))
+    RET16 implicit-def $sps, implicit $sps, implicit $hl
+...
+---
+name: pressure
+tracksRegLiveness: true
+# RA-LABEL: name: pressure
+# RA: stack: []
+# RA: LD8ma 16384, implicit $a :: (volatile store (s8))
+# RA-NEXT: $a = LD8ri 12
+# RA-NEXT: LD8ma 16384, implicit $a :: (volatile store (s8))
+body: |
+  bb.0:
+    liveins: $a, $hl, $bc, $de
+    LD8ma 16384, implicit $a :: (volatile store (s8))
+    $a = LD8ri 12
+    LD8ma 16384, implicit $a :: (volatile store (s8))
+    RET16 implicit-def $sps, implicit $sps, implicit $hl, implicit $bc, implicit $de
+...

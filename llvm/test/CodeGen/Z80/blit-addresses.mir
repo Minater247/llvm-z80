@@ -1,0 +1,26 @@
+# RUN: llc -run-pass=z80-blit-folder -verify-machineinstrs %s -o - | FileCheck %s
+--- |
+  target triple = "z80"
+  define void @masked_blit() { ret void }
+...
+---
+name: masked_blit
+tracksRegLiveness: true
+# CHECK-LABEL: name: masked_blit
+# CHECK: %0:i16 = COPY $iy
+# CHECK-NEXT: %1:a16 = COPY $hl
+# CHECK-NEXT: $a = LD8ro %0, 4
+# CHECK-NEXT: AND8ap %1
+# CHECK-NEXT: OR8ao %0, -124
+# CHECK-NEXT: LD8pg %1, $a
+body: |
+  bb.0:
+    liveins: $iy, $hl
+    %0:i16 = COPY $iy
+    %1:a16 = COPY $hl
+    $a = LD8ro %0, 4 :: (load (s8))
+    AND8ap %1, implicit-def $a, implicit-def $f, implicit $a :: (load (s8))
+    OR8ao %0, -124, implicit-def $a, implicit-def $f, implicit $a :: (load (s8))
+    LD8pg %1, $a :: (store (s8))
+    RET16 implicit-def $sps, implicit $sps
+...

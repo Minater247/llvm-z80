@@ -10,6 +10,13 @@
 #include "Z80GenInstrInfo.inc"
 
 namespace llvm {
+namespace Z80 {
+/// Return the encoded size or T-state cost of a bank-capable pair addition.
+/// Src must be BC/DE or their alternate pairs; Dst may be any bank-capable
+/// pair.
+unsigned bankAddCost(MCRegister Dst, MCRegister Src, bool Bytes);
+} // namespace Z80
+
 class Z80Subtarget;
 
 namespace Z80 {

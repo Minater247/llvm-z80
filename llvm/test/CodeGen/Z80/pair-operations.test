@@ -1,0 +1,1 @@
+# RUN: %python %S/Inputs/pair-operations.py --llc llc --work %t

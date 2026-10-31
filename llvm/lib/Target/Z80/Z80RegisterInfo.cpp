@@ -74,6 +74,9 @@ Z80RegisterInfo::getLargestLegalSuperClass(const TargetRegisterClass *RC,
     }
   };
 
+  if (RC == &Z80::B16RegClass)
+    return RC;
+
   if (IsLegalSizeClass(RC))
     return RC;
 
@@ -149,11 +152,14 @@ const uint32_t *Z80RegisterInfo::getNoPreservedMask() const {
 BitVector Z80RegisterInfo::getReservedRegs(const MachineFunction &MF) const {
   BitVector Reserved(getNumRegs());
 
-  // Alternate storage is allocated by the bank allocator, not by the
-  // instruction allocator or register scavenger, even when enabled.
+  // Only bank-aware whole-pair instructions admit alternate operands.
+  // All banks remain reserved unless the compilation explicitly permits them.
+  bool BankPairs =
+      MF.getSubtarget<Z80Subtarget>().useAlternateRegs() && !Is24Bit;
   for (MCRegister R : {Z80::AF_ALT, Z80::UBC_ALT, Z80::UDE_ALT, Z80::UHL_ALT})
-    for (MCRegAliasIterator A(R, this, true); A.isValid(); ++A)
-      Reserved.set(*A);
+    if (!BankPairs || R == Z80::AF_ALT)
+      for (MCRegAliasIterator A(R, this, true); A.isValid(); ++A)
+        Reserved.set(*A);
   const Z80FrameLowering *TFI = getFrameLowering(MF);
   // Set the stack-pointer registers as reserved.
   Reserved.set(Z80::SPS);

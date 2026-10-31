@@ -114,6 +114,12 @@ bool Z80PostRewritePass::runOnMachineFunction(MachineFunction &MF) {
   const auto &TII = *MF.getSubtarget().getInstrInfo();
   const auto &TRI = *MF.getSubtarget().getRegisterInfo();
   const auto &MFI = MF.getFrameInfo();
+  for (auto &MBB : MF)
+    for (auto &MI : llvm::make_early_inc_range(MBB))
+      if (MI.getOpcode() == Z80::ADD16rr || MI.getOpcode() == Z80::BANK_ADD16 ||
+          MI.getOpcode() == Z80::BANK_LD16ro ||
+          MI.getOpcode() == Z80::BANK_LD16or)
+        changed |= TII.expandPostRAPseudo(MI);
   // Splitting may reload a private spill while the value remains in a
   // register after an earlier load or store. Reuse it over a bounded local
   // window, copying it if necessary. This also avoids the scratch saves

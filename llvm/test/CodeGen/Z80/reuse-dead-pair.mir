@@ -1,0 +1,18 @@
+# RUN: llc -run-pass=z80-machine-late-opt -verify-machineinstrs %s -o - | FileCheck %s
+--- |
+  target triple = "z80"
+  define void @reuse_dead_pair() { ret void }
+...
+---
+name: reuse_dead_pair
+tracksRegLiveness: true
+# Reusing H requires reviving its defining HL operand.
+# CHECK-LABEL: name: reuse_dead_pair
+# CHECK: $hl = LD16ri 0
+# CHECK-NEXT: $c = LD8gg killed $h
+body: |
+  bb.0:
+    dead $hl = LD16ri 0
+    $c = LD8ri 0
+    RET16 implicit-def $sps, implicit $sps, implicit $c
+...

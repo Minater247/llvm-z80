@@ -18,8 +18,10 @@
 #include "../../CodeGen/SplitKit.h"
 #include "MCTargetDesc/Z80MCTargetDesc.h"
 #include "Z80.h"
+#include "Z80InstrInfo.h"
 #include "Z80Subtarget.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
@@ -49,6 +51,7 @@
 #include <array>
 #include <limits>
 #include <queue>
+#include <tuple>
 
 using namespace llvm;
 
@@ -77,6 +80,12 @@ unsigned copyCost(MCRegister Dst, MCRegister Src, bool KillSrc,
   if (Dst == Src)
     return 0;
   bool Bytes = OptSize || ST.hasEZ80Ops();
+  if (Z80::ALT16RegClass.contains(Dst) || Z80::ALT16RegClass.contains(Src)) {
+    if (Z80::ALT16RegClass.contains(Dst, Src))
+      return Bytes ? 4 : 16;
+    unsigned Prefix = isIndex(Dst) || isIndex(Src);
+    return Bytes ? 4 + Prefix : 29 + 4 * Prefix;
+  }
   if (Z80::R8RegClass.contains(Dst, Src)) {
     if (Z80::G8RegClass.contains(Dst, Src))
       return Bytes ? 1 : 4;
@@ -126,6 +135,21 @@ unsigned copyCost(MCRegister Dst, MCRegister Src, bool KillSrc,
 unsigned extraAccessCost(const MachineInstr &MI, unsigned Operand, MCRegister P,
                          bool Bytes) {
   unsigned Opc = MI.getOpcode();
+  if (Z80::ALT16RegClass.contains(P)) {
+    if (Opc == Z80::BANK_LD16ro || Opc == Z80::BANK_LD16or)
+      return Bytes ? 6 : 50;
+    if ((Opc == Z80::BANK_LD8ap && Operand == 1) ||
+        ((Opc == Z80::BANK_LD8pa || Opc == Z80::BANK_LD16ri ||
+          Opc == Z80::BANK_INC16 || Opc == Z80::BANK_DEC16) &&
+         Operand == 0))
+      return Bytes ? 2 : 8;
+  }
+  if (Opc == Z80::ADD16rr && Operand == 0) {
+    if (P == Z80::DE)
+      return Bytes ? 2 : 8;
+    if (P == Z80::BC)
+      return Bytes ? 6 : 37;
+  }
   bool LoadPair = Opc == Z80::LD88ro || Opc == Z80::LD88rp;
   bool StorePair = Opc == Z80::LD88or || Opc == Z80::LD88pr;
   unsigned Last = MI.getNumExplicitOperands() - 1;
@@ -188,7 +212,9 @@ class Z80RegisterAllocator final : public MachineFunctionPass,
   std::unique_ptr<SplitEditor> SE;
   // A range can be split by block, then by instruction, then must spill.
   DenseMap<Register, unsigned> Stage;
-  std::priority_queue<std::pair<double, Register>> Queue;
+  // Each blocked single-choice range gets one deferred allocation attempt.
+  DenseSet<Register> Deferred;
+  std::priority_queue<std::tuple<bool, double, Register>> Queue;
   unsigned RemainingStates = 0;
   bool OptSize = false;
   // Transfers depend on target mode, not on the live interval or function.
@@ -234,7 +260,7 @@ class Z80RegisterAllocator final : public MachineFunctionPass,
   const LiveInterval *dequeue() override {
     if (Queue.empty())
       return nullptr;
-    Register R = Queue.top().second;
+    Register R = std::get<2>(Queue.top());
     Queue.pop();
     return &LIS->getInterval(R);
   }
@@ -269,7 +295,8 @@ class Z80RegisterAllocator final : public MachineFunctionPass,
   SmallVector<Register, 8> blockers(const LiveInterval &LI, MCRegister P);
   bool search(SmallVector<Register, 8> Regs, unsigned Budget,
               Register Pending = Register());
-  bool split(const LiveInterval &LI, SmallVectorImpl<Register> &NewRegs);
+  bool split(const LiveInterval &LI, SmallVectorImpl<Register> &NewRegs,
+             bool MainBank = false);
   void refine();
   void coalesceSplits();
   MCRegister selectOrSplit(const LiveInterval &LI,
@@ -293,17 +320,19 @@ public:
     SA.reset();
     SpillerInstance.reset();
     Stage.clear();
+    Deferred.clear();
     Queue = {};
   }
   bool runOnMachineFunction(MachineFunction &MF) override;
 };
 
-// Prioritize the cost of eviction. Dividing by the number of whole-interval
+// Give untouched ranges an allocation attempt before deferred splits, then
+// prioritize spill weight. Dividing by the number of whole-interval
 // placements overvalues entry constraints that splitting can remove, evicting
 // more expensive loop-carried values. Legal placements are checked once when
 // dequeuing; ties use virtual-register numbers for deterministic builds.
 void Z80RegisterAllocator::enqueueImpl(const LiveInterval *LI) {
-  Queue.emplace(LI->weight(), LI->reg());
+  Queue.emplace(!Deferred.contains(LI->reg()), LI->weight(), LI->reg());
 }
 
 // Price every legal placement in one walk over the interval's instructions.
@@ -317,6 +346,32 @@ void Z80RegisterAllocator::accessCosts(
     if (MI.isImplicitDef() || MI.isKill())
       continue;
     double Weight = frequency(MI);
+    if (MI.getOpcode() == Z80::BANK_ADD16) {
+      const auto &D = MI.getOperand(0), &S = MI.getOperand(2);
+      bool IsDst = D.getReg() == R, IsSrc = S.getReg() == R;
+      SmallVector<MCRegister, 12> Other;
+      if (!IsDst || !IsSrc) {
+        Register V = (IsDst ? S : D).getReg();
+        if (V.isPhysical())
+          Other.push_back(V.asMCReg());
+        else if (VRM->hasPhys(V))
+          Other.push_back(VRM->getPhys(V));
+        else
+          Other = domain(V);
+      }
+      for (auto &[Cost, P] : Candidates) {
+        unsigned C = std::numeric_limits<unsigned>::max();
+        if (IsDst && IsSrc)
+          C = Z80::bankAddCost(P, P, Bytes);
+        else
+          for (MCRegister O : Other)
+            C = std::min(C,
+                         Z80::bankAddCost(IsDst ? P : O, IsSrc ? P : O, Bytes));
+        if (C != std::numeric_limits<unsigned>::max())
+          Cost += Weight * C;
+      }
+      continue;
+    }
     if (MI.isCopy()) {
       const auto &D = MI.getOperand(0), &S = MI.getOperand(1);
       if (S.isUndef())
@@ -483,7 +538,7 @@ bool Z80RegisterAllocator::search(SmallVector<Register, 8> Regs,
     if (Trial[I])
       TrialChoice[I] =
           llvm::find(Nodes[I].Domain, Trial[I]) - Nodes[I].Domain.begin() + 1;
-  struct CopyFactor {
+  struct BinaryFactor {
     int D, S;
     unsigned Stride;
     SmallVector<double, 16> Costs;
@@ -497,19 +552,20 @@ bool Z80RegisterAllocator::search(SmallVector<Register, 8> Regs,
     double Weight;
     SmallVector<AccessTerm, 4> Terms;
   };
-  SmallVector<CopyFactor, 16> Copies;
+  SmallVector<BinaryFactor, 16> Binary;
   SmallVector<AccessFactor, 16> Accesses;
   bool Bytes = OptSize || ST->hasEZ80Ops();
   for (const MachineInstr *MI : Instructions) {
     double Weight = frequency(*MI);
-    if (MI->isCopy()) {
-      const auto &D = MI->getOperand(0), &S = MI->getOperand(1);
+    bool BankAdd = MI->getOpcode() == Z80::BANK_ADD16;
+    if (MI->isCopy() || BankAdd) {
+      const auto &D = MI->getOperand(0), &S = MI->getOperand(BankAdd ? 2 : 1);
       if (S.isUndef())
         continue;
       const auto DC = Choices(D), SC = Choices(S);
       unsigned DN = DC.NodeIndex < 0 ? 1 : DC.Resolved.size() + 1;
       unsigned SN = SC.NodeIndex < 0 ? 1 : SC.Resolved.size() + 1;
-      CopyFactor F{DC.NodeIndex, SC.NodeIndex, SN, {}};
+      BinaryFactor F{DC.NodeIndex, SC.NodeIndex, SN, {}};
       F.Costs.resize(DN * SN, std::numeric_limits<double>::infinity());
       // Price concrete choices once, then derive partial-assignment bounds
       // from their minima. Re-expanding transfers for row/column zero would
@@ -525,7 +581,8 @@ bool Z80RegisterAllocator::search(SmallVector<Register, 8> Regs,
           for (MCRegister DP : DR)
             for (MCRegister SP : SR)
               Best = std::min(
-                  Best, double(transferCost(DP, SP, S.isKill())));
+                  Best, double(BankAdd ? Z80::bankAddCost(DP, SP, Bytes)
+                                       : transferCost(DP, SP, S.isKill())));
           F.Costs[DI * SN + SI] = Weight * Best;
         }
       if (DC.NodeIndex >= 0)
@@ -539,7 +596,7 @@ bool Z80RegisterAllocator::search(SmallVector<Register, 8> Regs,
                 std::min(F.Costs[DI * SN], F.Costs[DI * SN + SI]);
       // Constant factors cannot distinguish assignments.
       if (!llvm::all_equal(F.Costs))
-        Copies.push_back(std::move(F));
+        Binary.push_back(std::move(F));
       continue;
     }
     AccessFactor F{Weight, {}};
@@ -587,7 +644,7 @@ bool Z80RegisterAllocator::search(SmallVector<Register, 8> Regs,
   // At a leaf each term is exact, and prefixes/saves are charged only once.
   auto Cost = [&]() {
     double Total = 0;
-    for (const auto &F : Copies) {
+    for (const auto &F : Binary) {
       unsigned D = F.D < 0 ? 0 : TrialChoice[F.D];
       unsigned S = F.S < 0 ? 0 : TrialChoice[F.S];
       Total += F.Costs[D * F.Stride + S];
@@ -682,7 +739,8 @@ bool Z80RegisterAllocator::search(SmallVector<Register, 8> Regs,
 }
 
 bool Z80RegisterAllocator::split(const LiveInterval &LI,
-                                 SmallVectorImpl<Register> &NewRegs) {
+                                 SmallVectorImpl<Register> &NewRegs,
+                                 bool MainBank) {
   unsigned S = Stage.lookup(LI.reg());
   if (S >= 2 || !LI.isSpillable())
     return false;
@@ -694,7 +752,8 @@ bool Z80RegisterAllocator::split(const LiveInterval &LI,
   // for every field of a state object, rather than just once after the call.
   SmallVector<std::pair<SlotIndex, SlotIndex>, 8> CallGroups;
   bool AcrossCall = false;
-  if (SA->getUseSlots().size() <= 64 && Matrix->checkRegMaskInterference(LI)) {
+  if (!MainBank && SA->getUseSlots().size() <= 64 &&
+      Matrix->checkRegMaskInterference(LI)) {
     const MachineInstr *Previous = nullptr;
     unsigned Scanned = 0;
     for (SlotIndex Use : SA->getUseSlots()) {
@@ -732,14 +791,14 @@ bool Z80RegisterAllocator::split(const LiveInterval &LI,
   }
   LiveRangeEdit Edit(&LI, NewRegs, *MF, *LIS, VRM, this, &DeadRemats);
   SE->reset(Edit, SplitEditor::SM_Size);
-  if (AcrossCall) {
+  if (AcrossCall && !MainBank) {
     for (const auto &[First, Last] : CallGroups) {
       SE->openIntv();
       SlotIndex Begin = SE->enterIntvBefore(First);
       SlotIndex End = SE->leaveIntvAfter(Last);
       SE->useIntv(Begin, End);
     }
-  } else if (S == 0 && SA->getUseBlocks().size() > 1) {
+  } else if (!MainBank && S == 0 && SA->getUseBlocks().size() > 1) {
     for (const auto &BI : SA->getUseBlocks())
       if (SA->shouldSplitSingleBlock(BI, true))
         SE->splitSingleBlock(BI);
@@ -749,24 +808,124 @@ bool Z80RegisterAllocator::split(const LiveInterval &LI,
     // stage, so the complement and reloads cannot recursively split forever.
     const auto *RC = MRI->getRegClass(LI.reg());
     const auto *Super = TRI->getLargestLegalSuperClass(RC, *MF);
-    if (RegClassInfo.getNumAllocatableRegs(Super) <=
-        RegClassInfo.getNumAllocatableRegs(RC))
+    if (!MainBank && RegClassInfo.getNumAllocatableRegs(Super) <=
+                         RegClassInfo.getNumAllocatableRegs(RC))
       return false;
     S = 1;
+    SlotIndex First, Last;
+    const MachineInstr *Previous = nullptr;
+    SmallVector<MCRegister, 8> Legal;
+    unsigned GroupSpan = 0, GroupUses = 0;
+    auto FinishGroup = [&] {
+      if (!First.isValid())
+        return;
+      SE->openIntv();
+      SlotIndex Begin = SE->enterIntvBefore(First);
+      SlotIndex End = SE->leaveIntvAfter(Last);
+      SE->useIntv(Begin, End);
+    };
     for (SlotIndex Use : SA->getUseSlots()) {
       const auto *MI = LIS->getInstructionFromIndex(Use);
       if (!MI || MI->isCopy())
         continue;
       auto *Constraint = MI->getRegClassConstraintEffectForVReg(
           LI.reg(), Super, ST->getInstrInfo(), TRI, true);
-      if (Constraint && RegClassInfo.getNumAllocatableRegs(Constraint) ==
-                            RegClassInfo.getNumAllocatableRegs(Super))
+      if (MainBank) {
+        if (MI->getOpcode() != Z80::BANK_ADD16)
+          continue;
+        bool Dst = MI->getOperand(0).getReg() == LI.reg();
+        Register Other = MI->getOperand(Dst ? 2 : 0).getReg();
+        SmallVector<MCRegister, 12> Others;
+        if (Other.isPhysical())
+          Others.push_back(Other.asMCReg());
+        else if (VRM->hasPhys(Other))
+          Others.push_back(VRM->getPhys(Other));
+        else
+          Others = domain(Other);
+        bool Bytes = OptSize || ST->hasEZ80Ops();
+        unsigned BankCost = ~0u, MainCost = ~0u;
+        for (MCRegister P : domain(LI.reg())) {
+          unsigned Cost = ~0u;
+          for (MCRegister O : Others)
+            Cost = std::min(Cost,
+                            Z80::bankAddCost(Dst ? P : O, Dst ? O : P, Bytes));
+          if (Z80::ALT16RegClass.contains(P))
+            BankCost = std::min(BankCost, Cost);
+          else if (llvm::none_of(TRI->regunits(P), [&](MCRegUnit U) {
+                     if (LIS->getRegUnit(U).overlaps(Use.getBaseIndex(),
+                                                     Use.getDeadSlot()))
+                       return true;
+                     auto At =
+                         Matrix->getLiveUnions()[static_cast<unsigned>(U)].find(
+                             Use.getBaseIndex());
+                     return At.valid() && At.start() < Use.getDeadSlot();
+                   }))
+            MainCost = std::min(MainCost, Cost);
+        }
+        unsigned Transfer = (Bytes ? 4 : 29) * (Dst ? 2 : 1);
+        if (MainCost == ~0u || BankCost == ~0u ||
+            uint64_t(MainCost) + Transfer >= BankCost)
+          continue;
+        Constraint = TRI->getCommonSubClass(Constraint, &Z80::R16RegClass);
+      }
+
+      if (!MainBank && Constraint &&
+          RegClassInfo.getNumAllocatableRegs(Constraint) ==
+              RegClassInfo.getNumAllocatableRegs(Super))
         continue;
-      SE->openIntv();
-      SlotIndex Begin = SE->enterIntvBefore(Use);
-      SlotIndex End = SE->leaveIntvAfter(Use);
-      SE->useIntv(Begin, End);
+      if (MI == Previous) {
+        Last = Use;
+        continue;
+      }
+      SmallVector<MCRegister, 8> Choices;
+      if (Constraint)
+        for (MCRegister P : RegClassInfo.getOrder(Constraint))
+          Choices.push_back(P);
+      bool Join = Previous && Previous->getParent() == MI->getParent() &&
+                  GroupUses < 4 && GroupSpan < 4;
+      unsigned Distance = 1;
+      if (Join) {
+        for (auto I = std::next(Previous->getIterator());
+             I != MI->getIterator(); ++I)
+          if (GroupSpan + ++Distance > 4 || I->mayLoadOrStore() ||
+              I->isCall() || I->isInlineAsm() ||
+              llvm::any_of(I->defs(), [&](const MachineOperand &MO) {
+                return MO.isReg() && MO.getReg().isVirtual() &&
+                       TRI->getRegSizeInBits(*MRI->getRegClass(MO.getReg())) >
+                           8;
+              })) {
+            Join = false;
+            break;
+          }
+      }
+      if (Join) {
+        llvm::erase_if(Choices, [&](MCRegister P) {
+          if (!llvm::is_contained(Legal, P))
+            return true;
+          for (MCRegUnit U : TRI->regunits(P))
+            if (LIS->getRegUnit(U).overlaps(First.getBaseIndex(),
+                                            Use.getDeadSlot()))
+              return true;
+          return false;
+        });
+        Join = !Choices.empty();
+      }
+      if (!Join) {
+        FinishGroup();
+        First = Use;
+        GroupSpan = GroupUses = 0;
+        Choices.clear();
+        if (Constraint)
+          for (MCRegister P : RegClassInfo.getOrder(Constraint))
+            Choices.push_back(P);
+      }
+      Last = Use;
+      GroupSpan += Distance;
+      ++GroupUses;
+      Previous = MI;
+      Legal = std::move(Choices);
     }
+    FinishGroup();
   }
   if (Edit.empty())
     return false;
@@ -774,8 +933,11 @@ bool Z80RegisterAllocator::split(const LiveInterval &LI,
   SE->finish(&Map);
   getAnalysis<LiveDebugVariablesWrapperLegacy>().getLDV().splitRegister(
       LI.reg(), Edit.regs(), *LIS);
-  for (unsigned I = 0; I != Edit.size(); ++I)
+  for (unsigned I = 0; I != Edit.size(); ++I) {
     Stage[Edit.get(I)] = Map[I] == 0 ? 2 : S + 1;
+    if (MainBank && Map[I] != 0)
+      MRI->constrainRegClass(Edit.get(I), &Z80::R16RegClass);
+  }
   ++NumSplits;
   return true;
 }
@@ -826,8 +988,28 @@ Z80RegisterAllocator::selectOrSplit(const LiveInterval &LI,
     if (Improved)
       return Chosen;
   }
+  // A free alternate pair can still cost more than entering a primary pair
+  // for mixed-bank arithmetic. Split profitable accesses before accepting it.
+  if (Free && Z80::ALT16RegClass.contains(Free) && Stage.lookup(LI.reg()) < 2 &&
+      llvm::any_of(MRI->reg_nodbg_instructions(LI.reg()),
+                   [](const MachineInstr &MI) {
+                     return MI.getOpcode() == Z80::BANK_ADD16;
+                   }) &&
+      split(LI, NewRegs, true))
+    return MCRegister();
   if (Free)
     return Free;
+  /* With only one legal placement, splitting competes with the range already
+     occupying that register. Its tiny, often unspillable fragments can force
+     both values into primary pairs before other ranges have been considered,
+     leaving one complement on the stack. Give those ranges their allocation
+     attempt first. The deferred range still tries placement and repair again,
+     and the set bounds deferral to once per original range. */
+  if (Candidates.size() == 1 && LI.isSpillable() && Stage.lookup(LI.reg()) == 0 &&
+      Deferred.insert(LI.reg()).second) {
+    NewRegs.push_back(LI.reg());
+    return MCRegister();
+  }
   if (split(LI, NewRegs))
     return MCRegister();
 

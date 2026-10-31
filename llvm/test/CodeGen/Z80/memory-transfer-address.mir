@@ -1,0 +1,99 @@
+# RUN: llc -run-pass=z80-register-opt -verify-machineinstrs %s -o - | FileCheck %s
+# Adjacent byte transfers expose accumulator addressing while addresses are
+# virtual. Values with additional uses keep their general byte class.
+--- |
+  target triple = "z80"
+  define void @transfer() { ret void }
+  define void @reused_byte() { ret void }
+  define void @constrained_address() { ret void }
+  define void @live_accumulator() { ret void }
+  define void @indexed_source() { ret void }
+...
+---
+name: transfer
+tracksRegLiveness: true
+# CHECK-LABEL: name: transfer
+# CHECK: id: 0, class: r16
+# CHECK: id: 1, class: r16
+# CHECK: id: 2, class: a8
+# CHECK: %2:a8 = LD8ap %0 :: (volatile load (s8))
+# CHECK-NEXT: LD8pa %1, %2 :: (volatile store (s8))
+body: |
+  bb.0:
+    liveins: $de, $bc
+    %0:a16 = COPY $de
+    %1:a16 = COPY $bc
+    %2:g8 = LD8gp %0 :: (volatile load (s8))
+    LD8pg %1, %2 :: (volatile store (s8))
+    RET16 implicit-def $sps, implicit $sps
+...
+---
+name: reused_byte
+tracksRegLiveness: true
+# CHECK-LABEL: name: reused_byte
+# CHECK: id: 2, class: g8
+# CHECK: %2:g8 = LD8gp %0
+# CHECK-NEXT: LD8pg %1, %2
+# CHECK-NEXT: $a = COPY %2
+body: |
+  bb.0:
+    liveins: $de, $bc
+    %0:a16 = COPY $de
+    %1:a16 = COPY $bc
+    %2:g8 = LD8gp %0
+    LD8pg %1, %2
+    $a = COPY %2
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...
+---
+name: constrained_address
+tracksRegLiveness: true
+# CHECK-LABEL: name: constrained_address
+# CHECK: id: 0, class: a16
+# CHECK: id: 1, class: r16
+# CHECK: %2:a8 = LD8ap %0
+# CHECK-NEXT: LD8pa %1, %2
+# CHECK-NEXT: $b = LD8gp %0
+body: |
+  bb.0:
+    liveins: $de, $bc
+    %0:a16 = COPY $de
+    %1:a16 = COPY $bc
+    %2:g8 = LD8gp %0
+    LD8pg %1, %2
+    $b = LD8gp %0
+    RET16 implicit-def $sps, implicit $sps, implicit $b
+...
+---
+name: live_accumulator
+tracksRegLiveness: true
+# CHECK-LABEL: name: live_accumulator
+# CHECK: %2:g8 = LD8gp %0
+# CHECK-NEXT: LD8pg %1, %2
+# CHECK-NEXT: RET16 {{.*}}implicit $a
+body: |
+  bb.0:
+    liveins: $de, $bc, $a
+    %0:a16 = COPY $de
+    %1:a16 = COPY $bc
+    %2:g8 = LD8gp %0
+    LD8pg %1, %2
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...
+---
+name: indexed_source
+tracksRegLiveness: true
+# CHECK-LABEL: name: indexed_source
+# CHECK: id: 0, class: i16
+# CHECK: id: 1, class: r16
+# CHECK: %2:a8 = LD8go %0, 7
+# CHECK-NEXT: LD8pa %1, %2
+body: |
+  bb.0:
+    liveins: $de, $bc
+    %0:i16 = COPY $de
+    %1:a16 = COPY $bc
+    %2:g8 = LD8go %0, 7
+    LD8pg %1, %2
+    RET16 implicit-def $sps, implicit $sps
+...

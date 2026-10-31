@@ -122,7 +122,12 @@ bool Z80IncrementalLoadingPass::runOnMachineFunction(MachineFunction &MF)
           MachineIRBuilder MIB(MI0);
           Register HL = Z80::HL;
           MachineInstr *EX0 = MIB.buildInstr(Z80::EX16DE);
-          MIB.buildInstr(Z80::ADD16aa).addDef(HL).addUse(r2, isR2Kill ? RegState::Kill : 0);
+          // ADD16aa doubles its accumulator. This sequence adds the distinct
+          // source pair while DE is exchanged into HL.
+          MIB.buildInstr(Z80::ADD16ao)
+              .addDef(HL)
+              .addUse(HL)
+              .addUse(r2, isR2Kill ? RegState::Kill : 0);
           MIB.buildInstr(Z80::EX16DE);
           MII = EX0->getIterator();
           MI0.eraseFromParent();

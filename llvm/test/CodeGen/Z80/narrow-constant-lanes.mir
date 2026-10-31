@@ -1,0 +1,88 @@
+# RUN: llc -run-pass=z80-machine-prera-opt,z80-prepare-live-ranges -verify-machineinstrs %s -o - | FileCheck %s
+# RUN: llc -start-before=z80-machine-prera-opt -regalloc=z80 -verify-machineinstrs %s -o /dev/null
+# RUN: llc -start-before=z80-machine-prera-opt -regalloc=greedy -verify-machineinstrs %s -o /dev/null
+# RUN: %python %S/Inputs/narrow-lanes.py --llc llc --mir %s --work %t
+--- |
+  target triple = "z80"
+  define void @delay_extension() { ret void }
+  define void @independent_values() { ret void }
+  define void @changing_high_byte() { ret void }
+...
+---
+name: delay_extension
+tracksRegLiveness: true
+# CHECK-LABEL: name: delay_extension
+# CHECK: [[LOW:%[0-9]+]]:g8 = LD8gp
+# CHECK: $a = LD8ap
+# CHECK: [[PAIR:%[0-9]+]].sub_low:o16 = COPY [[LOW]]
+# CHECK-NEXT: [[PAIR]].sub_high:o16 = LD8ri 0
+# CHECK-NEXT: $hl = ADD16rr $hl, [[PAIR]]
+body: |
+  bb.0:
+    liveins: $hl
+    %0:a16 = COPY $hl
+    %1:g8 = LD8ri 0
+    undef %2.sub_low:o16 = LD8gp %0 :: (load (s8))
+    %2.sub_high:o16 = COPY %1
+    $a = LD8gp %0 :: (volatile load (s8))
+    $hl = LD16ri 4096
+    $hl = ADD16rr $hl, %2, implicit-def dead $f
+    RET16 implicit-def $sps, implicit $sps, implicit $hl, implicit $a
+...
+---
+name: independent_values
+tracksRegLiveness: true
+# Two original pairs share their constant lanes across independent definitions.
+# Both sets of low-byte components must be split using separate result lists.
+# CHECK-LABEL: name: independent_values
+# CHECK: [[A:%[0-9]+]]:g8 = LD8gp
+# CHECK: [[B:%[0-9]+]]:g8 = LD8gp
+# CHECK: COPY [[A]]
+# CHECK: COPY [[B]]
+# CHECK: [[C:%[0-9]+]]:g8 = LD8gp
+# CHECK: [[D:%[0-9]+]]:g8 = LD8gp
+# CHECK: COPY [[C]]
+# CHECK: COPY [[D]]
+body: |
+  bb.0:
+    liveins: $hl
+    %0:a16 = COPY $hl
+    undef %1.sub_high:o16 = LD8ri 18
+    undef %2.sub_high:o16 = LD8ri 52
+    %1.sub_low:o16 = LD8gp %0 :: (load (s8))
+    %0:a16 = INC16r %0
+    %2.sub_low:o16 = LD8gp %0 :: (load (s8))
+    %0:a16 = INC16r %0
+    $a = LD8gp %0 :: (volatile load (s8))
+    $hl = LD16ri 4096
+    $hl = ADD16rr $hl, %1, implicit-def dead $f
+    $hl = ADD16rr $hl, %2, implicit-def dead $f
+    %1.sub_low:o16 = LD8gp %0 :: (load (s8))
+    %0:a16 = INC16r %0
+    %2.sub_low:o16 = LD8gp %0 :: (load (s8))
+    %0:a16 = INC16r %0
+    $a = LD8gp %0 :: (volatile load (s8))
+    $hl = ADD16rr $hl, %1, implicit-def dead $f
+    $hl = ADD16rr $hl, %2, implicit-def dead $f
+    RET16 implicit-def $sps, implicit $sps, implicit $hl
+...
+---
+name: changing_high_byte
+tracksRegLiveness: true
+# CHECK-LABEL: name: changing_high_byte
+# CHECK: %1.sub_high:o16 = LD8ri 0
+# CHECK: $hl = ADD16rr $hl, %1
+# CHECK: %1.sub_high:o16 = LD8ri 1
+# CHECK: $hl = ADD16rr $hl, %1
+body: |
+  bb.0:
+    liveins: $hl
+    %0:a16 = COPY $hl
+    undef %1.sub_low:o16 = LD8gp %0 :: (load (s8))
+    %1.sub_high:o16 = LD8ri 0
+    $hl = LD16ri 4096
+    $hl = ADD16rr $hl, %1, implicit-def dead $f
+    %1.sub_high:o16 = LD8ri 1
+    $hl = ADD16rr $hl, %1, implicit-def dead $f
+    RET16 implicit-def $sps, implicit $sps, implicit $hl
+...

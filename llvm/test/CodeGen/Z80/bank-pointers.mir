@@ -1,0 +1,43 @@
+# RUN: llc -mattr=+alternate-regs -run-pass=z80-machine-prera-opt,z80-regalloc,virtregrewriter -verify-machineinstrs %s -o - | FileCheck %s
+# RUN: llc -mattr=-alternate-regs -run-pass=z80-machine-prera-opt -verify-machineinstrs %s -o - | FileCheck %s --check-prefix=OFF
+# OFF-NOT: BANK_
+--- |
+  target triple = "z80"
+  define void @bank_pointer() { ret void }
+  declare void @external()
+  define void @call_pointer() { ret void }
+...
+---
+name: bank_pointer
+tracksRegLiveness: true
+# CHECK-LABEL: name: bank_pointer
+# CHECK: stack: []
+# CHECK: $[[PAIR:hl_alt|de_alt|bc_alt]] = COPY $hl
+# CHECK: $[[PAIR]] = BANK_INC16
+# CHECK: $a = BANK_LD8ap
+body: |
+  bb.0:
+    liveins: $hl, $bc, $de, $ix, $iy
+    %0:r16 = COPY $hl
+    $hl = LD16ri 42
+    %1:r16 = INC16r %0
+    $a = LD8ap %1 :: (load (s8))
+    KILL $hl, $bc, $de, $ix, $iy
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...
+---
+name: call_pointer
+tracksRegLiveness: true
+# CHECK-LABEL: name: call_pointer
+# CHECK: BANK_LD16or %stack.0, 0,
+# CHECK: CALL16 @external
+# CHECK: BANK_LD16ro %stack.0, 0
+# CHECK: BANK_LD8ap
+body: |
+  bb.0:
+    liveins: $hl
+    %0:r16 = COPY $hl
+    CALL16 @external, CustomRegMask(), implicit-def $sps, implicit $sps
+    $a = LD8ap %0 :: (load (s8))
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...

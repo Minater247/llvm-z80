@@ -453,6 +453,7 @@ let isMoveImm = true, isReMaterializable = true in {
   def LD8ri  : Ii  <Idx0Pre, 0x06, "ld", "\t$dst, $src", "",
                     (outs  R8:$dst), (ins  i8imm:$src),
                     [(set  R8:$dst, imm:$src)]>;
+  let canFoldAsLoad = true in
   def LD16ri : I16i<Idx0Pre, 0x01, "ld", "\t$dst, $src", "",
                     (outs R16:$dst), (ins i16imm:$src),
                     [(set R16:$dst, imm:$src)]>;
@@ -1086,6 +1087,10 @@ def : Pat<(add R24:$imp,  1), (INC24r R24:$imp)>;
 def : Pat<(add R24:$imp, -1), (DEC24r R24:$imp)>;
 
 let Defs = [F] in {
+  // Keep pair placement open until allocation. DE uses exchanges through HL;
+  // BC uses a saved HL temporary. Every form preserves the other pairs.
+  def ADD16rr : Pseudo<"", "", "$imp = $dst",
+                       (outs R16:$dst), (ins R16:$imp, O16:$src)>;
   def ADD16ao : I16<Idx01Pre, 0x09, "add", "\t$dst, $src", "$imp = $dst",
                     (outs A16:$dst), (ins A16:$imp, O16:$src),
                     [(set A16:$dst, F, (Z80add_flag A16:$imp, O16:$src))]>;
@@ -1428,4 +1433,25 @@ let Defs = [A, F], Uses = [A], hasSideEffects = 0 in {
   def SADDSAT8ai : Pseudo<"", "", "", (outs), (ins i8imm:$src)>;
   let mayLoad = 1 in
   def SADDSAT8ap : Pseudo<"", "", "", (outs), (ins aptr:$src)>;
+}
+
+// Bank-aware whole-pair operations preserve the inactive bank and flags.
+// They remain atomic until emission; ordinary byte operands still name A.
+let hasSideEffects = 0 in {
+  let isReMaterializable = 1, isMoveImm = 1 in
+  def BANK_LD16ri : Pseudo<"", "", "", (outs B16:$dst), (ins i16imm:$src)>;
+  let Defs = [F] in
+  def BANK_ADD16 : Pseudo<"", "", "$dst = $imp", (outs B16:$dst),
+                          (ins B16:$imp, BO16:$src)>;
+  def BANK_INC16 : Pseudo<"", "", "$dst = $src", (outs B16:$dst), (ins B16:$src)>;
+  def BANK_DEC16 : Pseudo<"", "", "$dst = $src", (outs B16:$dst), (ins B16:$src)>;
+  def ALT_COPY16 : Pseudo<"", "", "", (outs ALT16:$dst), (ins ALT16:$src)>;
+  let mayLoad = 1 in {
+    def BANK_LD8ap : Pseudo<"", "", "", (outs A8:$dst), (ins B16:$src)>;
+    def BANK_LD16ro : Pseudo<"", "", "", (outs B16:$dst), (ins off16:$src)>;
+  }
+  let mayStore = 1 in {
+    def BANK_LD8pa : Pseudo<"", "", "", (outs), (ins B16:$dst, A8:$src)>;
+    def BANK_LD16or : Pseudo<"", "", "", (outs), (ins off16:$dst, B16:$src)>;
+  }
 }

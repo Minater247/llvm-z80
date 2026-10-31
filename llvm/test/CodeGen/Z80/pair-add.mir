@@ -1,0 +1,21 @@
+# RUN: llc -run-pass=z80-register-opt -verify-machineinstrs %s -o - | FileCheck %s
+--- |
+  target triple = "z80"
+  define void @pair_add() { ret void }
+...
+---
+name: pair_add
+tracksRegLiveness: true
+# CHECK-LABEL: name: pair_add
+# CHECK: id: 0, class: r16
+# CHECK: id: 2, class: r16
+# CHECK: %2:r16 = ADD16rr %0, %1, implicit-def $f
+body: |
+  bb.0:
+    liveins: $de, $bc
+    %0:a16 = COPY $de
+    %1:o16 = COPY $bc
+    %2:a16 = ADD16ao %0, %1, implicit-def $f
+    $de = COPY %2
+    RET16 implicit-def $sps, implicit $sps, implicit $de, implicit $f
+...
