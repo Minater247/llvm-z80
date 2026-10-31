@@ -1,0 +1,63 @@
+# RUN: llc -mattr=+alternate-regs -run-pass=z80-alternate-regalloc -verify-machineinstrs %s -o - | FileCheck %s
+# RUN: llc -mattr=-alternate-regs -run-pass=z80-alternate-regalloc -verify-machineinstrs %s -o - | FileCheck %s --check-prefix=OFF
+# OFF-NOT: ALT_SAVE
+# OFF-NOT: ALT_LOAD
+--- |
+  target triple = "z80"
+  define void @memory_barrier() { ret void }
+  define void @register_clobber() { ret void }
+  define void @bank_assembly() { ret void }
+...
+---
+name: memory_barrier
+tracksRegLiveness: true
+# CHECK-LABEL: name: memory_barrier
+# CHECK: $hl_alt = ALT_SAVE16 $hl
+# CHECK-NEXT: INLINEASM &"", 25
+# CHECK-NEXT: $de = ALT_LOAD16 $hl_alt
+stack:
+  - { id: 0, type: spill-slot, size: 2, alignment: 1 }
+body: |
+  bb.0:
+    liveins: $hl
+    LD88or %stack.0, 0, $hl :: (store (s16) into %stack.0)
+    INLINEASM &"", 25
+    $de = LD88ro %stack.0, 0 :: (load (s16) from %stack.0)
+    RET16 implicit-def $sps, implicit $sps, implicit $de
+...
+---
+name: register_clobber
+tracksRegLiveness: true
+# CHECK-LABEL: name: register_clobber
+# CHECK-NOT: ALT_
+# CHECK: LD88or %stack.0
+# CHECK-NEXT: INLINEASM
+# CHECK-NEXT: $de = LD88ro %stack.0
+stack:
+  - { id: 0, type: spill-slot, size: 2, alignment: 1 }
+body: |
+  bb.0:
+    liveins: $hl
+    LD88or %stack.0, 0, $hl :: (store (s16) into %stack.0)
+    INLINEASM &"", 25, 12, implicit-def dead $a
+    $de = LD88ro %stack.0, 0 :: (load (s16) from %stack.0)
+    RET16 implicit-def $sps, implicit $sps, implicit $de
+...
+---
+name: bank_assembly
+tracksRegLiveness: true
+# CHECK-LABEL: name: bank_assembly
+# CHECK-NOT: ALT_
+# CHECK: LD88or %stack.0
+# CHECK-NEXT: INLINEASM
+# CHECK-NEXT: $de = LD88ro %stack.0
+stack:
+  - { id: 0, type: spill-slot, size: 2, alignment: 1 }
+body: |
+  bb.0:
+    liveins: $hl
+    LD88or %stack.0, 0, $hl :: (store (s16) into %stack.0)
+    INLINEASM &"exx", 1
+    $de = LD88ro %stack.0, 0 :: (load (s16) from %stack.0)
+    RET16 implicit-def $sps, implicit $sps, implicit $de
+...

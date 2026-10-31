@@ -25,6 +25,7 @@
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/InlineAsm.h"
 #include "llvm/InitializePasses.h"
 
 using namespace llvm;
@@ -133,9 +134,19 @@ bool Z80AlternateRegAllocator::runOnMachineFunction(MachineFunction &MF) {
   }
   for (auto &MBB : MF)
     for (auto &MI : MBB) {
-      // Explicit bank management has unknown state, and inline assembly can
-      // access bank contents outside its declared operands.
-      if (MI.isInlineAsm() || MI.getOpcode() == Z80::EXAF ||
+      // An empty compiler memory barrier emits no instructions and has no
+      // register effects. Keep bank storage across it; region scheduling still
+      // treats it as a boundary. Other assembly can access bank contents outside
+      // its declared operands, so it remains a function-wide exclusion.
+      bool MemoryBarrier =
+          MI.getOpcode() == TargetOpcode::INLINEASM &&
+          MI.getOperand(0).getSymbolName()[0] == '\0' &&
+          !(MI.getOperand(1).getImm() &
+            ~(InlineAsm::Extra_HasSideEffects | InlineAsm::Extra_MayLoad |
+              InlineAsm::Extra_MayStore)) &&
+          llvm::all_of(llvm::drop_begin(MI.operands(), 2),
+                       [](const MachineOperand &MO) { return MO.isMetadata(); });
+      if ((MI.isInlineAsm() && !MemoryBarrier) || MI.getOpcode() == Z80::EXAF ||
           MI.getOpcode() == Z80::EXX16 || MI.getOpcode() == Z80::EXX24)
         return false;
       int FI = -1;
