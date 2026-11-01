@@ -241,11 +241,18 @@ bool Z80RegisterInfo::saveScavengerRegister(MachineBasicBlock &MBB,
   else
     BuildMI(MBB, MI, DL, TII.get(RegSize == 24 ? Z80::PUSH24r : Z80::PUSH16r))
         .addReg(Reg);
+  int StackDepth = 0;
   for (MachineBasicBlock::iterator II = MI; II != UseMI; ++II) {
     if (II->isDebugValue())
       continue;
-    if (II->modifiesRegister(Reg, this))
+    /* Several scavenged pairs may surround one frame-index expansion. Their
+       saves nest, so this restore must precede a pop of an enclosing save.
+       Balanced transfers inside the interval keep their original order. */
+    StackDepth -= TII.getSPAdjust(*II);
+    if (II->modifiesRegister(Reg, this) || StackDepth < 0) {
       UseMI = II;
+      break;
+    }
   }
   if (Reg == Z80::AF)
     BuildMI(MBB, UseMI, DL, TII.get(RegSize == 24 ? Z80::POP24AF : Z80::POP16AF));

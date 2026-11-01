@@ -1,0 +1,43 @@
+# RUN: llc -run-pass=prologepilog -verify-machineinstrs %s -o - | FileCheck %s
+# RUN: %python %S/Inputs/scavenger-pairs.py --llc llc --mir %s --work %t
+--- |
+  target triple = "z80"
+  define void @pairs() nounwind "frame-pointer"="all" { ret void }
+  define void @flags() nounwind "frame-pointer"="all" { ret void }
+...
+---
+name: pairs
+# Restores for two scavenged pairs must unwind in the opposite save order.
+# CHECK-LABEL: name: pairs
+# CHECK: PUSH16r $bc
+# CHECK-NEXT: PUSH16r $hl
+# CHECK: $hl = POP16r
+# CHECK-NEXT: $bc = POP16r
+tracksRegLiveness: true
+stack:
+  - { id: 0, size: 4, alignment: 1 }
+body: |
+  bb.0:
+    $bc = LD16ri 4386
+    $hl = LD16ri 13124
+    $iy = LD16ri 21862
+    $a = LD8ri 119
+    OR8ar $a, implicit-def $a, implicit $a, implicit-def dead $f
+    $de = LEA16ro %stack.0, 0
+    RET16 implicit-def $sps, implicit $sps, implicit $bc, implicit $de, implicit $hl, implicit $iy, implicit $a
+...
+---
+name: flags
+tracksRegLiveness: true
+stack:
+  - { id: 0, size: 260, alignment: 1 }
+body: |
+  bb.0:
+    $bc = LD16ri 4386
+    $hl = LD16ri 13124
+    $iy = LD16ri 21862
+    $a = LD8ri 119
+    CP8ai 119, implicit $a, implicit-def $f
+    $de = LEA16ro %stack.0, 0
+    RET16 implicit-def $sps, implicit $sps, implicit $bc, implicit $de, implicit $hl, implicit $iy, implicit $a, implicit $f
+...
