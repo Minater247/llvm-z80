@@ -86,6 +86,9 @@ public:
   Z80TargetLowering(const Z80TargetMachine &TM, const Z80Subtarget &STI);
 
 private:
+  unsigned getNumRegistersForCallingConv(LLVMContext &Context,
+                                        CallingConv::ID CC,
+                                        EVT VT) const override;
   unsigned getJumpTableEncoding() const override;
 
   /// Return true if the target has native support for

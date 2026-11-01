@@ -64,6 +64,17 @@ unsigned Z80TargetLowering::getJumpTableEncoding() const {
   return MachineJumpTableInfo::EK_BlockAddress;
 }
 
+unsigned Z80TargetLowering::getNumRegistersForCallingConv(
+    LLVMContext &Context, CallingConv::ID CC, EVT VT) const {
+  if (!VT.isVector()) {
+    MVT RegVT = getRegisterTypeForCallingConv(Context, CC, VT);
+    // The scalar type list includes i24 and i48. Counting each successive
+    // type as twice as wide overcounts parts such as an i32 in i16 registers.
+    return divideCeil(VT.getSizeInBits(), RegVT.getSizeInBits());
+  }
+  return TargetLowering::getNumRegistersForCallingConv(Context, CC, VT);
+}
+
 /// Return true if the target has native support for the specified value type
 /// and it is 'desirable' to use the type for the given node type. e.g. On ez80
 /// i16 is legal, but undesirable since i16 instruction encodings are longer and

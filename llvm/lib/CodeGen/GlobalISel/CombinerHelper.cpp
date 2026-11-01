@@ -2070,6 +2070,9 @@ bool CombinerHelper::matchLshrOfTruncOfLshr(MachineInstr &MI,
 
   Register InnerShift = ShiftMI.getOperand(0).getReg();
   LLT InnerShiftTy = MRI.getType(InnerShift);
+  if (!isLegalOrBeforeLegalizer(
+          {TargetOpcode::G_LSHR, {InnerShiftTy, MRI.getType(N001)}}))
+    return false;
   uint64_t InnerShiftSize = InnerShiftTy.getScalarSizeInBits();
   if ((N1C + N001C).ult(InnerShiftSize)) {
     MatchInfo.Src = ShiftMI.getOperand(1).getReg();
@@ -2080,6 +2083,8 @@ bool CombinerHelper::matchLshrOfTruncOfLshr(MachineInstr &MI,
     if ((N001C + OpSizeInBits) == InnerShiftSize)
       return true;
     if (MRI.hasOneUse(N0) && MRI.hasOneUse(InnerShift)) {
+      if (!isLegalOrBeforeLegalizer({TargetOpcode::G_AND, {InnerShiftTy}}))
+        return false;
       MatchInfo.Mask = true;
       MatchInfo.MaskVal = APInt(N1C.getBitWidth(), OpSizeInBits) - N1C;
       return true;

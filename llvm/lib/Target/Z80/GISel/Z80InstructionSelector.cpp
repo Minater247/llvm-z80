@@ -346,6 +346,26 @@ bool Z80InstructionSelector::select(MachineInstr &I) const {
   if (Opc == TargetOpcode::G_IMPLICIT_DEF || Opc == TargetOpcode::G_PHI)
     return selectImplicitDefOrPHI(I, MRI);
 
+  if (Opc == TargetOpcode::G_SUB) {
+    Register Dst = I.getOperand(0).getReg();
+    LLT Ty = MRI.getType(Dst);
+    if (Ty == LLT::scalar(16) || Ty == LLT::scalar(24)) {
+      MachineIRBuilder MIB(I);
+      Register Acc = Ty == LLT::scalar(16) ? Z80::HL : Z80::UHL;
+      unsigned SubOpc = Ty == LLT::scalar(16) ? Z80::Sub16ao : Z80::Sub24ao;
+      // Pair subtraction defines the physical accumulator. Preserve its value
+      // as the generic result before subsequent instructions reuse HL.
+      if (!selectCopy(*MIB.buildCopy(Acc, I.getOperand(1).getReg()), MRI))
+        return false;
+      auto Sub = MIB.buildInstr(SubOpc, {}, {I.getOperand(2).getReg()});
+      if (!constrainSelectedInstRegOperands(*Sub, TII, TRI, RBI) ||
+          !selectCopy(*MIB.buildCopy(Dst, Acc), MRI))
+        return false;
+      I.eraseFromParent();
+      return true;
+    }
+  }
+
   if (Opc == TargetOpcode::G_ADD || Opc == TargetOpcode::G_SUB ||
       Opc == TargetOpcode::G_AND || Opc == TargetOpcode::G_OR ||
       Opc == TargetOpcode::G_XOR || Opc == TargetOpcode::G_SADDSAT) {
@@ -2034,8 +2054,8 @@ Z80InstructionSelector::foldCompare(MachineInstr &I, MachineIRBuilder &MIB,
           Ops.clear();
         }
       } else if (OpSize == 16) {
-        // Generic 16-bit zero test that does not force use of HL: A = H; OR L
-        MachineIRBuilder MIB(I);
+        // Emit the zero test at its consumer, just like other comparisons.
+        // Another condition may overwrite flags after the original G_ICMP.
         auto CopyHi = MIB.buildCopy(Register(Z80::A), LHSReg);
         CopyHi->getOperand(1).setSubReg(Z80::sub_high);
         if (!constrainSelectedInstRegOperands(*CopyHi, TII, TRI, RBI))

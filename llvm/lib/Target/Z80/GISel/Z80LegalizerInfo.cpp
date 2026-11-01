@@ -492,6 +492,8 @@ Z80LegalizerInfo::legalizeBitwise(LegalizerHelper &Helper, MachineInstr &MI,
   Register LeftReg = MI.getOperand(1).getReg();
   LLT LeftRegTy = MRI.getType(LeftReg);
   MachineIRBuilder &Builder = Helper.MIRBuilder;
+  if (LeftRegTy.isScalar() && LeftRegTy.getSizeInBits() > 24)
+    return Helper.narrowScalar(MI, 0, LLT::scalar(16));
   if (LeftRegTy.getSizeInBits() == 16) {
     Register RightReg = MI.getOperand(2).getReg();
     auto RHSImm = getIConstantVRegValWithLookThrough(RightReg, MRI);
@@ -781,8 +783,10 @@ Z80LegalizerInfo::legalizeShift(LegalizerHelper &Helper, MachineInstr &MI,
     return LegalizerHelper::Legalized;
   }
 
-  if (Ty.isScalar() && Ty.getSizeInBits() == 16)
-    if (Helper.narrowScalar(MI, 0, LLT::scalar(8)) ==
+  // Split wide values into supported pieces so constant shifts can discard
+  // unused lanes and variable shifts can use the same native byte operations.
+  if (Ty.isScalar() && (Ty.getSizeInBits() == 16 || Ty.getSizeInBits() > 24))
+    if (Helper.narrowScalar(MI, 0, LLT::scalar(Ty.getSizeInBits() > 16 ? 16 : 8)) ==
         LegalizerHelper::Legalized)
       return LegalizerHelper::Legalized;
 
