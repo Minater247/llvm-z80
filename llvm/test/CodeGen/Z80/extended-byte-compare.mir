@@ -1,0 +1,15 @@
+# RUN: %python %S/Inputs/extended-byte-compare.py --emit 16 %t.16.mir
+# RUN: llc -run-pass=z80-prelegalizer-combiner -verify-machineinstrs %t.16.mir -o - | FileCheck %s
+# RUN: llc -start-before=z80-prelegalizer-combiner -verify-machineinstrs %t.16.mir -o %t.16.s
+# RUN: %python %S/Inputs/extended-byte-compare.py --check %t.16.s
+# RUN: %python %S/Inputs/extended-byte-compare.py --emit 24 %t.24.mir
+# RUN: llc -start-before=z80-prelegalizer-combiner -verify-machineinstrs %t.24.mir -o %t.24.s
+# Matching extensions preserve byte comparison results. Zero extension makes
+# signed comparisons unsigned; mixed extensions and unrepresentable constants
+# keep their wider interpretation.
+# CHECK-LABEL: name: zext_zext_0_slt
+# CHECK: G_ICMP intpred(ult), %0(s8), %1
+# CHECK-LABEL: name: sext_sext_0_slt
+# CHECK: G_ICMP intpred(slt), %0(s8), %1
+# CHECK-LABEL: name: zext_sext_0_eq
+# CHECK: G_ICMP intpred(eq), %2(s16), %3

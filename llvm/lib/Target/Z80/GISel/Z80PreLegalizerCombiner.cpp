@@ -137,6 +137,60 @@ Z80PreLegalizerCombinerImpl::Z80PreLegalizerCombinerImpl(
 {
 }
 
+/// Compare extended bytes in their original width. Matching extensions retain
+/// their ordering; a comparison of zero-extended bytes uses unsigned ordering.
+/// Constants participate only when the same extension reproduces their value.
+static bool combineExtendedByteCompare(MachineInstr &MI,
+                                       MachineIRBuilder &Builder,
+                                       GISelChangeObserver &Observer) {
+  if (MI.getOpcode() != TargetOpcode::G_ICMP)
+    return false;
+  auto &MRI = MI.getMF()->getRegInfo();
+  LLT Ty = MRI.getType(MI.getOperand(2).getReg());
+  if (!Ty.isScalar() || Ty.getSizeInBits() <= 8)
+    return false;
+  Register Narrow[2];
+  std::optional<APInt> Constants[2];
+  unsigned Extension = 0;
+  for (unsigned I = 0; I != 2; ++I) {
+    Register R = MI.getOperand(I + 2).getReg();
+    MachineInstr *Def = getDefIgnoringCopies(R, MRI);
+    if (!Def)
+      return false;
+    unsigned Opc = Def->getOpcode();
+    if ((Opc == TargetOpcode::G_ZEXT || Opc == TargetOpcode::G_SEXT) &&
+        MRI.getType(Def->getOperand(1).getReg()) == LLT::scalar(8)) {
+      if (Extension && Extension != Opc)
+        return false;
+      Extension = Opc;
+      Narrow[I] = Def->getOperand(1).getReg();
+    } else {
+      Constants[I] = getIConstantVRegVal(R, MRI);
+      if (!Constants[I])
+        return false;
+    }
+  }
+  if (!Extension)
+    return false;
+  for (const auto &C : Constants)
+    if (C && (Extension == TargetOpcode::G_ZEXT ? !C->isIntN(8)
+                                               : !C->isSignedIntN(8)))
+      return false;
+
+  Builder.setInstrAndDebugLoc(MI);
+  for (unsigned I = 0; I != 2; ++I)
+    if (Constants[I])
+      Narrow[I] = Builder.buildConstant(LLT::scalar(8), Constants[I]->trunc(8))
+                      .getReg(0);
+  auto Pred = static_cast<CmpInst::Predicate>(MI.getOperand(1).getPredicate());
+  if (Extension == TargetOpcode::G_ZEXT)
+    Pred = ICmpInst::getUnsignedPredicate(Pred);
+  Builder.buildICmp(Pred, MI.getOperand(0).getReg(), Narrow[0], Narrow[1]);
+  Observer.erasingInstr(MI);
+  MI.eraseFromParent();
+  return true;
+}
+
 bool Z80PreLegalizerCombinerImpl::tryCombineAll(MachineInstr &MI) const {
   /* Materialize the known shift count directly. The generic power-of-two
      combine introduces a CTTZ that would otherwise need a software helper. */
@@ -157,6 +211,8 @@ bool Z80PreLegalizerCombinerImpl::tryCombineAll(MachineInstr &MI) const {
       return true;
     }
   }
+  if (combineExtendedByteCompare(MI, B, Observer))
+    return true;
   if (combineByteRemainder(MI, B, Observer, STI))
     return true;
   return tryCombineAllImpl(MI);
