@@ -330,6 +330,103 @@ Z80PreLegalizerCombiner::Z80PreLegalizerCombiner(bool IsOptNone)
   initializeZ80PreLegalizerCombinerPass(*PassRegistry::getPassRegistry());
 }
 
+/// Narrow counters whose overflow ends a single-block loop within 256 steps.
+/// The counter is private to its recurrence, so its byte value and zero test
+/// preserve the iteration count, including the 256-iteration boundary case.
+static bool narrowWrappingCounters(MachineFunction &MF) {
+  auto &MRI = MF.getRegInfo();
+  bool Changed = false;
+  for (MachineBasicBlock &MBB : MF) {
+    if (MBB.succ_size() != 2 || !MBB.isSuccessor(&MBB))
+      continue;
+    auto Branch = MBB.getFirstTerminator();
+    if (Branch == MBB.end() || Branch->getOpcode() != TargetOpcode::G_BRCOND ||
+        Branch->getOperand(1).getMBB() == &MBB)
+      continue;
+    auto Backedge = std::next(Branch);
+    if (Backedge == MBB.end() || Backedge->getOpcode() != TargetOpcode::G_BR ||
+        Backedge->getOperand(0).getMBB() != &MBB)
+      continue;
+    Register Overflow = Branch->getOperand(0).getReg();
+    MachineInstr *Add = MRI.getVRegDef(Overflow);
+    if (!Add || Add->getOpcode() != TargetOpcode::G_UADDO ||
+        Add->getParent() != &MBB || !MRI.hasOneNonDBGUse(Overflow))
+      continue;
+    Register Sum = Add->getOperand(0).getReg();
+    Register Counter = Add->getOperand(2).getReg();
+    LLT Ty = MRI.getType(Counter);
+    if (!Ty.isScalar() || Ty.getSizeInBits() <= 8 || Ty.getSizeInBits() > 24)
+      continue;
+    auto Step =
+        getIConstantVRegValWithLookThrough(Add->getOperand(3).getReg(), MRI);
+    MachineInstr *Phi = MRI.getVRegDef(Counter);
+    if (!Step || !Step->Value.isOne() || !Phi ||
+        Phi->getOpcode() != TargetOpcode::G_PHI || Phi->getParent() != &MBB ||
+        Phi->getNumOperands() != 5)
+      continue;
+    unsigned LoopOp = Phi->getOperand(2).getMBB() == &MBB ? 1 : 3;
+    unsigned EntryOp = LoopOp == 1 ? 3 : 1;
+    if (Phi->getOperand(LoopOp + 1).getMBB() != &MBB ||
+        Phi->getOperand(EntryOp + 1).getMBB() == &MBB)
+      continue;
+    Register Recurrence = Phi->getOperand(LoopOp).getReg();
+    MachineInstr *Increment = MRI.getVRegDef(Recurrence);
+    if (Recurrence != Sum) {
+      if (!MRI.use_nodbg_empty(Sum) || !Increment ||
+          Increment->getOpcode() != TargetOpcode::G_ADD ||
+          Increment->getParent() != &MBB ||
+          Increment->getOperand(1).getReg() != Counter)
+        continue;
+      auto IncrementStep = getIConstantVRegValWithLookThrough(
+          Increment->getOperand(2).getReg(), MRI);
+      if (!IncrementStep || !IncrementStep->Value.isOne())
+        continue;
+    }
+    if (!MRI.hasOneNonDBGUse(Recurrence) ||
+        llvm::any_of(MRI.use_nodbg_instructions(Counter),
+                     [&](const MachineInstr &Use) {
+                       return &Use != Add && &Use != Increment;
+                     }))
+      continue;
+    auto Initial = getIConstantVRegValWithLookThrough(
+        Phi->getOperand(EntryOp).getReg(), MRI);
+    if (!Initial || !Initial->Value.isNegative() ||
+        Initial->Value.getSExtValue() < -256)
+      continue;
+
+    /* The high bits remain all ones until the terminating addition. A zero
+       byte result therefore identifies exactly the original word overflow,
+       and exposes INC's zero flag without keeping a word-sized addend live. */
+    MachineBasicBlock *Entry = Phi->getOperand(EntryOp + 1).getMBB();
+    MachineIRBuilder Builder(MF);
+    Builder.setInsertPt(*Entry, Entry->getFirstTerminator());
+    LLT Byte = LLT::scalar(8);
+    auto Start = Builder.buildConstant(Byte, Initial->Value.trunc(8));
+    auto One = Builder.buildConstant(Byte, 1);
+    auto Zero = Builder.buildConstant(Byte, 0);
+    Register NarrowCounter = MRI.createGenericVirtualRegister(Byte);
+    Register NarrowSum = MRI.createGenericVirtualRegister(Byte);
+    Builder.setInstrAndDebugLoc(*Phi);
+    Builder.buildInstr(TargetOpcode::G_PHI, {NarrowCounter}, {})
+        .addUse(NarrowSum)
+        .addMBB(&MBB)
+        .addUse(Start.getReg(0))
+        .addMBB(Entry);
+    Builder.setInstrAndDebugLoc(*Add);
+    Builder.buildAdd(NarrowSum, NarrowCounter, One);
+    Builder.buildICmp(CmpInst::ICMP_EQ, Overflow, NarrowSum, Zero);
+    MRI.markUsesInDebugValueAsUndef(Counter);
+    MRI.markUsesInDebugValueAsUndef(Sum);
+    MRI.markUsesInDebugValueAsUndef(Recurrence);
+    Phi->eraseFromParent();
+    if (Increment != Add)
+      Increment->eraseFromParent();
+    Add->eraseFromParent();
+    Changed = true;
+  }
+  return Changed;
+}
+
 bool Z80PreLegalizerCombiner::runOnMachineFunction(MachineFunction &MF) {
   if (MF.getProperties().hasFailedISel())
     return false;
@@ -340,7 +437,7 @@ bool Z80PreLegalizerCombiner::runOnMachineFunction(MachineFunction &MF) {
   bool EnableOpt =
       MF.getTarget().getOptLevel() != CodeGenOptLevel::None && !skipFunction(F);
 
-  bool Changed = false;
+  bool Changed = EnableOpt && narrowWrappingCounters(MF);
   // Expand extending loads into a plain load followed by an explicit extend so
   // the legalizer and instruction selector only need to handle G_LOAD.
   for (MachineBasicBlock &MBB : MF) {
@@ -394,7 +491,8 @@ bool Z80PreLegalizerCombiner::runOnMachineFunction(MachineFunction &MF) {
   Z80PreLegalizerCombinerImpl Impl(MF, CInfo, &TPC, *VT,
                                    /*CSEInfo*/ nullptr, RuleConfig, ST, MDT,
                                    LI);
-  return Changed || Impl.combineMachineInstrs();
+  Changed |= Impl.combineMachineInstrs();
+  return Changed;
 }
 
 char Z80PreLegalizerCombiner::ID = 0;
