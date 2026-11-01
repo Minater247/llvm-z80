@@ -79,3 +79,105 @@ define void @ordered(ptr %source, ptr %destination) {
   store volatile i8 %v3, ptr %d3
   ret void
 }
+
+; Integer addresses retain the same unit-update choices as pointer GEPs.
+define void @integer_forward(i16 %source, i16 %destination) {
+; CHECK-LABEL: name: integer_forward
+; CHECK: %[[IFS1:[0-9]+]]:r16 = INC16r
+; CHECK: %[[IFD1:[0-9]+]]:r16 = INC16r
+; CHECK: %[[IFS2:[0-9]+]]:r16 = INC16r %[[IFS1]]
+; CHECK: %[[IFD2:[0-9]+]]:r16 = INC16r %[[IFD1]]
+; CHECK: %[[IFS3:[0-9]+]]:r16 = INC16r %[[IFS2]]
+; CHECK: %[[IFD3:[0-9]+]]:r16 = INC16r %[[IFD2]]
+  %sp0 = inttoptr i16 %source to ptr
+  %dp0 = inttoptr i16 %destination to ptr
+  %v0 = load i8, ptr %sp0
+  store i8 %v0, ptr %dp0
+  %s1 = add i16 %source, 1
+  %d1 = add i16 %destination, 1
+  %sp1 = inttoptr i16 %s1 to ptr
+  %dp1 = inttoptr i16 %d1 to ptr
+  %v1 = load i8, ptr %sp1
+  store i8 %v1, ptr %dp1
+  %s2 = add i16 %source, 2
+  %d2 = add i16 %destination, 2
+  %sp2 = inttoptr i16 %s2 to ptr
+  %dp2 = inttoptr i16 %d2 to ptr
+  %v2 = load i8, ptr %sp2
+  store i8 %v2, ptr %dp2
+  %s3 = add i16 %source, 3
+  %d3 = add i16 %destination, 3
+  %sp3 = inttoptr i16 %s3 to ptr
+  %dp3 = inttoptr i16 %d3 to ptr
+  %v3 = load i8, ptr %sp3
+  store i8 %v3, ptr %dp3
+  ret void
+}
+
+; Integer addresses retain the same unit-update choices as pointer GEPs.
+define void @integer_backward(i16 %source, i16 %destination) {
+; CHECK-LABEL: name: integer_backward
+; CHECK: %[[IBS1:[0-9]+]]:r16 = DEC16r
+; CHECK: %[[IBD1:[0-9]+]]:r16 = DEC16r
+; CHECK: %[[IBS2:[0-9]+]]:r16 = DEC16r %[[IBS1]]
+; CHECK: %[[IBD2:[0-9]+]]:r16 = DEC16r %[[IBD1]]
+; CHECK: %[[IBS3:[0-9]+]]:r16 = DEC16r %[[IBS2]]
+; CHECK: %[[IBD3:[0-9]+]]:r16 = DEC16r %[[IBD2]]
+  %sp0 = inttoptr i16 %source to ptr
+  %dp0 = inttoptr i16 %destination to ptr
+  %v0 = load i8, ptr %sp0
+  store i8 %v0, ptr %dp0
+  %s1 = add i16 %source, -1
+  %d1 = add i16 %destination, -1
+  %sp1 = inttoptr i16 %s1 to ptr
+  %dp1 = inttoptr i16 %d1 to ptr
+  %v1 = load i8, ptr %sp1
+  store i8 %v1, ptr %dp1
+  %s2 = add i16 %source, -2
+  %d2 = add i16 %destination, -2
+  %sp2 = inttoptr i16 %s2 to ptr
+  %dp2 = inttoptr i16 %d2 to ptr
+  %v2 = load i8, ptr %sp2
+  store i8 %v2, ptr %dp2
+  %s3 = add i16 %source, -3
+  %d3 = add i16 %destination, -3
+  %sp3 = inttoptr i16 %s3 to ptr
+  %dp3 = inttoptr i16 %d3 to ptr
+  %v3 = load i8, ptr %sp3
+  store i8 %v3, ptr %dp3
+  ret void
+}
+
+; Integer addresses retain the same unit-update choices as pointer GEPs.
+define void @integer_ordered(i16 %source, i16 %destination) {
+; CHECK-LABEL: name: integer_ordered
+; CHECK: %[[IOS1:[0-9]+]]:r16 = INC16r
+; CHECK: %[[IOD1:[0-9]+]]:r16 = INC16r
+; CHECK: %[[IOS2:[0-9]+]]:r16 = INC16r %[[IOS1]]
+; CHECK: %[[IOD2:[0-9]+]]:r16 = INC16r %[[IOD1]]
+; CHECK: %[[IOS3:[0-9]+]]:r16 = INC16r %[[IOS2]]
+; CHECK: %[[IOD3:[0-9]+]]:r16 = INC16r %[[IOD2]]
+  %sp0 = inttoptr i16 %source to ptr
+  %dp0 = inttoptr i16 %destination to ptr
+  %v0 = load volatile i8, ptr %sp0
+  store volatile i8 %v0, ptr %dp0
+  %s1 = add i16 %source, 1
+  %d1 = add i16 %destination, 1
+  %sp1 = inttoptr i16 %s1 to ptr
+  %dp1 = inttoptr i16 %d1 to ptr
+  %v1 = load volatile i8, ptr %sp1
+  store volatile i8 %v1, ptr %dp1
+  %s2 = add i16 %source, 2
+  %d2 = add i16 %destination, 2
+  %sp2 = inttoptr i16 %s2 to ptr
+  %dp2 = inttoptr i16 %d2 to ptr
+  %v2 = load volatile i8, ptr %sp2
+  store volatile i8 %v2, ptr %dp2
+  %s3 = add i16 %source, 3
+  %d3 = add i16 %destination, 3
+  %sp3 = inttoptr i16 %s3 to ptr
+  %dp3 = inttoptr i16 %d3 to ptr
+  %v3 = load volatile i8, ptr %sp3
+  store volatile i8 %v3, ptr %dp3
+  ret void
+}

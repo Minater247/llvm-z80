@@ -64,6 +64,7 @@ private:
   bool selectTrunc(MachineInstr &I, MachineRegisterInfo &MRI) const;
   bool selectTruncInc(MachineInstr &I, MachineRegisterInfo &MRI) const;
   bool selectPairLoad(MachineInstr &I, MachineRegisterInfo &MRI) const;
+  bool selectConsecutiveAdd(MachineInstr &I, MachineRegisterInfo &MRI) const;
   bool selectSExt(MachineInstr &I, MachineRegisterInfo &MRI) const;
   bool selectZExt(MachineInstr &I, MachineRegisterInfo &MRI) const;
   bool selectAnyExt(MachineInstr &I, MachineRegisterInfo &MRI) const;
@@ -446,6 +447,9 @@ bool Z80InstructionSelector::select(MachineInstr &I) const {
     }
   }
 
+  if (Opc == TargetOpcode::G_ADD && selectConsecutiveAdd(I, MRI))
+    return true;
+
   if (Opc == TargetOpcode::G_LOAD && selectPairLoad(I, MRI))
     return true;
 
@@ -643,7 +647,7 @@ static Register previousCursor(MachineInstr &I, Register Base, int64_t Step,
     }
     if (!Add ||
         (Add->getOpcode() != TargetOpcode::G_PTR_ADD &&
-         (!Byte || Add->getOpcode() != TargetOpcode::G_ADD)) ||
+         Add->getOpcode() != TargetOpcode::G_ADD) ||
         Add->getOperand(1).getReg() != Base)
       continue;
     auto Offset = getIConstantVRegVal(Add->getOperand(2).getReg(), MRI);
@@ -656,6 +660,31 @@ static Register previousCursor(MachineInstr &I, Register Base, int64_t Step,
     }
   }
   return Register();
+}
+
+/// Form a unit update from an earlier adjacent integer sum in the same block.
+/// Both sums use wrapping arithmetic, including addresses represented as
+/// integers. Pointer sums use the equivalent selection in selectFrameIndexOrGep.
+bool Z80InstructionSelector::selectConsecutiveAdd(
+    MachineInstr &I, MachineRegisterInfo &MRI) const {
+  if (STI.hasEZ80Ops() ||
+      MRI.getType(I.getOperand(0).getReg()) != LLT::scalar(16))
+    return false;
+  auto Offset = getIConstantVRegVal(I.getOperand(2).getReg(), MRI);
+  if (!Offset || !Offset->isSignedIntN(8) || Offset->isZero() ||
+      Offset->isOne() || Offset->isAllOnes())
+    return false;
+  bool Inc = !Offset->isNegative();
+  Register Previous = previousCursor(I, I.getOperand(1).getReg(),
+                                    Offset->getSExtValue() + (Inc ? -1 : 1),
+                                    false, MRI);
+  if (!Previous)
+    return false;
+  I.getOperand(1).setReg(Previous);
+  I.removeOperand(2);
+  I.setDesc(TII.get(Inc ? Z80::INC16r : Z80::DEC16r));
+  I.setFlags(0);
+  return constrainSelectedInstRegOperands(I, TII, TRI, RBI);
 }
 
 bool Z80InstructionSelector::selectTruncInc(MachineInstr &I,
