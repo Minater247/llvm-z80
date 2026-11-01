@@ -214,12 +214,57 @@ Z80InstructionSelector::getRegClass(Register Reg,
   return selectRRegClass(Reg, MRI);
 }
 
+/// Find the definition behind whole-register virtual copies. Physical sources
+/// have no unique SSA definition and return nullptr.
 static MachineInstr *getDefIgnoringCopies(Register Reg,
-                                          MachineRegisterInfo &MRI) {
-  MachineInstr *Def = MRI.getVRegDef(Reg);
-  while (Def && Def->isCopy())
-    Def = MRI.getVRegDef(Def->getOperand(1).getReg());
-  return Def;
+                                         MachineRegisterInfo &MRI) {
+  while (Reg.isVirtual()) {
+    MachineInstr *Def = MRI.getVRegDef(Reg);
+    if (!Def || !Def->isCopy() || Def->getOperand(1).getSubReg())
+      return Def;
+    Reg = Def->getOperand(1).getReg();
+  }
+  return nullptr;
+}
+
+/// Identify bases needed by indexed memory accesses in MBB. Selected accesses
+/// and pending single-use field addresses or pair accesses qualify. Return false
+/// when a bounded scan cannot establish a use in the same block.
+static bool needsIndexedBase(Register Base, const MachineBasicBlock &MBB,
+                             MachineRegisterInfo &MRI) {
+  const TargetRegisterClass *RC = MRI.getRegClassOrNull(Base);
+  bool IsIndexed = RC && (Z80::I16RegClass.hasSubClassEq(RC) ||
+                         Z80::I24RegClass.hasSubClassEq(RC));
+  /* The base may have many uses in a large function. Keep selection work
+     bounded; missing an indexed use only retains an explicit field pointer. */
+  unsigned Remaining = 16;
+  for (const MachineInstr &Use : MRI.use_nodbg_instructions(Base)) {
+    if (!Remaining--)
+      break;
+    if (Use.getParent() != &MBB)
+      continue;
+    if (IsIndexed && Use.mayLoadOrStore() && !Use.isPreISelOpcode())
+      return true;
+    if (Use.getOpcode() != TargetOpcode::G_PTR_ADD)
+      continue;
+    auto Offset = getIConstantVRegVal(Use.getOperand(2).getReg(), MRI);
+    if (!Offset || Offset->isZero() || Offset->isOne() || Offset->isAllOnes() ||
+        !Offset->isSignedIntN(8))
+      continue;
+    Register Ptr = Use.getOperand(0).getReg();
+    for (const MachineInstr &Mem : MRI.use_nodbg_instructions(Ptr)) {
+      if (!Remaining--)
+        return false;
+      if (Mem.getParent() == &MBB &&
+          (Mem.getOpcode() == TargetOpcode::G_LOAD ||
+           Mem.getOpcode() == TargetOpcode::G_STORE) &&
+          Mem.getOperand(1).getReg() == Ptr &&
+          (MRI.hasOneNonDBGUse(Ptr) ||
+           MRI.getType(Mem.getOperand(0).getReg()).getSizeInBits() != 8))
+        return true;
+    }
+  }
+  return false;
 }
 
 static int64_t getSubRegIndex(unsigned Width, unsigned Off = 0) {
@@ -1021,9 +1066,25 @@ bool Z80InstructionSelector::selectLoadStore(MachineInstr &I,
             *PtrMI, PtrMI->getOperand(1).getReg(),
             Step->getSExtValue() + (Step->isNegative() ? 1 : -1), false, MRI));
     }
-  const bool PreferRegPtrFor8 = (Ty.getSizeInBits() == 8) &&
-                               (!MRI.hasOneUse(PtrReg) || UnitStep) &&
-                               !IsConstantPtr;
+  bool PreferRegPtrFor8 = (Ty.getSizeInBits() == 8) &&
+                         (!MRI.hasOneUse(PtrReg) || UnitStep) &&
+                         !IsConstantPtr;
+  if (PreferRegPtrFor8 && !UnitStep && !STI.hasEZ80Ops() && PtrMI &&
+      !MRI.getRegClassOrNull(PtrReg) &&
+      PtrMI->getOpcode() == TargetOpcode::G_PTR_ADD)
+    if (auto Offset = getIConstantVRegVal(PtrMI->getOperand(2).getReg(), MRI)) {
+      Register BaseReg = PtrMI->getOperand(1).getReg();
+      const MachineInstr *Base = getDefIgnoringCopies(BaseReg, MRI);
+      /* Reuse a base already needed for indexed accesses in this block. An
+         indexed use in another block does not make bringing the base into an
+         index register here free. Retain frame-derived pointers, which can use
+         HL for repeated stack accesses, and pointers already selected for an
+         explicit access. eZ80 can instead materialize field pointers with LEA. */
+      if ((!Base || Base->getOpcode() != TargetOpcode::G_FRAME_INDEX) &&
+          Offset->isSignedIntN(8) && !Offset->isZero() && !Offset->isOne() &&
+          !Offset->isAllOnes() && needsIndexedBase(BaseReg, *I.getParent(), MRI))
+        PreferRegPtrFor8 = false;
+    }
 
   bool RMWOrdered = false;
   SmallVector<unsigned, 3> RMWOps;
