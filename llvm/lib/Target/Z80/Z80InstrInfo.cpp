@@ -42,7 +42,7 @@ Z80InstrInfo::Z80InstrInfo(Z80Subtarget &STI)
                                      : Z80::ADJCALLSTACKDOWN16),
                       (STI.is24Bit() ? Z80::ADJCALLSTACKUP24
                                      : Z80::ADJCALLSTACKUP16)),
-      Subtarget(STI), RI(STI.getTargetTriple()) {
+      Subtarget(STI), RI(STI.getTargetTriple(), STI) {
 }
 
 int Z80InstrInfo::getSPAdjust(const MachineInstr &MI) const {

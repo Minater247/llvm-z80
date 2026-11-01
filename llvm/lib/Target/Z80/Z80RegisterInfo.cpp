@@ -29,11 +29,17 @@ using namespace llvm;
 #define GET_REGINFO_TARGET_DESC
 #include "Z80GenRegisterInfo.inc"
 
-Z80RegisterInfo::Z80RegisterInfo(const Triple &TT)
-    : Z80GenRegisterInfo(0, 0, 0, Z80::PC) {
+Z80RegisterInfo::Z80RegisterInfo(const Triple &TT, const Z80Subtarget &ST)
+    : Z80GenRegisterInfo(0, 0, 0, Z80::PC), ST(ST) {
   // Cache some information.
   Is24Bit = !TT.isArch16Bit() && TT.getEnvironment() != Triple::CODE16;
   StackPtr = Is24Bit ? Z80::SPL : Z80::SPS;
+}
+
+float Z80RegisterInfo::getSpillWeightScaleFactor(
+    const TargetRegisterClass *RC) const {
+  // Z80 pair spills expand into byte accesses; eZ80 can access a whole pair.
+  return ST.hasEZ80Ops() ? 1.0F : getRegSizeInBits(*RC) / 8.0F;
 }
 
 ArrayRef<MCPhysReg> Z80RegisterInfo::getIntraCallClobberedRegs(

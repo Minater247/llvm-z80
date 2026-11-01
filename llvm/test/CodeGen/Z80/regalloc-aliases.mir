@@ -10,11 +10,11 @@
 # All four values are simultaneously live: byte assignments must not alias
 # either pair. Also exercise functions with no live intervals.
 # CHECK-LABEL: name: pair_byte_aliases
-# CHECK: $bc = LD16ri 1234
-# CHECK-NEXT: $e = LD8ri 7
+# CHECK: $de = LD16ri 1234
+# CHECK-NEXT: $c = LD8ri 7
 # CHECK-NEXT: $a = LD8ri 8
 # CHECK-NEXT: $hl = LD16ri 5678
-# CHECK: KILL killed $bc, killed $e, killed $a, killed $hl
+# CHECK: KILL killed $de, killed $c, killed $a, killed $hl
 # CHECK-LABEL: name: empty
 # CHECK: RET16
 --- |

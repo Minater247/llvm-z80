@@ -21,8 +21,10 @@
 
 namespace llvm {
 class Triple;
+class Z80Subtarget;
 
 class Z80RegisterInfo final : public Z80GenRegisterInfo {
+  const Z80Subtarget &ST;
   /// Is24bit - Is the target 24-bits.
   ///
   bool Is24Bit;
@@ -32,7 +34,10 @@ class Z80RegisterInfo final : public Z80GenRegisterInfo {
   Register StackPtr;
 
 public:
-  Z80RegisterInfo(const Triple &TT);
+  Z80RegisterInfo(const Triple &TT, const Z80Subtarget &ST);
+
+  /// Scale spill weights by the number of memory accesses for the class.
+  float getSpillWeightScaleFactor(const TargetRegisterClass *RC) const override;
 
   /// Code Generation virtual methods...
   ///
