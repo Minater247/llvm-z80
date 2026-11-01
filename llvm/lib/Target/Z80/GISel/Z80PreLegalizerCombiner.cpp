@@ -427,6 +427,39 @@ static bool narrowWrappingCounters(MachineFunction &MF) {
   return Changed;
 }
 
+/// Express a byte increment's overflow branch as a test for a zero result.
+/// Preserve the sum and the wraparound outcome for every input byte.
+static bool combineByteIncrementBranch(MachineInstr &MI,
+                                       MachineRegisterInfo &MRI) {
+  if (MI.getOpcode() != TargetOpcode::G_UADDO ||
+      MRI.getType(MI.getOperand(0).getReg()) != LLT::scalar(8))
+    return false;
+  Register Overflow = MI.getOperand(1).getReg();
+  if (!MRI.hasOneNonDBGUse(Overflow) ||
+      MRI.use_nodbg_begin(Overflow)->getParent()->getOpcode() !=
+          TargetOpcode::G_BRCOND)
+    return false;
+  Register Value = MI.getOperand(2).getReg();
+  Register Step = MI.getOperand(3).getReg();
+  auto Constant = getIConstantVRegValWithLookThrough(Step, MRI);
+  if (!Constant || !Constant->Value.isOne()) {
+    std::swap(Value, Step);
+    Constant = getIConstantVRegValWithLookThrough(Step, MRI);
+    if (!Constant || !Constant->Value.isOne())
+      return false;
+  }
+
+  /* INC provides this zero flag in any byte register. An unsigned add's
+     carry flag would instead constrain the increment to the accumulator. */
+  MachineIRBuilder Builder(MI);
+  Register Sum = MI.getOperand(0).getReg();
+  Builder.buildAdd(Sum, Value, Step);
+  auto Zero = Builder.buildConstant(LLT::scalar(8), 0);
+  Builder.buildICmp(CmpInst::ICMP_EQ, Overflow, Sum, Zero);
+  MI.eraseFromParent();
+  return true;
+}
+
 bool Z80PreLegalizerCombiner::runOnMachineFunction(MachineFunction &MF) {
   if (MF.getProperties().hasFailedISel())
     return false;
@@ -444,6 +477,10 @@ bool Z80PreLegalizerCombiner::runOnMachineFunction(MachineFunction &MF) {
     for (auto It = MBB.begin(), End = MBB.end(); It != End;) {
       MachineInstr &MI = *It++;
       unsigned Opc = MI.getOpcode();
+      if (EnableOpt && combineByteIncrementBranch(MI, MRI)) {
+        Changed = true;
+        continue;
+      }
       if (Opc != TargetOpcode::G_ZEXTLOAD && Opc != TargetOpcode::G_SEXTLOAD)
         continue;
 
