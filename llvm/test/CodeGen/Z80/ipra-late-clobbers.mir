@@ -1,0 +1,64 @@
+# RUN: llc -mattr=+alternate-regs -run-pass=RegUsageInfoCollector -print-regusage %s -o /dev/null 2>&1 | FileCheck %s
+--- |
+  target triple = "z80"
+  define void @plain() { ret void }
+  define void @stream() "z80-expnoints" { ret void }
+  define void @bank_load() { ret void }
+  define void @bank_store() { ret void }
+  define void @byte_store() { ret void }
+  define void @caller() {
+    call void @plain()
+    call void @stream()
+    call void @bank_load()
+    call void @bank_store()
+    call void @byte_store()
+    ret void
+  }
+...
+---
+name: plain
+tracksRegLiveness: true
+# CHECK-DAG: plain Clobbered Registers: $a $af $f $sps {{$}}
+body: |
+  bb.0:
+    RET16 implicit-def $sps, implicit $sps
+...
+---
+name: stream
+tracksRegLiveness: true
+# CHECK-DAG: stream Clobbered Registers: $a $af $f $hl $l $sps $uhl {{$}}
+body: |
+  bb.0:
+    RET16 implicit-def $sps, implicit $sps
+...
+---
+name: bank_load
+tracksRegLiveness: true
+# CHECK-DAG: bank_load Clobbered Registers: $a $af $af_alt $a_alt $d $de $e $f $f_alt $sps $ude {{$}}
+body: |
+  bb.0:
+    liveins: $hl_alt
+    $de = ALT_LOAD16 $hl_alt
+    RET16 implicit-def $sps, implicit $sps, implicit $de
+...
+---
+name: bank_store
+tracksRegLiveness: true
+# CHECK-DAG: bank_store Clobbered Registers: $a $af $f $hl_alt $sps $uhl_alt {{$}}
+body: |
+  bb.0:
+    liveins: $de
+    $hl_alt = ALT_SAVE16 $de
+    RET16 implicit-def $sps, implicit $sps, implicit $hl_alt
+...
+---
+name: byte_store
+tracksRegLiveness: true
+# Saving A through POP AF also writes the alternate flags.
+# CHECK-DAG: byte_store Clobbered Registers: $a $af $af_alt $a_alt $f $f_alt $sps {{$}}
+body: |
+  bb.0:
+    liveins: $a
+    $a_alt = ALT_SAVE8 $a
+    RET16 implicit-def $sps, implicit $sps, implicit $a_alt
+...

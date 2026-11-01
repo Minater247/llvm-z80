@@ -7,6 +7,11 @@
 ; RUN: %python %S/Inputs/regalloc-sound.py %t.greedy.s
 ; RUN: llc -regalloc=greedy -mattr=+alternate-regs -verify-machineinstrs %s -o %t.greedy-bank.s
 ; RUN: %python %S/Inputs/regalloc-sound.py %t.greedy-bank.s --max-ring-cycles 218 --max-mix-cycles 472
+; RUN: %python -c "import sys; print(open(sys.argv[1]).read().replace('nofree norecurse', 'nofree norecurse optsize'))" %s > %t.size.ll
+; RUN: llc -mattr=+alternate-regs -verify-machineinstrs %t.size.ll -o %t.size.s
+; RUN: %python %S/Inputs/regalloc-sound.py %t.size.s --max-ring-cycles 131 --max-mix-cycles 438
+; RUN: llc -regalloc=greedy -mattr=+alternate-regs -verify-machineinstrs %t.size.ll -o %t.size-greedy.s
+; RUN: %python %S/Inputs/regalloc-sound.py %t.size-greedy.s --max-ring-cycles 218 --max-mix-cycles 472
 
 target triple = "z80"
 

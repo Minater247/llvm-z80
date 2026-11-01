@@ -21,10 +21,12 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/CodeGen/LiveRegUnits.h"
+#include "llvm/CodeGen/LiveStacks.h"
 #include "llvm/CodeGen/MachineBlockFrequencyInfo.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
+#include "llvm/CodeGen/SlotIndexes.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/InitializePasses.h"
@@ -101,6 +103,8 @@ public:
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.setPreservesCFG();
     AU.addRequired<MachineBlockFrequencyInfoWrapperPass>();
+    AU.addPreserved<LiveStacksWrapperLegacy>();
+    AU.addPreserved<SlotIndexesWrapperPass>();
     MachineFunctionPass::getAnalysisUsage(AU);
   }
   bool runOnMachineFunction(MachineFunction &MF) override;
@@ -217,6 +221,56 @@ bool Z80AlternateRegAllocator::runOnMachineFunction(MachineFunction &MF) {
       S.Saving += Weight * saving(Accesses.back(), S.Width, Bytes);
     }
 
+  struct CursorRegion {
+    unsigned Slot;
+    MCRegister Pair, Byte;
+    bool LoadByte;
+    double Weight;
+  };
+  DenseMap<const MachineInstr *, CursorRegion> CursorRegions;
+  if (ST.is16Bit() && MF.getProperties().hasTracksLiveness())
+    for (const auto &A : Accesses) {
+      if (!A.Load || !Slots[A.Slot].Valid || Slots[A.Slot].Width != 2 ||
+          !Z80::G16RegClass.contains(A.Reg) || A.MI->isBundled())
+        continue;
+      auto I = std::next(A.MI->getIterator());
+      auto End = A.MI->getParent()->end();
+      if (I == End)
+        continue;
+      auto &Memory = *I++;
+      bool Read = Memory.getOpcode() == Z80::LD8ap ||
+                  Memory.getOpcode() == Z80::LD8gp;
+      bool Write = Memory.getOpcode() == Z80::LD8pa ||
+                   Memory.getOpcode() == Z80::LD8pg;
+      if ((!Read && !Write) || Memory.isBundled() ||
+          Memory.getOperand(Read ? 1 : 0).getReg() != A.Reg || I == End)
+        continue;
+      MCRegister Byte = Memory.getOperand(Read ? 0 : 1).getReg();
+      const auto &TRI = *ST.getRegisterInfo();
+      if (TRI.regsOverlap(Byte, A.Reg) ||
+          (Byte != Z80::A && !Z80::G8RegClass.contains(Byte)))
+        continue;
+      auto &Step = *I++;
+      if ((Step.getOpcode() != Z80::INC16r &&
+           Step.getOpcode() != Z80::DEC16r) || Step.isBundled() ||
+          Step.getOperand(0).getReg() != A.Reg ||
+          Step.getOperand(1).getReg() != A.Reg || I == End)
+        continue;
+      auto Found = AccessIndex.find(&*I);
+      if (Found == AccessIndex.end())
+        continue;
+      const auto &Save = Accesses[Found->second];
+      if (Save.Load || Save.Slot != A.Slot || Save.Reg != A.Reg ||
+          Save.MI->isBundled())
+        continue;
+      CursorRegions.try_emplace(
+          &*I, CursorRegion{A.Slot, A.Reg, Byte, Read,
+                            MF.getFunction().hasOptSize()
+                                ? 1.0
+                                : MBFI.getBlockFreqRelativeToEntryBlock(
+                                      A.MI->getParent())});
+    }
+
   unsigned Blocks = MF.getNumBlockIDs();
   SmallVector<BitVector, 16> In(Blocks, BitVector(N)), Out(In);
   bool Changed = true;
@@ -263,7 +317,8 @@ bool Z80AlternateRegAllocator::runOnMachineFunction(MachineFunction &MF) {
        a dead bank write still destroys a spill stored there. Call masks enter
        the same conflict calculation; unknown calls clobber every bank. */
     LiveRegUnits FixedLive(TRI);
-    if (HasFixedBanks)
+    bool TrackRegisters = HasFixedBanks || !CursorRegions.empty();
+    if (TrackRegisters)
       FixedLive.addLiveOuts(MBB);
     for (const auto &MI : reverse(MBB)) {
       bool HasMask = llvm::any_of(MI.operands(), [](const MachineOperand &MO) {
@@ -277,7 +332,28 @@ bool Z80AlternateRegAllocator::runOnMachineFunction(MachineFunction &MF) {
             FixedBanks |= bankBit(R);
       if (MI.isCall() && !HasMask)
         FixedBanks = 15;
-      if (HasFixedBanks)
+      auto Region = CursorRegions.find(&MI);
+      if (Region != CursorRegions.end()) {
+        const auto &R = Region->second;
+        bool Bridge = R.Byte != Z80::A;
+        bool ExportByte = Bridge && R.LoadByte && !FixedLive.available(R.Byte);
+        bool PreserveA = Bridge && !FixedLive.available(Z80::A);
+        bool ExportPair = !FixedLive.available(R.Pair);
+        /* Price the entire cursor interval: its bank activation replaces both
+           transfers. An independent byte crosses through A, which may need
+           preservation. Budget a stack save when AF' availability is unknown.
+           This keeps equivalent spill traffic from hiding different costs
+           for input and output cursors. */
+        unsigned Cost = (Bytes ? 2 : 8) +
+                        (unsigned(Bridge && !R.LoadByte) + ExportByte) *
+                            (Bytes ? 1 : 4) +
+                        PreserveA * (Bytes ? 2 : 21) +
+                        ExportPair * (Bytes ? 4 : 29);
+        unsigned Transfers = Bytes ? 8 : 58;
+        if (Cost < Transfers)
+          Slots[R.Slot].Saving += R.Weight * (Transfers - Cost);
+      }
+      if (TrackRegisters)
         FixedLive.stepBackward(MI);
       for (int I : Live.set_bits())
         Slots[I].UnavailableBanks |= FixedBanks;
@@ -324,6 +400,7 @@ bool Z80AlternateRegAllocator::runOnMachineFunction(MachineFunction &MF) {
     }
   }
   bool Any = false;
+  auto *Indexes = getAnalysisIfAvailable<SlotIndexesWrapperPass>();
   for (const auto &A : Accesses) {
     auto &S = Slots[A.Slot];
     if (!S.Assigned)
@@ -332,9 +409,15 @@ bool Z80AlternateRegAllocator::runOnMachineFunction(MachineFunction &MF) {
                    : S.Width == 2
                        ? (A.Load ? Z80::ALT_LOAD16 : Z80::ALT_SAVE16)
                        : (A.Load ? Z80::ALT_LOAD24 : Z80::ALT_SAVE24);
-    BuildMI(*A.MI->getParent(), A.MI, A.MI->getDebugLoc(), TII.get(Opc),
-            A.Load ? A.Reg : S.Assigned)
-        .addReg(A.Load ? S.Assigned : A.Reg);
+    auto Replacement =
+        BuildMI(*A.MI->getParent(), A.MI, A.MI->getDebugLoc(), TII.get(Opc),
+                A.Load ? A.Reg : S.Assigned)
+            .addReg(A.Load ? S.Assigned : A.Reg);
+    /* The remaining stack intervals keep their original instruction positions.
+       Coloring ignores the removed frame objects and can still merge the
+       unassigned spills using the intervals recorded during allocation. */
+    if (Indexes)
+      Indexes->getSI().replaceMachineInstrInMaps(*A.MI, *Replacement);
     A.MI->eraseFromParent();
     Any = true;
   }

@@ -4,9 +4,9 @@
 ; RUN: llc -mattr=-alternate-regs -verify-machineinstrs %s -o - | FileCheck %s --check-prefix=STACK
 ; RUN: %python %S/Inputs/alternate-calls.py llc %s %t.dir
 ;
-; Late passes can introduce AF' and primary scratch clobbers. IX and the
-; alternate pairs must remain preserved through the nested leaf calls.
-; MASK: leaf Clobbered Registers: $a $af $af_alt $a_alt $b $bc $c $d $de $e $f $f_alt $h $hl $iy $iyh $iyl $l $sps $ubc $ude $uhl $uiy
+; This leaf needs no late bank-region scratch. Its primary pairs, IX and the
+; alternate bank remain preserved through the nested calls.
+; MASK: leaf Clobbered Registers: $a $af $f $iy $iyh $iyl $sps $uiy
 ; BANK-LABEL: known:
 ; BANK: exx
 ; BANK: call middle

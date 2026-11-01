@@ -37,14 +37,37 @@ Z80RegisterInfo::Z80RegisterInfo(const Triple &TT)
 }
 
 ArrayRef<MCPhysReg> Z80RegisterInfo::getIntraCallClobberedRegs(
-    const MachineFunction *) const {
-  // IPRA collects usage before bank-region and stack-stream expansion. Those
-  // passes can introduce primary-bank scratch registers and AF' exchanges.
-  // Keep these clobbers conservative; the alternate pairs are described by
-  // ALT_SAVE pseudos, so unused pairs can still hold caller values across calls.
-  static const MCPhysReg Clobbers[] = {Z80::AF, Z80::UBC, Z80::UDE,
-                                     Z80::UHL, Z80::UIY, Z80::AF_ALT};
-  return Clobbers;
+    const MachineFunction *MF) const {
+  /* Bank regions may introduce accumulator scratch and AF' saves after IPRA
+     collects register usage. Other pair transfers preserve their scratch
+     registers; explicit operands already describe their lasting definitions.
+     Stack streaming can additionally overwrite L while installing its cursor.
+     Its IY save register is already defined by the indexed load it replaces. */
+  static const MCPhysReg AllClobbers[] = {Z80::AF, Z80::AF_ALT, Z80::L};
+  static const MCPhysReg PrimaryClobbers[] = {Z80::AF, Z80::L};
+  if (!MF)
+    return AllClobbers;
+  const auto &ST = MF->getSubtarget<Z80Subtarget>();
+  bool Stream = ST.is16Bit() && !ST.hasEZ80Ops() &&
+                (ST.expectNoInterrupts() ||
+                 MF->getFunction().hasFnAttribute("z80-expnoints"));
+  bool AlternateAF = MF->getRegInfo().isPhysRegUsed(Z80::AF_ALT, true);
+  if (ST.useAlternateRegs() && !AlternateAF)
+    for (const auto &MBB : *MF) {
+      for (const auto &MI : MBB)
+        if (MI.getOpcode() == Z80::ALT_LOAD16 ||
+            MI.getOpcode() == Z80::ALT_LOAD24) {
+          AlternateAF = true;
+          break;
+        }
+      if (AlternateAF)
+        break;
+    }
+  /* Only word-load regions can introduce an AF' save. Word stores and direct
+     bank operations preserve AF' without needing a scratch accumulator. */
+  if (AlternateAF)
+    return ArrayRef<MCPhysReg>(AllClobbers).take_front(Stream ? 3 : 2);
+  return ArrayRef<MCPhysReg>(PrimaryClobbers).take_front(Stream ? 2 : 1);
 }
 
 const TargetRegisterClass *

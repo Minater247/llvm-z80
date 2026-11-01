@@ -235,7 +235,12 @@ void Z80PassConfig::addFastRegAlloc() {
 bool Z80PassConfig::addRegAssignAndRewriteOptimized() {
   addPass(createZ80MachinePreRAOptimizationPass());
   addPass(createZ80PrepareLiveRangesPass());
-  return TargetPassConfig::addRegAssignAndRewriteOptimized();
+  bool Rewritten = TargetPassConfig::addRegAssignAndRewriteOptimized();
+  // Assign spill lifetimes to banks before stack coloring combines unrelated
+  // objects, potentially of different widths, into the same memory slot.
+  if (Rewritten)
+    addPass(createZ80AlternateRegAllocator());
+  return Rewritten;
 }
 
 FunctionPass *Z80PassConfig::createTargetRegisterAllocator(bool Optimized) {
@@ -262,7 +267,6 @@ void Z80PassConfig::addPreEmitPass2() {
 
 void Z80PassConfig::addPostRewrite() {
   TargetPassConfig::addPostRewrite();
-  addPass(createZ80AlternateRegAllocator());
   addPass(createZ80PostRewritePass());
   addPass(createZ80StaticStackPass());
   addPass(createZ80DanglingRegPass());

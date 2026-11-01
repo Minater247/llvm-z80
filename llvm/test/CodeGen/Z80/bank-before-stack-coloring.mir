@@ -1,0 +1,39 @@
+# RUN: llc -mattr=+alternate-regs -run-pass=z80-regalloc,virtregrewriter,z80-alternate-regalloc,stack-slot-coloring -verify-machineinstrs %s -o - | FileCheck %s
+# RUN: llc -mattr=+alternate-regs -debug-pass=Structure -o /dev/null %S/alternate-calls.ll 2>&1 | FileCheck %s --check-prefix=PIPELINE
+# PIPELINE: Virtual Register Rewriter
+# PIPELINE: Z80 Alternate Bank Allocator
+# PIPELINE: Stack Slot Coloring
+--- |
+  target triple = "z80"
+  declare void @external()
+  define void @different_widths() { ret void }
+...
+---
+name: different_widths
+tracksRegLiveness: true
+# A word and a byte have disjoint lifetimes. Bank allocation must see both
+# objects before coloring can reuse the word's stack storage for the byte.
+# CHECK-LABEL: name: different_widths
+# CHECK: stack: []
+# CHECK: $[[WORD:bc_alt|de_alt|hl_alt]] = ALT_SAVE16
+# CHECK: CALL16
+# CHECK: ALT_LOAD16 {{.*}}$[[WORD]]
+# CHECK: $a_alt = ALT_SAVE8
+# CHECK: CALL16
+# CHECK: ALT_LOAD8 $a_alt
+body: |
+  bb.0:
+    liveins: $bc
+    %0:r16 = COPY $bc
+    CALL16 @external, CustomRegMask($ix, $a_alt, $bc_alt, $de_alt, $hl_alt), implicit-def $sps, implicit $sps
+    $de = COPY %0
+    LD16mr 8192, $de :: (store (s16))
+    $hl = LD16ri 8194
+    %1:g8 = LD8gp $hl :: (volatile load (s8))
+    CALL16 @external, CustomRegMask($ix, $a_alt, $bc_alt, $de_alt, $hl_alt), implicit-def $sps, implicit $sps
+    $l = COPY %1
+    KILL $l
+    CALL16 @external, CustomRegMask($ix, $a_alt, $bc_alt, $de_alt, $hl_alt), implicit-def $sps, implicit $sps
+    $l = COPY %1
+    RET16 implicit-def $sps, implicit $sps, implicit $l
+...
