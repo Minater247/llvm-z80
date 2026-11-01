@@ -1,0 +1,27 @@
+# RUN: llc -run-pass=z80-register-opt -verify-machineinstrs %s -o - | FileCheck %s
+# The advanced cursor serves as an ordinary-pair addend. Keep its byte read
+# separate when fusion would require a disjoint HL/index addressing class.
+# CHECK-LABEL: name: constrained_cursor
+# CHECK: %2:g8 = LD8gp %0
+# CHECK-NEXT: %3:o16 = INC16r %0
+# CHECK-NOT: LD8_POST16
+# CHECK: RET16
+--- |
+  target triple = "z80"
+  define void @constrained_cursor() { ret void }
+...
+---
+name: constrained_cursor
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $hl, $de
+    %0:a16 = COPY $hl
+    %1:r16 = COPY $de
+    %2:g8 = LD8gp %0 :: (load (s8))
+    %3:o16 = INC16r %0
+    %4:r16 = ADD16rr %1, %3, implicit-def dead $f
+    $a = COPY %2
+    $hl = COPY %4
+    RET16 implicit-def $sps, implicit $sps, implicit $a, implicit $hl
+...

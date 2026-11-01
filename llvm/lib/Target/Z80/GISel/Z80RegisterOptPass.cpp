@@ -68,6 +68,15 @@ static bool combinePostIncrementLoads(MachineFunction &MF) {
       if (!Next.isVirtual() || Inc->getOperand(0).getSubReg() ||
           MRI.use_nodbg_empty(Next))
         continue;
+      const auto *PtrRC =
+          Opc == Z80::LD8ap ? &Z80::R16RegClass : &Z80::A16RegClass;
+      /* A later arithmetic use can constrain the advanced cursor to BC/DE.
+         Preserve separate operations when the fused addressing class cannot
+         represent either cursor; a failed constraint must not leave an
+         illegal pseudo in the function. */
+      if (!ST.getRegisterInfo()->getCommonSubClass(MRI.getRegClass(Ptr), PtrRC) ||
+          !ST.getRegisterInfo()->getCommonSubClass(MRI.getRegClass(Next), PtrRC))
+        continue;
       /* Moving a pure update after the read is legal only when none of its
          consumers precedes that read. Limit the scan to a small local region. */
       auto Scan = Inc->getIterator();
@@ -105,8 +114,6 @@ static bool combinePostIncrementLoads(MachineFunction &MF) {
       Inc->eraseFromParent();
       MRI.recomputeRegClass(Ptr);
       MRI.recomputeRegClass(Next);
-      const auto *PtrRC =
-          Opc == Z80::LD8ap ? &Z80::R16RegClass : &Z80::A16RegClass;
       MRI.constrainRegClass(Ptr, PtrRC);
       MRI.constrainRegClass(Next, PtrRC);
       Changed = true;
