@@ -185,7 +185,12 @@ Z80LegalizerInfo::Z80LegalizerInfo(const Z80Subtarget &STI,
       .minScalar(0, s64)
       .maxScalar(0, s32);
 
-  getActionDefinitionsBuilder({G_SDIV, G_UDIV, G_SREM, G_UREM})
+  getActionDefinitionsBuilder({G_UDIV, G_UREM})
+      .customFor({s8})
+      .libcallFor(LegalLibcallScalars)
+      .clampScalar(0, s8, s32);
+
+  getActionDefinitionsBuilder({G_SDIV, G_SREM})
       .libcallFor(LegalLibcallScalars)
       .clampScalar(0, s8, s32);
 
@@ -300,10 +305,12 @@ Z80LegalizerInfo::Z80LegalizerInfo(const Z80Subtarget &STI,
       .legalForCartesianProduct(LegalTypes, {s1})
       .clampScalar(0, s8, sMax);
 
-  getActionDefinitionsBuilder(
-      {G_SDIVREM, G_UDIVREM, G_ABS, G_DYN_STACKALLOC, G_SEXT_INREG, G_SMULO,
-       G_SMULH, G_UMULH, G_SMIN, G_SMAX, G_UMIN, G_UMAX, G_UADDSAT, G_USUBSAT,
-       G_SSUBSAT, G_USHLSAT, G_SSHLSAT, G_FPOWI})
+  getActionDefinitionsBuilder(G_UDIVREM).customFor({s8}).lower();
+
+  getActionDefinitionsBuilder({G_SDIVREM, G_ABS, G_DYN_STACKALLOC, G_SEXT_INREG,
+                               G_SMULO, G_SMULH, G_UMULH, G_SMIN, G_SMAX,
+                               G_UMIN, G_UMAX, G_UADDSAT, G_USUBSAT, G_SSUBSAT,
+                               G_USHLSAT, G_SSHLSAT, G_FPOWI})
       .lower();
 
   getActionDefinitionsBuilder(G_SADDSAT).legalFor({s8}).lower();
@@ -341,6 +348,11 @@ bool Z80LegalizerInfo::legalizeCustom(LegalizerHelper &Helper, MachineInstr &MI,
   default:
     // No idea what to do.
     Result = LegalizerHelper::UnableToLegalize;
+    break;
+  case G_UDIV:
+  case G_UREM:
+  case G_UDIVREM:
+    Result = legalizeByteDivision(Helper, MI, LocObserver);
     break;
   case G_ADD:
   case G_SUB:
@@ -429,6 +441,88 @@ bool Z80LegalizerInfo::legalizeCustom(LegalizerHelper &Helper, MachineInstr &MI,
   }
 
   return Result != LegalizerHelper::UnableToLegalize;
+}
+
+/// Compute an unsigned byte quotient, remainder, or both. Powers of two use
+/// shifts and masks. Other constants of at least eight use at most 32
+/// subtractions on Z80; remaining cases retain their runtime lowering.
+LegalizerHelper::LegalizeResult Z80LegalizerInfo::legalizeByteDivision(
+    LegalizerHelper &Helper, MachineInstr &MI,
+    LostDebugLocObserver &LocObserver) const {
+  auto &B = Helper.MIRBuilder;
+  auto &MRI = *B.getMRI();
+  bool IsCombined = MI.getOpcode() == G_UDIVREM;
+  bool IsRemainder = MI.getOpcode() == G_UREM;
+  Register Dst = MI.getOperand(0).getReg();
+  Register Numerator = MI.getOperand(1 + IsCombined).getReg();
+  Register Denominator = MI.getOperand(2 + IsCombined).getReg();
+  auto Divisor = getIConstantVRegValWithLookThrough(Denominator, MRI);
+  if (Divisor && Divisor->Value.isPowerOf2()) {
+    if (!IsRemainder)
+      B.buildLShr(
+          Dst, Numerator,
+          B.buildConstant(LLT::scalar(8), Divisor->Value.exactLogBase2()));
+    if (IsRemainder || IsCombined)
+      B.buildAnd(IsCombined ? MI.getOperand(1).getReg() : Dst, Numerator,
+                 B.buildConstant(LLT::scalar(8), Divisor->Value - 1));
+    Helper.Observer.erasingInstr(MI);
+    MI.eraseFromParent();
+    return LegalizerHelper::Legalized;
+  }
+  if (Subtarget.hasZ180Ops() || Subtarget.hasEZ80Ops() || !Divisor ||
+      Divisor->Value.getZExtValue() < 8)
+    return IsCombined ? Helper.lower(MI, 0, LLT::scalar(8))
+                      : Helper.libcall(MI, LocObserver);
+
+  auto &MF = B.getMF();
+  MachineBasicBlock *Head = MI.getParent();
+  MachineBasicBlock *Tail = MF.CreateMachineBasicBlock(Head->getBasicBlock());
+  MachineBasicBlock *Loop = MF.CreateMachineBasicBlock(Head->getBasicBlock());
+  MF.insert(std::next(Head->getIterator()), Loop);
+  MF.insert(std::next(Loop->getIterator()), Tail);
+  Tail->splice(Tail->end(), Head, std::next(MI.getIterator()), Head->end());
+  Tail->transferSuccessorsAndUpdatePHIs(Head);
+  Head->addSuccessor(Loop);
+  Loop->addSuccessor(Loop);
+  Loop->addSuccessor(Tail);
+
+  LLT Byte = LLT::scalar(8);
+  Register Remainder = MRI.createGenericVirtualRegister(Byte);
+  Register Difference = MRI.createGenericVirtualRegister(Byte);
+  Register Quotient = MRI.createGenericVirtualRegister(Byte);
+  Register NextQuotient = MRI.createGenericVirtualRegister(Byte);
+  /* Count the final underflowing subtraction as the last quotient increment.
+     Restoring its divisor recovers the remainder without retaining the input.
+   */
+  auto MinusOne = B.buildConstant(Byte, -1);
+  auto One = B.buildConstant(Byte, 1);
+  B.buildBr(*Loop);
+  B.setInsertPt(*Loop, Loop->end());
+  B.buildInstr(G_PHI, {Remainder}, {})
+      .addUse(Numerator)
+      .addMBB(Head)
+      .addUse(Difference)
+      .addMBB(Loop);
+  if (!IsRemainder)
+    B.buildInstr(G_PHI, {Quotient}, {})
+        .addUse(MinusOne.getReg(0))
+        .addMBB(Head)
+        .addUse(NextQuotient)
+        .addMBB(Loop);
+  if (!IsRemainder)
+    B.buildAdd(NextQuotient, Quotient, One);
+  auto Sub = B.buildUSubo(Difference, LLT::scalar(1), Remainder, Denominator);
+  B.buildBrCond(Sub.getReg(1), *Tail);
+  B.buildBr(*Loop);
+  B.setInsertPt(*Tail, Tail->begin());
+  if (IsRemainder || IsCombined)
+    B.buildAdd(IsCombined ? MI.getOperand(1).getReg() : Dst, Difference,
+               Denominator);
+  if (!IsRemainder)
+    B.buildCopy(Dst, NextQuotient);
+  Helper.Observer.erasingInstr(MI);
+  MI.eraseFromParent();
+  return LegalizerHelper::Legalized;
 }
 
 LegalizerHelper::LegalizeResult

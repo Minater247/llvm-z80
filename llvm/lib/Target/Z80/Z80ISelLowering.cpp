@@ -515,7 +515,10 @@ Z80TargetLowering::getInlineAsmMemConstraint(StringRef Constraint) const {
 }
 
 bool Z80TargetLowering::isIntDivCheap(EVT VT, AttributeList Attr) const {
-  if (VT == MVT::i16)
+  /* Reciprocal multiplication expands a byte divide to a wider software
+     multiply on the base Z80. Keep division available to its byte lowering. */
+  if (VT == MVT::i16 ||
+      (VT == MVT::i8 && !Subtarget.hasZ180Ops() && !Subtarget.hasEZ80Ops()))
     return true;
   return TargetLowering::isIntDivCheap(VT, Attr);
 }

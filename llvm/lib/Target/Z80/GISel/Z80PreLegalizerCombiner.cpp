@@ -88,6 +88,10 @@ static bool matchPageOffset(MachineInstr &MI, MachineRegisterInfo &MRI,
 static void applyPageOffset(MachineInstr &MI, MachineIRBuilder &Builder,
                             GISelChangeObserver &Observer);
 
+static bool combineByteRemainder(MachineInstr &MI, MachineIRBuilder &Builder,
+                                 GISelChangeObserver &Observer,
+                                 const Z80Subtarget &ST);
+
 class Z80PreLegalizerCombinerImpl : public Combiner {
 protected:
   const CombinerHelper Helper;
@@ -134,7 +138,75 @@ Z80PreLegalizerCombinerImpl::Z80PreLegalizerCombinerImpl(
 }
 
 bool Z80PreLegalizerCombinerImpl::tryCombineAll(MachineInstr &MI) const {
+  /* Materialize the known shift count directly. The generic power-of-two
+     combine introduces a CTTZ that would otherwise need a software helper. */
+  if (MI.getOpcode() == TargetOpcode::G_UDIV ||
+      MI.getOpcode() == TargetOpcode::G_UREM) {
+    auto D = getIConstantVRegValWithLookThrough(MI.getOperand(2).getReg(), MRI);
+    if (D && D->Value.getBitWidth() <= 64 && D->Value.isPowerOf2()) {
+      B.setInstrAndDebugLoc(MI);
+      LLT Ty = MRI.getType(MI.getOperand(0).getReg());
+      if (MI.getOpcode() == TargetOpcode::G_UDIV)
+        B.buildLShr(MI.getOperand(0).getReg(), MI.getOperand(1).getReg(),
+                    B.buildConstant(LLT::scalar(8), D->Value.exactLogBase2()));
+      else
+        B.buildAnd(MI.getOperand(0).getReg(), MI.getOperand(1).getReg(),
+                   B.buildConstant(Ty, D->Value - 1));
+      Observer.erasingInstr(MI);
+      MI.eraseFromParent();
+      return true;
+    }
+  }
+  if (combineByteRemainder(MI, B, Observer, STI))
+    return true;
   return tryCombineAllImpl(MI);
+}
+
+/// Reuse the remainder from a constant byte division for x - (x / d) * d.
+/// The division and reconstruction must share a block and identical operands.
+static bool combineByteRemainder(MachineInstr &MI, MachineIRBuilder &Builder,
+                                 GISelChangeObserver &Observer,
+                                 const Z80Subtarget &ST) {
+  if (MI.getOpcode() != TargetOpcode::G_MUL || ST.hasZ180Ops() ||
+      ST.hasEZ80Ops())
+    return false;
+  auto &MRI = *Builder.getMRI();
+  Register Product = MI.getOperand(0).getReg();
+  if (MRI.getType(Product) != LLT::scalar(8) || !MRI.hasOneNonDBGUse(Product))
+    return false;
+  MachineInstr &Sub = *MRI.use_nodbg_instructions(Product).begin();
+  if (Sub.getOpcode() != TargetOpcode::G_SUB ||
+      Sub.getOperand(2).getReg() != Product ||
+      Sub.getParent() != MI.getParent())
+    return false;
+  for (unsigned Op : {1u, 2u}) {
+    auto *Div = getDefIgnoringCopies(MI.getOperand(Op).getReg(), MRI);
+    if (!Div || Div->getOpcode() != TargetOpcode::G_UDIV ||
+        Div->getParent() != MI.getParent() ||
+        Div->getOperand(1).getReg() != Sub.getOperand(1).getReg())
+      continue;
+    auto D =
+        getIConstantVRegValWithLookThrough(Div->getOperand(2).getReg(), MRI);
+    auto M =
+        getIConstantVRegValWithLookThrough(MI.getOperand(3 - Op).getReg(), MRI);
+    if (!D || !M || D->Value != M->Value || D->Value.getZExtValue() < 8)
+      continue;
+    /* Recover the two-result operation before constant multiplication becomes
+       shifts and adds. Its loop already computes both results. */
+    Builder.setInstrAndDebugLoc(*Div);
+    Builder.buildInstr(
+        TargetOpcode::G_UDIVREM,
+        {Div->getOperand(0).getReg(), Sub.getOperand(0).getReg()},
+        {Div->getOperand(1).getReg(), Div->getOperand(2).getReg()});
+    Observer.erasingInstr(*Div);
+    Div->eraseFromParent();
+    Observer.erasingInstr(Sub);
+    Sub.eraseFromParent();
+    Observer.erasingInstr(MI);
+    MI.eraseFromParent();
+    return true;
+  }
+  return false;
 }
 
 /// Recognize byte or native-pair products that use at most four doublings and
