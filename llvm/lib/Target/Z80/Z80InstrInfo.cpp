@@ -1100,13 +1100,11 @@ void Z80InstrInfo::loadRegFromStackSlot(MachineBasicBlock &MBB,
     Opc = Z80::LD8ro;
     break;
   case 2:
-    if (!Is24Bit) {
-      Opc = Subtarget.has16BitEZ80Ops() ? Z80::LD16ro : Z80::LD88ro;
-      break;
-    }
-    TRC = &Z80::R24RegClass;
-    DstReg = TRI->getMatchingSuperReg(DstReg, Z80::sub_short, TRC);
-    LLVM_FALLTHROUGH;
+    /* Keep the destination and memory access at the spill slot's width. In
+       ADL mode the byte-pair pseudo uses a full-width address to reload exactly
+       two bytes; the spiller can supply a virtual destination at this stage. */
+    Opc = Subtarget.has16BitEZ80Ops() ? Z80::LD16ro : Z80::LD88ro;
+    break;
   case 3:
     assert(Is24Bit && "Only 24-bit should have 3 byte stack slots");
     Opc = Z80::LD24ro;
