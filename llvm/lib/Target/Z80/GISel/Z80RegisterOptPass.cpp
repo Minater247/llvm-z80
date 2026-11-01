@@ -5,6 +5,7 @@
 #include "Z80Subtarget.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
+#include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 
 #define DEBUG_TYPE "z80-register-opt"
@@ -25,6 +26,94 @@ public:
 } // end anonymous namespace
 
 Z80RegisterOptPass::Z80RegisterOptPass() : MachineFunctionPass(ID) {}
+
+/// Keep a byte load with its following unit cursor update. Each old pointer
+/// must have exactly these two uses in one block; the updated pointer may be
+/// used after the load or by successor blocks. Memory accesses remain in place.
+static bool combinePostIncrementLoads(MachineFunction &MF) {
+  const auto &ST = MF.getSubtarget<Z80Subtarget>();
+  /* The fused form currently addresses primary pairs. Separate operations
+     retain alternate-bank choices when those registers are available. */
+  if (!ST.is16Bit() || ST.hasEZ80Ops() || ST.useAlternateRegs())
+    return false;
+  auto &MRI = MF.getRegInfo();
+  const auto &TII = *ST.getInstrInfo();
+  bool Changed = false;
+  for (auto &MBB : MF) {
+    for (auto It = MBB.begin(); It != MBB.end();) {
+      MachineInstr &Load = *It++;
+      unsigned Opc = Load.getOpcode();
+      if ((Opc != Z80::LD8gp && Opc != Z80::LD8rp && Opc != Z80::LD8ap) ||
+          Load.isBundled())
+        continue;
+      Register Ptr = Load.getOperand(1).getReg();
+      if (!Ptr.isVirtual() || Load.getOperand(1).getSubReg())
+        continue;
+      MachineInstr *Inc = nullptr;
+      bool Eligible = true;
+      for (auto &Use : MRI.use_nodbg_operands(Ptr)) {
+        auto *MI = Use.getParent();
+        if (MI == &Load)
+          continue;
+        if (Inc || MI->getOpcode() != Z80::INC16r || Use.getSubReg() ||
+            MI->getParent() != &MBB || MI->isBundled()) {
+          Eligible = false;
+          break;
+        }
+        Inc = MI;
+      }
+      if (!Eligible || !Inc)
+        continue;
+      Register Next = Inc->getOperand(0).getReg();
+      if (!Next.isVirtual() || Inc->getOperand(0).getSubReg() ||
+          MRI.use_nodbg_empty(Next))
+        continue;
+      /* Moving a pure update after the read is legal only when none of its
+         consumers precedes that read. Limit the scan to a small local region. */
+      auto Scan = Inc->getIterator();
+      bool Found = false;
+      unsigned Distance = 0;
+      for (++Scan; Scan != MBB.end() && Distance++ != 32; ++Scan) {
+        if (&*Scan == &Load) {
+          Found = true;
+          break;
+        }
+        if (Scan->readsRegister(Next, ST.getRegisterInfo()))
+          break;
+      }
+      if (!Found) {
+        Scan = Load.getIterator();
+        Distance = 0;
+        for (++Scan; Scan != MBB.end() && Distance++ != 32; ++Scan)
+          if (&*Scan == Inc) {
+            Found = true;
+            break;
+          }
+      }
+      if (!Found)
+        continue;
+      Register Value = Load.getOperand(0).getReg();
+      BuildMI(MBB, Load, Load.getDebugLoc(),
+              TII.get(Opc == Z80::LD8ap ? Z80::LD8A_POST16 : Z80::LD8_POST16))
+          .addDef(Value)
+          .addDef(Next)
+          .addReg(Ptr)
+          .cloneMemRefs(Load);
+      if (It != MBB.end() && &*It == Inc)
+        ++It;
+      Load.eraseFromParent();
+      Inc->eraseFromParent();
+      MRI.recomputeRegClass(Ptr);
+      MRI.recomputeRegClass(Next);
+      const auto *PtrRC =
+          Opc == Z80::LD8ap ? &Z80::R16RegClass : &Z80::A16RegClass;
+      MRI.constrainRegClass(Ptr, PtrRC);
+      MRI.constrainRegClass(Next, PtrRC);
+      Changed = true;
+    }
+  }
+  return Changed;
+}
 
 bool Z80RegisterOptPass::runOnMachineFunction(MachineFunction &MF) {
   bool changed = false;
@@ -102,7 +191,7 @@ bool Z80RegisterOptPass::runOnMachineFunction(MachineFunction &MF) {
   // an index pair, while pure accumulator accesses can admit BC and DE.
   for (Register Address : Addresses)
     MRI.recomputeRegClass(Address);
-  return changed;
+  return combinePostIncrementLoads(MF) || changed;
 }
 
 char Z80RegisterOptPass::ID = 0;

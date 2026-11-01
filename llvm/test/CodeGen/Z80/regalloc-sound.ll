@@ -1,6 +1,6 @@
 ; Register allocation for ring-buffer and table-lookup loops.
 ; RUN: llc -verify-machineinstrs %s -o %t.s
-; RUN: %python %S/Inputs/regalloc-sound.py %t.s --max-ring-cycles 142 --max-mix-cycles 634
+; RUN: %python %S/Inputs/regalloc-sound.py %t.s --max-ring-cycles 120 --max-mix-cycles 634
 ; RUN: llc -mattr=+alternate-regs -verify-machineinstrs %s -o %t.bank.s
 ; RUN: %python %S/Inputs/regalloc-sound.py %t.bank.s --max-ring-cycles 131 --max-mix-cycles 438
 ; RUN: llc -regalloc=greedy -verify-machineinstrs %s -o %t.greedy.s

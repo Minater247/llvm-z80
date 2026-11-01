@@ -1595,6 +1595,21 @@ bool Z80InstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
     }
     break;
   }
+  case Z80::LD8_POST16:
+  case Z80::LD8A_POST16: {
+    Register Value = MI.getOperand(0).getReg();
+    Register Ptr = MI.getOperand(1).getReg();
+    auto *Load = BuildMI(MBB, MI, DL,
+                         get(Value == Z80::A ? Z80::LD8ap : Z80::LD8rp), Value)
+                     .addReg(Ptr)
+                     .cloneMemRefs(MI)
+                     .getInstr();
+    BuildMI(MBB, MI, DL, get(Z80::INC16r), Ptr).addReg(Ptr);
+    MI.eraseFromParent();
+    if (Load->getOpcode() == Z80::LD8rp)
+      expandPostRAPseudo(*Load);
+    return true;
+  }
   case Z80::LD8ro:
   case Z80::LD8rp: {
     MachineOperand &DstOp = MI.getOperand(0);

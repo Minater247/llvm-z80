@@ -157,11 +157,15 @@ unsigned extraAccessCost(const MachineInstr &MI, unsigned Operand, MCRegister P,
     if (Z80::I16RegClass.contains(P))
       return Bytes ? (LoadPair ? 3 : 5) : (LoadPair ? 40 : 61);
   }
-  bool LoadByte = Opc == Z80::LD8ro || Opc == Z80::LD8rp;
+  bool LoadByte = Opc == Z80::LD8ro || Opc == Z80::LD8rp ||
+                  Opc == Z80::LD8_POST16;
   bool StoreByte = Opc == Z80::LD8or || Opc == Z80::LD8pr;
   if (((LoadByte && Operand == 0) || (StoreByte && Operand == Last)) &&
       Z80::I8RegClass.contains(P))
     return Bytes ? 3 : 25; // Save AF, transfer through A, restore AF.
+  // The fused cursor definition and use share one address access.
+  if ((Opc == Z80::LD8_POST16 || Opc == Z80::LD8A_POST16) && Operand == 1)
+    return 0;
   // A zero-offset indexed byte access still encodes a displacement and takes
   // 19 T-states, versus 7 for (HL). The common prefix accounts for four.
   if ((MI.mayLoad() || MI.mayStore()) &&
