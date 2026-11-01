@@ -91,6 +91,11 @@ void Z80Tracker::process(MachineInstr& MI)
       } else if (!SrcRE.isSet()) {
         DstRE.def(MI, SrcRE.getReg(), *Imm);
       }
+    } else {
+      // A variable add replaces the accumulator's previous value. Retaining
+      // its old constant would incorrectly remove a later reload of that
+      // constant, even though the intervening add changed the register.
+      DstRE.reset();
     }
     return;
   } else if (MI.getOpcode() == TargetOpcode::COPY) {

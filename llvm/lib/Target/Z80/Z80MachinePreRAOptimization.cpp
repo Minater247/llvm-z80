@@ -404,6 +404,12 @@ public:
     return "Z80 Machine Pre-RA Optimization";
   }
 
+  void getAnalysisUsage(AnalysisUsage &AU) const override {
+    AU.addRequired<LiveIntervalsWrapperPass>();
+    AU.setPreservesCFG();
+    MachineFunctionPass::getAnalysisUsage(AU);
+  }
+
   bool runOnMachineFunction(MachineFunction &MF) override;
 };
 } // end anonymous namespace
@@ -414,6 +420,109 @@ bool Z80MachinePreRAOptimization::runOnMachineFunction(MachineFunction &MF) {
   const TargetRegisterInfo &TRI = *MF.getSubtarget().getRegisterInfo();
   MachineRegisterInfo &MRI = MF.getRegInfo();
   SmallSet<Register, 16> FoldAsLoadDefCandidates;
+
+  // Whole-pair updates in a terminating part of a live range need not tie
+  // together byte lanes that vary independently in the preceding loop.
+  // Give each such block its own pair; the incoming copy preserves its value.
+  auto &LIS = getAnalysis<LiveIntervalsWrapperPass>().getLIS();
+  SmallVector<std::pair<Register, MachineBasicBlock *>, 8> LocalPairs;
+  if (MF.getSubtarget<Z80Subtarget>().is16Bit())
+    for (unsigned N = 0; N != MRI.getNumVirtRegs(); ++N) {
+      Register R = Register::index2VirtReg(N);
+      if (!LIS.hasInterval(R) || MRI.reg_nodbg_empty(R) ||
+          !Z80::R16RegClass.hasSubClassEq(MRI.getRegClass(R)))
+        continue;
+      unsigned HighDefs = 0, LowDefs = 0;
+      SmallPtrSet<MachineBasicBlock *, 4> WholeDefs;
+      for (auto &MO : MRI.def_operands(R)) {
+        if (MO.getSubReg() == Z80::sub_high)
+          ++HighDefs;
+        else if (MO.getSubReg() == Z80::sub_low)
+          ++LowDefs;
+        else if (!MO.getSubReg())
+          WholeDefs.insert(MO.getParent()->getParent());
+      }
+      if (HighDefs != 1 || LowDefs < 2)
+        continue;
+      const auto &LI = LIS.getInterval(R);
+      for (auto *MBB : WholeDefs) {
+        if (LIS.isLiveOutOfMBB(LI, MBB))
+          continue;
+        // A whole incoming copy requires both lanes. Partially live inputs
+        // retain their original representation and undefined-lane semantics.
+        if (LIS.isLiveInToMBB(LI, MBB) &&
+            llvm::any_of(LI.subranges(), [&](const LiveInterval::SubRange &SR) {
+              return !LIS.isLiveInToMBB(SR, MBB);
+            }))
+          continue;
+        LocalPairs.emplace_back(R, MBB);
+      }
+    }
+  llvm::sort(LocalPairs, [](const auto &A, const auto &B) {
+    return A.first != B.first ? A.first < B.first
+                             : A.second->getNumber() < B.second->getNumber();
+  });
+  for (auto [R, MBB] : LocalPairs) {
+    Register Local = MRI.createVirtualRegister(MRI.getRegClass(R));
+    bool LiveIn = LIS.isLiveInToMBB(LIS.getInterval(R), MBB);
+    for (auto &MI : *MBB)
+      for (auto &MO : MI.operands())
+        if (MO.isReg() && MO.getReg() == R)
+          MO.setReg(Local);
+    if (LiveIn)
+      BuildMI(*MBB, MBB->begin(), DebugLoc(), TII.get(TargetOpcode::COPY), Local)
+          .addReg(R);
+    MRI.markUsesInDebugValueAsUndef(R);
+    Changed = true;
+  }
+
+  // PHI elimination and coalescing can join several constants into one range.
+  // Materialize each constant after intervening calls when its first use is
+  // later: a call need not force all the incoming values of that range to spill.
+  for (auto &MBB : MF) {
+    if (llvm::none_of(MBB, [](const MachineInstr &MI) { return MI.isCall(); }))
+      continue;
+    SmallVector<MachineInstr *, 64> Instructions;
+    SmallVector<unsigned, 4> Calls;
+    for (auto &MI : MBB) {
+      if (MI.isCall())
+        Calls.push_back(Instructions.size());
+      Instructions.push_back(&MI);
+    }
+    /* Record each register's next access in one reverse walk. Scanning ahead
+       separately for every constant repeats operand checks in large blocks,
+       especially across inline assembly with many register operands. */
+    DenseMap<Register, unsigned> NextAccess;
+    unsigned NextBarrier = Instructions.size();
+    SmallVector<std::pair<MachineInstr *, MachineInstr *>, 8> Moves;
+    for (unsigned I = Instructions.size(); I-- != 0;) {
+      auto &MI = *Instructions[I];
+      if ((MI.getOpcode() == Z80::LD8ri || MI.getOpcode() == Z80::LD16ri ||
+           MI.getOpcode() == Z80::LD24ri) &&
+          MI.getNumOperands() == 2 && MI.getOperand(1).isImm() &&
+          MI.getOperand(0).getReg().isVirtual() &&
+          !MI.getOperand(0).getSubReg() && !MI.isBundled()) {
+        Register R = MI.getOperand(0).getReg();
+        unsigned Limit = std::min(I + 65, NextBarrier);
+        auto Next = NextAccess.find(R);
+        if (Next != NextAccess.end())
+          Limit = std::min(Limit, Next->second);
+        auto Call = llvm::lower_bound(Calls, Limit);
+        if (Call != Calls.begin() && *--Call > I)
+          Moves.emplace_back(&MI, Instructions[*Call]);
+      }
+      if (MI.isTerminator() || MI.isBundled() || MI.isDebugInstr())
+        NextBarrier = I;
+      for (const auto &MO : MI.operands())
+        if (MO.isReg() && MO.getReg().isVirtual() &&
+            (MO.isDef() || MO.readsReg()))
+          NextAccess[MO.getReg()] = I;
+    }
+    for (auto [MI, Call] : llvm::reverse(Moves)) {
+      MBB.splice(std::next(Call->getIterator()), &MBB, MI->getIterator());
+      Changed = true;
+    }
+  }
 
   // Copy propagation can expose A after selection constrained a byte access
   // to HL/IX/IY. The accumulator forms also address BC and DE. Recover that
@@ -874,8 +983,11 @@ bool Z80MachinePreRAOptimization::runOnMachineFunction(MachineFunction &MF) {
 }
 
 char Z80MachinePreRAOptimization::ID = 0;
-INITIALIZE_PASS(Z80MachinePreRAOptimization, DEBUG_TYPE,
-                "Optimize Z80 machine instrs before regalloc", false, false)
+INITIALIZE_PASS_BEGIN(Z80MachinePreRAOptimization, DEBUG_TYPE,
+                      "Optimize Z80 machine instrs before regalloc", false, false)
+INITIALIZE_PASS_DEPENDENCY(LiveIntervalsWrapperPass)
+INITIALIZE_PASS_END(Z80MachinePreRAOptimization, DEBUG_TYPE,
+                    "Optimize Z80 machine instrs before regalloc", false, false)
 
 FunctionPass *llvm::createZ80MachinePreRAOptimizationPass() {
   return new Z80MachinePreRAOptimization();

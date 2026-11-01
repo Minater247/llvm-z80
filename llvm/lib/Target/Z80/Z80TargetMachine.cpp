@@ -178,7 +178,7 @@ TargetPassConfig *Z80TargetMachine::createPassConfig(PassManagerBase &PM) {
 }
 
 bool Z80PassConfig::addIRTranslator() {
-  addPass(new IRTranslator);
+  addPass(new IRTranslator(getOptLevel()));
   return false;
 }
 

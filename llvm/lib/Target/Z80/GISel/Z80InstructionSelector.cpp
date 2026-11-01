@@ -990,8 +990,17 @@ bool Z80InstructionSelector::selectLoadStore(MachineInstr &I,
   bool UnitStep = false;
   if (AddressByte && PtrMI &&
       PtrMI->getOpcode() == TargetOpcode::G_PTR_ADD)
-    if (auto Step = getIConstantVRegVal(PtrMI->getOperand(2).getReg(), MRI))
+    if (auto Step = getIConstantVRegVal(PtrMI->getOperand(2).getReg(), MRI)) {
       UnitStep = Step->isOne() || Step->isAllOnes();
+      // Consecutive accesses are commonly expressed as offsets from one base.
+      // Keep the address explicit when selection can reuse the preceding
+      // cursor with one increment, preserving primary and alternate choices.
+      if (!STI.hasEZ80Ops() && !UnitStep && !Step->isZero() &&
+          Step->isSignedIntN(8))
+        UnitStep = bool(previousCursor(
+            *PtrMI, PtrMI->getOperand(1).getReg(),
+            Step->getSExtValue() + (Step->isNegative() ? 1 : -1), false, MRI));
+    }
   const bool PreferRegPtrFor8 = (Ty.getSizeInBits() == 8) &&
                                (!MRI.hasOneUse(PtrReg) || UnitStep) &&
                                !IsConstantPtr;

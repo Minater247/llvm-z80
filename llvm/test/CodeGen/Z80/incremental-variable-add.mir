@@ -1,0 +1,25 @@
+# RUN: llc -run-pass=z80-incremental-loading -verify-machineinstrs %s -o - | FileCheck %s
+--- |
+  target triple = "z80"
+  define void @reload_base() { ret void }
+...
+---
+name: reload_base
+tracksRegLiveness: true
+# The store uses base+offset; the following use needs the original base.
+# CHECK-LABEL: name: reload_base
+# CHECK: $iy = LD16ri 4096
+# CHECK-NEXT: $iy = ADD16ao $iy, $de
+# CHECK-NEXT: LD8pg $iy, $a
+# CHECK-NEXT: $iy = LD16ri 4096
+# CHECK-NEXT: $l = LD8gp $iy
+body: |
+  bb.0:
+    liveins: $de, $a
+    $iy = LD16ri 4096
+    $iy = ADD16ao $iy, $de, implicit-def dead $f
+    LD8pg $iy, $a
+    $iy = LD16ri 4096
+    $l = LD8gp $iy
+    RET16 implicit-def $sps, implicit $sps, implicit $l
+...

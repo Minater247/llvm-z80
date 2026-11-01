@@ -2217,8 +2217,26 @@ MachineInstr *Z80InstrInfo::optimizeLoadInstr(MachineInstr &MI,
   // Check whether we can move DefMI here.
   DefMI = MRI->getUniqueVRegDef(FoldAsLoadDefReg);
   bool SawStore = false;
-  if (!DefMI || !DefMI->isSafeToMove(SawStore))
+  if (!DefMI || DefMI->getParent() != MI.getParent() ||
+      !DefMI->isSafeToMove(SawStore))
     return nullptr;
+
+  // This hook also runs after coalescing, when an address register can have
+  // several definitions. Folding must use the address value at the load,
+  // including its byte lanes, rather than a later definition of that register.
+  SmallVector<Register, 2> Inputs;
+  for (const auto &MO : DefMI->uses())
+    if (MO.isReg() && MO.readsReg())
+      Inputs.push_back(MO.getReg());
+  unsigned Distance = 0;
+  for (auto I = std::next(DefMI->getIterator()); I != MI.getIterator(); ++I) {
+    if (I == MI.getParent()->end() || ++Distance > 32 ||
+        I->isLoadFoldBarrier() ||
+        llvm::any_of(Inputs, [&](Register R) {
+          return I->modifiesRegister(R, &getRegisterInfo());
+        }))
+      return nullptr;
+  }
 
   // Folding a byte load can extend a scarce address-pair live range in place
   // of one byte. In lookup/mixing loops, keeping several such addresses alive

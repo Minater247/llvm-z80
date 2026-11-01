@@ -463,30 +463,67 @@ bool Z80RegisterAllocator::search(SmallVector<Register, 8> Regs,
   for (Register R : Regs) {
     MCRegister Original = VRM->hasPhys(R) ? VRM->getPhys(R) : MCRegister();
     Nodes.push_back({R, Original, {}});
-    if (Original)
-      Matrix->unassign(LIS->getInterval(R));
   }
+  // Leave incumbent assignments in the matrix while testing a region. Failed
+  // repairs preserve cached queries; only ranges outside this region constrain
+  // the domains. Internal conflicts are checked by the search itself.
+  auto Available = [&](Register R, MCRegister P) {
+    const auto &LI = LIS->getInterval(R);
+    if (Matrix->checkRegMaskInterference(LI, P) ||
+        Matrix->checkRegUnitInterference(LI, P))
+      return false;
+    for (MCRegUnitMaskIterator U(P, TRI); U.isValid(); ++U) {
+      const auto *Range = unitRange(LI, (*U).second);
+      if (!Range)
+        continue;
+      for (const auto *Other : Matrix->query(*Range, (*U).first).interferingVRegs())
+        if (!llvm::is_contained(Regs, Other->reg()))
+          return false;
+    }
+    return true;
+  };
   for (auto &N : Nodes) {
     if (N.Original)
       N.Domain.push_back(N.Original);
     for (MCRegister P : domain(N.R))
-      if (P != N.Original &&
-          Matrix->checkInterference(LIS->getInterval(N.R), P) ==
-              LiveRegMatrix::IK_Free)
+      if (P != N.Original && Available(N.R, P))
         N.Domain.push_back(P);
   }
+  // Propagate forced placements before building the instruction objective.
+  // A pinned range can make a repair impossible even when every individual
+  // domain is nonempty. Removing those conflicts also exposes further pins.
+  SmallVector<unsigned, 8> Pinned;
+  for (unsigned I = 0; I != Nodes.size(); ++I)
+    if (Nodes[I].Domain.size() == 1)
+      Pinned.push_back(I);
+  while (!Pinned.empty()) {
+    unsigned I = Pinned.pop_back_val();
+    if (Nodes[I].Domain.empty())
+      continue;
+    for (unsigned J = 0; J != Nodes.size(); ++J) {
+      if (I == J)
+        continue;
+      auto &D = Nodes[J].Domain;
+      unsigned OldSize = D.size();
+      llvm::erase_if(D, [&](MCRegister P) {
+        return interferes(LIS->getInterval(Nodes[I].R), Nodes[I].Domain[0],
+                          LIS->getInterval(Nodes[J].R), P, *TRI);
+      });
+      if (OldSize > 1 && D.size() == 1)
+        Pinned.push_back(J);
+    }
+  }
   // No objective construction is needed when a domain is empty, or every
-  // allocated range is pinned to its incumbent. Restore the outside state
-  // before returning; neither case spends search visits.
+  // allocated range is pinned to its incumbent. Neither case changes the
+  // matrix or spends search visits.
   if (llvm::any_of(Nodes, [](const Node &N) { return N.Domain.empty(); }) ||
       (!Pending && llvm::all_of(Nodes, [](const Node &N) {
          return N.Domain.size() == 1;
-       }))) {
-    for (const auto &N : Nodes)
-      if (N.Original)
-        Matrix->assign(LIS->getInterval(N.R), N.Original);
+       })))
     return false;
-  }
+  for (const auto &N : Nodes)
+    if (N.Original)
+      Matrix->unassign(LIS->getInterval(N.R));
   for (Register R : Regs)
     for (const MachineInstr &MI : MRI->reg_nodbg_instructions(R))
       if (!MI.isImplicitDef() && !MI.isKill() && Seen.insert(&MI).second)
