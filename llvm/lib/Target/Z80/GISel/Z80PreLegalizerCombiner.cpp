@@ -30,6 +30,7 @@
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Target/TargetMachine.h"
 
 #define DEBUG_TYPE "z80-prelegalizer-combiner"
@@ -42,6 +43,12 @@ using namespace MIPatternMatch;
 #undef GET_GICOMBINER_DEPS
 
 namespace {
+
+struct ConstantMultiply {
+  Register Src;
+  unsigned Shift;
+  bool Subtract;
+};
 
 #define GET_GICOMBINER_TYPES
 #include "Z80GenPreLegalizeGICombiner.inc"
@@ -65,6 +72,13 @@ static void applyCombineLoadStore(MachineInstr &LoadMI,
                                   MachineRegisterInfo &MRI,
                                   MachineIRBuilder &Builder,
                                   GISelChangeObserver &Observer);
+
+static bool matchConstantMultiply(MachineInstr &MI, MachineRegisterInfo &MRI,
+                                  const Z80Subtarget &ST,
+                                  ConstantMultiply &Match);
+static void applyConstantMultiply(MachineInstr &MI, MachineIRBuilder &Builder,
+                                  GISelChangeObserver &Observer,
+                                  const ConstantMultiply &Match);
 
 class Z80PreLegalizerCombinerImpl : public Combiner {
 protected:
@@ -113,6 +127,50 @@ Z80PreLegalizerCombinerImpl::Z80PreLegalizerCombinerImpl(
 
 bool Z80PreLegalizerCombinerImpl::tryCombineAll(MachineInstr &MI) const {
   return tryCombineAllImpl(MI);
+}
+
+/// Recognize byte or native-pair multiplication by a small power of two plus or
+/// minus one. These constants use at most four doublings and one add or subtract,
+/// preserving the low bits of the original modular multiplication. Hardware
+/// byte multiplication remains available on Z180 and eZ80 targets.
+static bool matchConstantMultiply(MachineInstr &MI, MachineRegisterInfo &MRI,
+                                  const Z80Subtarget &ST,
+                                  ConstantMultiply &Match) {
+  LLT Ty = MRI.getType(MI.getOperand(0).getReg());
+  if (!(Ty == LLT::scalar(8) && !ST.hasZ180Ops()) && Ty != LLT::scalar(16) &&
+      !(ST.is24Bit() && Ty == LLT::scalar(24)))
+    return false;
+  auto Factor =
+      getIConstantVRegValWithLookThrough(MI.getOperand(2).getReg(), MRI);
+  if (!Factor)
+    return false;
+  uint64_t Value = Factor->Value.getLimitedValue();
+  if (Value < 3 || Value > 17)
+    return false;
+  bool Subtract = !isPowerOf2_64(Value - 1);
+  uint64_t Power = Subtract ? Value + 1 : Value - 1;
+  if (!isPowerOf2_64(Power))
+    return false;
+  Match = {MI.getOperand(1).getReg(), Log2_64(Power), Subtract};
+  return true;
+}
+
+static void applyConstantMultiply(MachineInstr &MI, MachineIRBuilder &Builder,
+                                  GISelChangeObserver &Observer,
+                                  const ConstantMultiply &Match) {
+  Builder.setInstrAndDebugLoc(MI);
+  Register Dst = MI.getOperand(0).getReg();
+  LLT Ty = Builder.getMRI()->getType(Dst);
+  auto Amount = Builder.buildConstant(LLT::scalar(8), Match.Shift);
+  auto Shifted = Builder.buildShl(Ty, Match.Src, Amount);
+  /* The intermediate shift may wrap even when the original product has a
+     no-wrap flag. Keep the new operations modular instead of copying flags. */
+  if (Match.Subtract)
+    Builder.buildSub(Dst, Shifted, Match.Src);
+  else
+    Builder.buildAdd(Dst, Shifted, Match.Src);
+  Observer.erasingInstr(MI);
+  MI.eraseFromParent();
 }
 
 static bool matchCombineTruncShift(MachineInstr &MI, MachineRegisterInfo &MRI,

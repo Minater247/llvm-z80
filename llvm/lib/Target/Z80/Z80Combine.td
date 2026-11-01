@@ -31,10 +31,17 @@ def combine_load_store : GICombineRule<
          [{ return matchCombineLoadStore(*${mi}, MRI); }]),
   (apply [{ applyCombineLoadStore(*${mi}, MRI, B, Observer); }])>;
 
+def constant_multiply_matchdata : GIDefMatchData<"ConstantMultiply">;
+def constant_multiply : GICombineRule<
+  (defs root:$mi, constant_multiply_matchdata:$matchinfo),
+  (match (wip_match_opcode G_MUL):$mi,
+         [{ return matchConstantMultiply(*${mi}, MRI, STI, ${matchinfo}); }]),
+  (apply [{ applyConstantMultiply(*${mi}, B, Observer, ${matchinfo}); }])>;
+
 def Z80PreLegalizerCombiner
   : GICombiner<"Z80PreLegalizerCombinerImpl",
                [all_combines, combine_trunc_shift, flip_setcc_cond,
-                combine_load_store]> {
+                combine_load_store, constant_multiply]> {
   let CombineAllMethodName = "tryCombineAllImpl";
 }
 
