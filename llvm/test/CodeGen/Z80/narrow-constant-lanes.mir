@@ -12,8 +12,9 @@
 name: delay_extension
 tracksRegLiveness: true
 # CHECK-LABEL: name: delay_extension
+# CHECK-NOT: LD8ri 0
 # CHECK: [[LOW:%[0-9]+]]:g8 = LD8gp
-# CHECK: $a = LD8ap
+# CHECK-NEXT: $a = LD8ap
 # CHECK: [[PAIR:%[0-9]+]].sub_low:o16 = COPY [[LOW]]
 # CHECK-NEXT: [[PAIR]].sub_high:o16 = LD8ri 0
 # CHECK-NEXT: $hl = ADD16rr $hl, [[PAIR]]
@@ -35,6 +36,7 @@ tracksRegLiveness: true
 # Two original pairs share their constant lanes across independent definitions.
 # Both sets of low-byte components must be split using separate result lists.
 # CHECK-LABEL: name: independent_values
+# CHECK-NOT: LD8ri
 # CHECK: [[A:%[0-9]+]]:g8 = LD8gp
 # CHECK: [[B:%[0-9]+]]:g8 = LD8gp
 # CHECK: COPY [[A]]

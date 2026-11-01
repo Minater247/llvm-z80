@@ -357,6 +357,24 @@ static bool separateStableHighLanes(MachineFunction &MF) {
       MI->getOperand(1).ChangeToImmediate(*HighValue);
     }
     MRI.recomputeRegClass(High);
+    /* Rematerializing the high byte can make its original definitions and
+       their input copies dead. Remove those chains before they become tiny
+       unspillable intervals competing with live values during allocation. */
+    SmallVector<Register, 8> DeadInputs{High};
+    while (!DeadInputs.empty()) {
+      Register Dead = DeadInputs.pop_back_val();
+      if (!MRI.use_nodbg_empty(Dead))
+        continue;
+      for (MachineInstr &MI :
+           llvm::make_early_inc_range(MRI.def_instructions(Dead))) {
+        if (!MI.isDead(MRI))
+          continue;
+        for (const auto &MO : MI.uses())
+          if (MO.isReg() && MO.getReg().isVirtual())
+            DeadInputs.push_back(MO.getReg());
+        MI.eraseFromParent();
+      }
+    }
     Changed = true;
   }
   return Changed;
