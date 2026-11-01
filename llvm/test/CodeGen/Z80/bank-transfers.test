@@ -1,0 +1,1 @@
+# RUN: %python %S/Inputs/bank-transfers.py --llc llc --work %t

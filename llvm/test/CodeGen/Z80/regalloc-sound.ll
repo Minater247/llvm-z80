@@ -5,6 +5,8 @@
 ; RUN: %python %S/Inputs/regalloc-sound.py %t.bank.s --max-ring-cycles 131 --max-mix-cycles 438
 ; RUN: llc -regalloc=greedy -verify-machineinstrs %s -o %t.greedy.s
 ; RUN: %python %S/Inputs/regalloc-sound.py %t.greedy.s
+; RUN: llc -regalloc=greedy -mattr=+alternate-regs -verify-machineinstrs %s -o %t.greedy-bank.s
+; RUN: %python %S/Inputs/regalloc-sound.py %t.greedy-bank.s --max-ring-cycles 218 --max-mix-cycles 472
 
 target triple = "z80"
 

@@ -17,8 +17,9 @@ tracksRegLiveness: true
 # REGION-LABEL: name: resident_add
 # REGION: EXX16
 # REGION-NEXT: $hl = ADD16ao $hl, $bc
+# REGION-NEXT: PUSH16r $hl
 # REGION-NEXT: EXX16
-# REGION-NEXT: $de = ALT_LOAD16
+# REGION-NEXT: $de = POP16r
 body: |
   bb.0:
     liveins: $hl_alt, $bc_alt

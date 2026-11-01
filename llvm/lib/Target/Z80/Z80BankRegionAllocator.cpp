@@ -92,6 +92,7 @@ bool Z80BankRegionAllocator::runOnMachineFunction(MachineFunction &MF) {
   // a region that neither reads nor writes flags. Calls are region boundaries.
   bool FreeAF = !MF.getRegInfo().isPhysRegUsed(Z80::AF_ALT, true);
   bool Changed = false;
+  SmallPtrSet<MachineInstr *, 8> Entries, Exits;
   // Adjacent operations already allocated to the alternate bank share one
   // activation. Their operands express residency before this lowering step;
   // the late decision here only removes redundant exchanges.
@@ -122,78 +123,7 @@ bool Z80BankRegionAllocator::runOnMachineFunction(MachineFunction &MF) {
     }
     return MainOpc && mainReg(MI.getOperand(Op).getReg()) ? MainOpc : 0;
   };
-  if (!Wide)
-    for (auto &MBB : MF) {
-      SmallVector<std::pair<MachineInstr *, MachineInstr *>, 8> Groups;
-      for (auto I = MBB.begin(); I != MBB.end();) {
-        if (!BankOpcode(*I)) {
-          ++I;
-          continue;
-        }
-        MachineInstr *First = &*I, *Last = First;
-        while (++I != MBB.end() && BankOpcode(*I))
-          Last = &*I;
-        Groups.emplace_back(First, Last);
-      }
-      if (Groups.empty())
-        continue;
-      DenseMap<MachineInstr *, BitVector> After;
-      for (auto [First, Last] : Groups)
-        After.try_emplace(Last);
-      LiveRegUnits Live(TRI);
-      Live.addLiveOuts(MBB);
-      for (auto &MI : reverse(MBB)) {
-        auto Found = After.find(&MI);
-        if (Found != After.end())
-          Found->second = Live.getBitVector();
-        Live.stepBackward(MI);
-      }
-      for (auto [First, Last] : Groups) {
-        LiveRegUnits Out(TRI);
-        Out.addUnits(After.find(Last)->second);
-        LiveRegUnits In = Out;
-        auto End = std::next(Last->getIterator());
-        for (auto I = End; I != First->getIterator();)
-          In.stepBackward(*--I);
-        auto Enter =
-            BuildMI(MBB, First, First->getDebugLoc(), TII.get(Z80::EXX16));
-        for (auto &MO : Enter->operands())
-          if (MO.isReg() && MO.isUse())
-            MO.setIsUndef(true);
-        for (MCRegister R : {Z80::B, Z80::C, Z80::D, Z80::E, Z80::H, Z80::L,
-                             Z80::BC_ALT, Z80::DE_ALT, Z80::HL_ALT})
-          if (!In.available(R))
-            Enter.addReg(R, RegState::Implicit);
-        for (auto I = First->getIterator(); I != End;) {
-          auto &Operation = *I++;
-          Operation.setDesc(TII.get(BankOpcode(Operation)));
-          for (auto &MO : Operation.operands())
-            if (MO.isReg() && MO.getReg()) {
-              if (MCRegister Main = mainReg(MO.getReg()))
-                MO.setReg(Main);
-              if (MO.isUse())
-                MO.setIsKill(false);
-              else
-                MO.setIsDead(false);
-            }
-          if (Operation.getOpcode() == Z80::ADD16rr)
-            TII.expandPostRAPseudo(Operation);
-        }
-        auto Exit = BuildMI(MBB, End, Last->getDebugLoc(), TII.get(Z80::EXX16));
-        for (auto &MO : Exit->operands())
-          if (MO.isReg() && MO.isUse())
-            MO.setIsUndef(true);
-        for (MCRegister R : {Z80::BC_ALT, Z80::DE_ALT, Z80::HL_ALT}) {
-          MCRegister Main = mainReg(R);
-          if (!Out.available(R))
-            Exit.addReg(Main, RegState::Implicit);
-          if (!Out.available(Main))
-            Exit.addReg(R, RegState::Implicit);
-        }
-        ++NumBankRegions;
-        Changed = true;
-      }
-    }
+
   for (auto &MBB : MF) {
     if (llvm::none_of(MBB, [=](const MachineInstr &MI) {
           return MI.getOpcode() == Load;
@@ -202,7 +132,6 @@ bool Z80BankRegionAllocator::runOnMachineFunction(MachineFunction &MF) {
     // Only materialize liveness at potential region exits. No CFG iteration or
     // interval graph is needed; work is linear plus a bounded scan per entry.
     DenseMap<const MachineInstr *, BitVector> LiveAfter;
-    SmallPtrSet<MachineInstr *, 8> Entries, Exits;
     LiveRegUnits Live(TRI);
     Live.addLiveOuts(MBB);
     for (const auto &MI : reverse(MBB)) {
@@ -446,6 +375,133 @@ bool Z80BankRegionAllocator::runOnMachineFunction(MachineFunction &MF) {
       ++NumBankRegions;
       Changed = true;
     }
+  }
+  if (!Wide)
+    for (auto &MBB : MF) {
+      SmallVector<std::pair<MachineInstr *, MachineInstr *>, 8> Groups;
+      for (auto I = MBB.begin(); I != MBB.end();) {
+        MachineInstr *First = &*I;
+        if (I->getOpcode() == Z80::ALT_SAVE16 &&
+            std::next(I) != MBB.end() && BankOpcode(*std::next(I)))
+          ++I;
+        if (!BankOpcode(*I)) {
+          ++I;
+          continue;
+        }
+        MachineInstr *Last = &*I;
+        while (++I != MBB.end() && BankOpcode(*I))
+          Last = &*I;
+        if (I != MBB.end() && I->getOpcode() == Z80::ALT_LOAD16)
+          Last = &*I++;
+        Groups.emplace_back(First, Last);
+      }
+      if (Groups.empty())
+        continue;
+      DenseMap<MachineInstr *, BitVector> After;
+      for (auto [First, Last] : Groups)
+        After.try_emplace(Last);
+      LiveRegUnits Live(TRI);
+      Live.addLiveOuts(MBB);
+      for (auto &MI : reverse(MBB)) {
+        auto Found = After.find(&MI);
+        if (Found != After.end())
+          Found->second = Live.getBitVector();
+        Live.stepBackward(MI);
+      }
+      for (auto [First, Last] : Groups) {
+        LiveRegUnits Out(TRI);
+        Out.addUnits(After.find(Last)->second);
+        LiveRegUnits In = Out;
+        auto End = std::next(Last->getIterator());
+        for (auto I = End; I != First->getIterator();)
+          In.stepBackward(*--I);
+        auto DL = First->getDebugLoc();
+        auto CFI = [&](MachineBasicBlock::iterator At, int Offset) {
+          if (MF.needsFrameMoves() && !ST.getFrameLowering()->hasFP(MF)) {
+            unsigned Idx = MF.addFrameInst(
+                MCCFIInstruction::createAdjustCfaOffset(nullptr, Offset));
+            BuildMI(MBB, At, DL, TII.get(TargetOpcode::CFI_INSTRUCTION))
+                .addCFIIndex(Idx);
+          }
+        };
+        /* Transfers bracket the bank activation: save the primary source
+           before entering, or restore the primary destination after leaving.
+           Resident arithmetic can then share the transfer's bank switch.
+           Earlier region formation gets first choice of load/store pairs,
+           so this grouping cannot hide a cheaper resident memory access. */
+        if (First->getOpcode() == Z80::ALT_SAVE16) {
+          BuildMI(MBB, First, DL, TII.get(Z80::PUSH16r))
+              .addReg(First->getOperand(1).getReg(),
+                      getUndefRegState(First->getOperand(1).isUndef()));
+          CFI(First->getIterator(), 2);
+        }
+        MCRegister Result;
+        if (Last->getOpcode() == Z80::ALT_LOAD16) {
+          Result = Last->getOperand(0).getReg();
+          Out.removeReg(Result);
+        }
+        auto Enter = BuildMI(MBB, First, DL, TII.get(Z80::EXX16));
+        Entries.insert(Enter);
+        for (auto &MO : Enter->operands())
+          if (MO.isReg() && MO.isUse())
+            MO.setIsUndef(true);
+        for (MCRegister R : {Z80::B, Z80::C, Z80::D, Z80::E, Z80::H, Z80::L,
+                             Z80::BC_ALT, Z80::DE_ALT, Z80::HL_ALT})
+          if (!In.available(R))
+            Enter.addReg(R, RegState::Implicit);
+        for (auto I = First->getIterator(); I != End;) {
+          auto &Operation = *I++;
+          if (Operation.getOpcode() == Z80::ALT_SAVE16) {
+            BuildMI(MBB, Operation, DL, TII.get(Z80::POP16r),
+                    mainReg(Operation.getOperand(0).getReg()));
+            CFI(Operation.getIterator(), -2);
+            Operation.eraseFromParent();
+            continue;
+          }
+          if (Operation.getOpcode() == Z80::ALT_LOAD16) {
+            BuildMI(MBB, Operation, DL, TII.get(Z80::PUSH16r))
+                .addReg(mainReg(Operation.getOperand(1).getReg()),
+                        getUndefRegState(Operation.getOperand(1).isUndef()));
+            CFI(Operation.getIterator(), 2);
+            Operation.eraseFromParent();
+            continue;
+          }
+          Operation.setDesc(TII.get(BankOpcode(Operation)));
+          for (auto &MO : Operation.operands())
+            if (MO.isReg() && MO.getReg()) {
+              if (MCRegister Main = mainReg(MO.getReg()))
+                MO.setReg(Main);
+              if (MO.isUse())
+                MO.setIsKill(false);
+              else
+                MO.setIsDead(false);
+            }
+          if (Operation.getOpcode() == Z80::ADD16rr)
+            TII.expandPostRAPseudo(Operation);
+        }
+        auto Exit = BuildMI(MBB, End, DL, TII.get(Z80::EXX16));
+        Exits.insert(Exit);
+        if (Result) {
+          BuildMI(MBB, End, DL, TII.get(Z80::POP16r), Result);
+          CFI(End, -2);
+        }
+        for (auto &MO : Exit->operands())
+          if (MO.isReg() && MO.isUse())
+            MO.setIsUndef(true);
+        for (MCRegister R : {Z80::BC_ALT, Z80::DE_ALT, Z80::HL_ALT}) {
+          MCRegister Main = mainReg(R);
+          if (!Out.available(R))
+            Exit.addReg(Main, RegState::Implicit);
+          if (!Out.available(Main))
+            Exit.addReg(R, RegState::Implicit);
+        }
+        ++NumBankRegions;
+        Changed = true;
+      }
+    }
+  if (!Changed)
+    return false;
+  for (auto &MBB : MF) {
     // Independently allocated regions can share a bank activation. Unbanked
     // arithmetic between them commutes with EXX; primary-bank operands and
     // control-flow/debug/unwind boundaries end the opportunity.
