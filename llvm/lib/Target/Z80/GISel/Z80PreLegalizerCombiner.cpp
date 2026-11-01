@@ -84,9 +84,9 @@ static void applyConstantMultiply(MachineInstr &MI, MachineIRBuilder &Builder,
                                   const ConstantMultiply &Match);
 
 static bool matchPageOffset(MachineInstr &MI, MachineRegisterInfo &MRI,
-                            GISelValueTracking *VT);
+                            GISelValueTracking *VT, bool &Reverse);
 static void applyPageOffset(MachineInstr &MI, MachineIRBuilder &Builder,
-                            GISelChangeObserver &Observer);
+                            GISelChangeObserver &Observer, bool Reverse);
 
 static bool combineByteRemainder(MachineInstr &MI, MachineIRBuilder &Builder,
                                  GISelChangeObserver &Observer,
@@ -284,27 +284,41 @@ static void applyConstantMultiply(MachineInstr &MI, MachineIRBuilder &Builder,
   MI.eraseFromParent();
 }
 
-/// Recognize a page-aligned 16-bit pointer plus an unsigned byte offset.
-/// Constant offsets retain the existing increment and immediate-address forms.
+/// Recognize disjoint high and low bytes in a 16-bit pointer sum in either order.
+/// Constant low bytes retain the existing increment and immediate-address forms.
 static bool matchPageOffset(MachineInstr &MI, MachineRegisterInfo &MRI,
-                            GISelValueTracking *VT) {
+                            GISelValueTracking *VT, bool &Reverse) {
   LLT Ty = MRI.getType(MI.getOperand(0).getReg());
+  if (!VT || !Ty.isPointer() || Ty.getSizeInBits() != 16)
+    return false;
   Register Base = MI.getOperand(1).getReg();
   Register Offset = MI.getOperand(2).getReg();
-  return VT && Ty.isPointer() && Ty.getSizeInBits() == 16 &&
-         !getIConstantVRegValWithLookThrough(Offset, MRI) &&
-         VT->getKnownBits(Offset).countMinLeadingZeros() >= 8 &&
-         VT->getKnownBits(Base).countMinTrailingZeros() >= 8;
+  auto OffsetBits = VT->getKnownBits(Offset);
+  if (OffsetBits.countMinLeadingZeros() >= 8 &&
+      !getIConstantVRegValWithLookThrough(Offset, MRI) &&
+      VT->getKnownBits(Base).countMinTrailingZeros() >= 8) {
+    Reverse = false;
+    return true;
+  }
+  if (OffsetBits.countMinTrailingZeros() >= 8 &&
+      !getIConstantVRegValWithLookThrough(Base, MRI) &&
+      VT->getKnownBits(Base).countMinLeadingZeros() >= 8) {
+    Reverse = true;
+    return true;
+  }
+  return false;
 }
 
 static void applyPageOffset(MachineInstr &MI, MachineIRBuilder &Builder,
-                            GISelChangeObserver &Observer) {
+                            GISelChangeObserver &Observer, bool Reverse) {
   Builder.setInstrAndDebugLoc(MI);
   LLT Byte = LLT::scalar(8), Word = LLT::scalar(16);
   auto Base = Builder.buildPtrToInt(Word, MI.getOperand(1).getReg());
+  Register HighWord = Reverse ? MI.getOperand(2).getReg() : Base.getReg(0);
+  Register LowWord = Reverse ? Base.getReg(0) : MI.getOperand(2).getReg();
   auto Shift = Builder.buildConstant(Byte, 8);
-  auto High = Builder.buildTrunc(Byte, Builder.buildLShr(Word, Base, Shift));
-  auto Low = Builder.buildTrunc(Byte, MI.getOperand(2).getReg());
+  auto High = Builder.buildTrunc(Byte, Builder.buildLShr(Word, HighWord, Shift));
+  auto Low = Builder.buildTrunc(Byte, LowWord);
   /* The aligned base and byte index occupy disjoint lanes, so address
      formation needs copies instead of pair arithmetic and its carry flag. */
   auto Address = Builder.buildMergeValues(Word, {Low.getReg(0), High.getReg(0)});

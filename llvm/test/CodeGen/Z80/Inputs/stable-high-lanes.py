@@ -46,7 +46,25 @@ def main():
                     if not bank:
                         assert cpu.alt == alt
                     count += 1
-    print(f'{count} variable-high lane executions passed')
+                    cpu = execution.CPU(rng)
+                    cpu.put('d', high)
+                    sp, ix = cpu.sp, cpu.get('ix')
+                    cpu.run(program, entry='constant_low')
+                    assert cpu.get('hl') == high * 256 + 7 and cpu.get('a') == 7
+                    assert cpu.sp == sp + 2 and cpu.get('ix') == ix
+                    count += 1
+                    cpu = execution.CPU(rng)
+                    cpu.put('e', high)
+                    cpu.put('c', low)
+                    expected = cpu.mem[0x4000 + low]
+                    sp, ix = cpu.sp, cpu.get('ix')
+                    cpu.run(program, entry='shared_high')
+                    assert cpu.get('a') == expected
+                    assert cpu.reads.count(0x4000 + high) == (2 if high == low else 1)
+                    assert cpu.reads.count(0x4000 + low) == (2 if high == low else 1)
+                    assert cpu.sp == sp + 2 and cpu.get('ix') == ix
+                    count += 1
+    print(f'{count} independent-lane executions passed')
 
 
 if __name__ == '__main__':

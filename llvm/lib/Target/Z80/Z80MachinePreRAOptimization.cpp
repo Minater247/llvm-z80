@@ -252,11 +252,12 @@ static bool selectBankInstructions(MachineFunction &MF) {
   return changed;
 }
 
-/// Allocate independently changing byte lanes between word uses. Constant
-/// high bytes are rematerialized; other high bytes can stay in byte registers
-/// across blocks while low bytes change. Word definitions update both lanes,
-/// preserving carries and replacements. Memory operations stay in place.
-static bool separateStableHighLanes(MachineFunction &MF) {
+/// Allocate independently changing byte lanes between word uses. The selected
+/// stable lane can hold a constant or a value defined once across blocks;
+/// constants are rematerialized at their uses. Word definitions update both
+/// lanes, preserving carries and replacements. Memory operations stay in place.
+static bool separateStableLanes(MachineFunction &MF, unsigned StableSub) {
+  unsigned VariableSub = StableSub == Z80::sub_high ? Z80::sub_low : Z80::sub_high;
   if (!MF.getSubtarget<Z80Subtarget>().is16Bit())
     return false;
   auto &MRI = MF.getRegInfo();
@@ -304,20 +305,23 @@ static bool separateStableHighLanes(MachineFunction &MF) {
     if (MRI.reg_nodbg_empty(R) ||
         !Z80::R16RegClass.hasSubClassEq(MRI.getRegClass(R)))
       continue;
-    auto HighValue = Constant(Constant, R, Z80::sub_high, 0);
+    auto StableValue = Constant(Constant, R, StableSub, 0);
     bool Eligible = true, ShortUses = true, CrossBlock = false;
-    const MachineBasicBlock *HighBlock = nullptr;
-    unsigned LowDefs = 0, HighDefs = 0, FullUses = 0;
+    bool StableUses = false, MultipleUseBlocks = false;
+    const MachineBasicBlock *UseBlock = nullptr;
+    const MachineBasicBlock *StableBlock = nullptr;
+    unsigned VariableDefs = 0, StableDefs = 0, FullUses = 0;
     for (const auto &MO : MRI.def_operands(R)) {
-      if (MO.getSubReg() == Z80::sub_low)
-        ++LowDefs;
-      else if (MO.getSubReg() == Z80::sub_high) {
-        ++HighDefs;
-        HighBlock = MO.getParent()->getParent();
+      if (MO.getSubReg() == VariableSub)
+        ++VariableDefs;
+      else if (MO.getSubReg() == StableSub) {
+        ++StableDefs;
+        StableBlock = MO.getParent()->getParent();
       } else if (MO.getSubReg())
         Eligible = false;
     }
-    if (!Eligible || !LowDefs || (!HighValue && (HighDefs != 1 || LowDefs < 2)))
+    if (!Eligible || !VariableDefs ||
+        (!StableValue && (StableDefs != 1 || VariableDefs < 2)))
       continue;
     for (const auto &MO : MRI.reg_nodbg_operands(R)) {
       if (MO.getParent()->isBundled() || MO.getParent()->isInlineAsm()) {
@@ -326,11 +330,15 @@ static bool separateStableHighLanes(MachineFunction &MF) {
       }
       if (MO.isDef())
         continue;
+      StableUses |= MO.getSubReg() == StableSub;
       if (!MO.getSubReg()) {
         Eligible &= !MO.isUndef();
         ++FullUses;
-        CrossBlock |= MO.getParent()->getParent() != HighBlock;
-        if (!HighValue)
+        if (UseBlock && UseBlock != MO.getParent()->getParent())
+          MultipleUseBlocks = true;
+        UseBlock = MO.getParent()->getParent();
+        CrossBlock |= MO.getParent()->getParent() != StableBlock;
+        if (!StableValue)
           continue;
         auto I = MO.getParent()->getIterator();
         auto Begin = MO.getParent()->getParent()->begin();
@@ -343,32 +351,37 @@ static bool separateStableHighLanes(MachineFunction &MF) {
           ++Distance;
           for (const auto &Def : I->defs())
             NearbyDef |= Def.isReg() && Def.getReg() == R &&
-                         Def.getSubReg() == Z80::sub_low;
+                         Def.getSubReg() == VariableSub;
           if (NearbyDef)
             break;
         }
         ShortUses &= NearbyDef;
-      } else if (MO.getSubReg() != Z80::sub_low &&
-                 MO.getSubReg() != Z80::sub_high)
+      } else if (MO.getSubReg() != VariableSub &&
+                 MO.getSubReg() != StableSub)
         Eligible = false;
     }
     /* A nearby word use saves little live-register space, while rebuilding
-       a simple loop-carried counter would reload its constant high byte on
-       every iteration. Keep these compact pair ranges intact. A nonconstant
-       high byte pays for separation when its definition spans blocks and
-       multiple low-byte definitions and word uses share that lifetime. */
-    if (Eligible && LowDefs && FullUses &&
-        (HighValue ? (!ShortUses && !(LowDefs > 1 && FullUses == 1))
-                   : (HighDefs == 1 && LowDefs > 1 && FullUses > 1 && CrossBlock)))
-      Candidates.emplace_back(R, HighValue);
+       a simple loop-carried counter would reload its constant byte on
+       every iteration. Keep those compact pair ranges intact. Separate shared
+       constants used as individual bytes or by several blocks, where they
+       would otherwise extend pair lifetimes and inhibit rematerialization.
+       A nonconstant stable byte pays for separation when several word uses
+       share its lifetime across blocks and variable-byte definitions. */
+    bool Profitable =
+        StableValue
+            ? ((!ShortUses || MultipleUseBlocks || StableUses) &&
+               !(VariableDefs > 1 && FullUses == 1 && !StableUses))
+            : (StableDefs == 1 && VariableDefs > 1 && FullUses > 1 && CrossBlock);
+    if (Eligible && VariableDefs && FullUses && Profitable)
+      Candidates.emplace_back(R, StableValue);
   }
-  for (auto [R, HighValue] : Candidates) {
+  for (auto [R, StableValue] : Candidates) {
     const auto *RC = MRI.getRegClass(R);
-    /* Coalescing can tie one shared high byte to unrelated low-byte
+    /* Coalescing can tie one shared byte to unrelated variable-byte
        definitions. Rebuild only the pairs needed by word instructions, so
        the lanes can occupy or spill individual byte registers. */
-    Register Low = MRI.createVirtualRegister(&Z80::G8RegClass);
-    Register High = MRI.createVirtualRegister(&Z80::G8RegClass);
+    Register Variable = MRI.createVirtualRegister(&Z80::G8RegClass);
+    Register Stable = MRI.createVirtualRegister(&Z80::G8RegClass);
     SmallVector<MachineOperand *, 16> Operands;
     for (auto &MO : MRI.reg_nodbg_operands(R))
       Operands.push_back(&MO);
@@ -377,7 +390,7 @@ static bool separateStableHighLanes(MachineFunction &MF) {
     MRI.markUsesInDebugValueAsUndef(R);
     for (auto *MO : Operands) {
       if (unsigned Sub = MO->getSubReg()) {
-        MO->setReg(Sub == Z80::sub_low ? Low : High);
+        MO->setReg(Sub == VariableSub ? Variable : Stable);
         MO->setSubReg(0);
         if (MO->isDef())
           MO->setIsUndef(false);
@@ -394,18 +407,18 @@ static bool separateStableHighLanes(MachineFunction &MF) {
           if (ReadsPair) {
             BuildMI(*MI.getParent(), MI, MI.getDebugLoc(),
                     TII.get(TargetOpcode::COPY))
-                .addReg(Pair, RegState::Define | RegState::Undef, Z80::sub_low)
-                .addReg(Low);
-            if (HighValue)
+                .addReg(Pair, RegState::Define | RegState::Undef, VariableSub)
+                .addReg(Variable);
+            if (StableValue)
               BuildMI(*MI.getParent(), MI, MI.getDebugLoc(),
                       TII.get(Z80::LD8ri))
-                  .addReg(Pair, RegState::Define, Z80::sub_high)
-                  .addImm(*HighValue);
+                  .addReg(Pair, RegState::Define, StableSub)
+                  .addImm(*StableValue);
             else
               BuildMI(*MI.getParent(), MI, MI.getDebugLoc(),
                       TII.get(TargetOpcode::COPY))
-                  .addReg(Pair, RegState::Define, Z80::sub_high)
-                  .addReg(High);
+                  .addReg(Pair, RegState::Define, StableSub)
+                  .addReg(Stable);
           }
         }
         MO->setReg(Pair);
@@ -422,21 +435,21 @@ static bool separateStableHighLanes(MachineFunction &MF) {
       auto Insert = std::next(MI->getIterator());
       Register Pair = Pairs[MI];
       BuildMI(*MI->getParent(), Insert, MI->getDebugLoc(),
-              TII.get(TargetOpcode::COPY), Low)
-          .addReg(Pair, 0, Z80::sub_low);
+              TII.get(TargetOpcode::COPY), Variable)
+          .addReg(Pair, 0, VariableSub);
       BuildMI(*MI->getParent(), Insert, MI->getDebugLoc(),
-              TII.get(TargetOpcode::COPY), High)
-          .addReg(Pair, 0, Z80::sub_high);
+              TII.get(TargetOpcode::COPY), Stable)
+          .addReg(Pair, 0, StableSub);
     }
     /* A range may originally require an index pair for an offset load. Its
        other word uses, such as call arguments, can use ordinary pairs once
        separated. Retaining the old class would add unnecessary transfers. */
     for (const auto &Entry : Pairs)
       MRI.recomputeRegClass(Entry.second);
-    MRI.recomputeRegClass(Low);
+    MRI.recomputeRegClass(Variable);
     SmallVector<MachineInstr *, 16> ConstantCopies;
-    for (auto &MI : MRI.use_nodbg_instructions(High)) {
-      if (!HighValue || !MI.isCopy())
+    for (auto &MI : MRI.use_nodbg_instructions(Stable)) {
+      if (!StableValue || !MI.isCopy())
         continue;
       const auto &Dst = MI.getOperand(0);
       Register D = Dst.getReg();
@@ -451,13 +464,13 @@ static bool separateStableHighLanes(MachineFunction &MF) {
     }
     for (auto *MI : ConstantCopies) {
       MI->setDesc(TII.get(Z80::LD8ri));
-      MI->getOperand(1).ChangeToImmediate(*HighValue);
+      MI->getOperand(1).ChangeToImmediate(*StableValue);
     }
-    MRI.recomputeRegClass(High);
-    /* Rematerializing the high byte can make its original definitions and
+    MRI.recomputeRegClass(Stable);
+    /* Rematerializing the stable byte can make its original definitions and
        their input copies dead. Remove those chains before they become tiny
        unspillable intervals competing with live values during allocation. */
-    SmallVector<Register, 8> DeadInputs{High};
+    SmallVector<Register, 8> DeadInputs{Stable};
     while (!DeadInputs.empty()) {
       Register Dead = DeadInputs.pop_back_val();
       if (!MRI.use_nodbg_empty(Dead))
@@ -1093,7 +1106,8 @@ bool Z80MachinePreRAOptimization::runOnMachineFunction(MachineFunction &MF) {
     }
   }
 
-  Changed |= separateStableHighLanes(MF);
+  Changed |= separateStableLanes(MF, Z80::sub_high);
+  Changed |= separateStableLanes(MF, Z80::sub_low);
   return selectBankInstructions(MF) || Changed;
 }
 

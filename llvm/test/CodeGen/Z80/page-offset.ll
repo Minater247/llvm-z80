@@ -79,3 +79,58 @@ define ptr @constant_offset(i16 %base) {
   %r = getelementptr i8, ptr %p, i16 1
   ret ptr %r
 }
+
+; Code preparation may put the low byte in the pointer and the high byte in
+; the integer offset. Both operand orders have the same carry-free address.
+define ptr @reversed_address(i8 %page, i8 %index) {
+; CHECK-LABEL: reversed_address:
+; CHECK-NOT: add{{[ \t]+}}hl,
+; CHECK: ret
+  %hi = zext i8 %page to i16
+  %offset = shl i16 %hi, 8
+  %lo = zext i8 %index to i16
+  %base = inttoptr i16 %lo to ptr
+  %r = getelementptr i8, ptr %base, i16 %offset
+  ret ptr %r
+}
+
+define i8 @lookup_reversed(i8 %page, i8 %index) {
+; CHECK-LABEL: lookup_reversed:
+; CHECK-NOT: add{{[ \t]+}}hl,
+; CHECK: ret
+  %hi = zext i8 %page to i16
+  %offset = shl i16 %hi, 8
+  %lo = zext i8 %index to i16
+  %base = inttoptr i16 %lo to ptr
+  %r = getelementptr i8, ptr %base, i16 %offset
+  %v = load volatile i8, ptr %r
+  ret i8 %v
+}
+
+define ptr @reversed_unaligned(i16 %page, i16 %index) {
+  %hi = and i16 %page, -256
+  %offset = or i16 %hi, 7
+  %lo = and i16 %index, 255
+  %base = inttoptr i16 %lo to ptr
+  %r = getelementptr i8, ptr %base, i16 %offset
+  ret ptr %r
+}
+
+define ptr @reversed_signed(i8 %page, i8 %index) {
+  %hi = zext i8 %page to i16
+  %offset = shl i16 %hi, 8
+  %lo = sext i8 %index to i16
+  %base = inttoptr i16 %lo to ptr
+  %r = getelementptr i8, ptr %base, i16 %offset
+  ret ptr %r
+}
+
+define ptr @constant_page(i16 %unused, i16 %index) {
+; CHECK-LABEL: constant_page:
+; CHECK-NOT: add{{[ \t]+}}hl,
+; CHECK: ret
+  %lo = and i16 %index, 255
+  %base = inttoptr i16 %lo to ptr
+  %r = getelementptr i8, ptr %base, i16 16384
+  ret ptr %r
+}
