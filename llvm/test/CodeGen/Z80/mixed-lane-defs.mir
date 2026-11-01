@@ -1,0 +1,61 @@
+# RUN: llc -run-pass=z80-machine-prera-opt,z80-prepare-live-ranges -verify-machineinstrs %s -o - | FileCheck %s
+# RUN: %python %S/Inputs/mixed-lane-defs.py --llc llc --mir %s --work %t
+--- |
+  target triple = "z80"
+  define void @carry_between_byte_defs() { ret void }
+  define void @replace_word_between_byte_defs() { ret void }
+...
+---
+name: carry_between_byte_defs
+tracksRegLiveness: true
+# Word arithmetic updates both independently allocated lanes. Its carry must
+# survive a later low-byte assignment, including when the word wraps to zero.
+# CHECK-LABEL: name: carry_between_byte_defs
+# CHECK: [[HIGH:%[0-9]+]]:r8 = COPY $d
+# CHECK: bb.1:
+# CHECK: [[PAIR:%[0-9]+]].sub_low:r16 = COPY
+# CHECK-NEXT: [[PAIR]].sub_high:r16 = COPY [[HIGH]]
+# CHECK-NEXT: [[PAIR]]:r16 = ADD16rr
+# CHECK-NEXT: {{%[0-9]+}}:r8 = COPY [[PAIR]].sub_low
+# CHECK-NEXT: [[CARRY:%[0-9]+]]:r8 = COPY [[PAIR]].sub_high
+# CHECK: {{%[0-9]+}}.sub_high:r16 = COPY [[CARRY]]
+body: |
+  bb.0:
+    liveins: $de
+    undef %0.sub_high:r16 = COPY $d
+    %0.sub_low:r16 = COPY $e
+    JP16 %bb.1
+  bb.1:
+    liveins: $e
+    %0.sub_low:r16 = COPY $e
+    %1:o16 = LD16ri 15
+    %0:r16 = ADD16rr %0, %1, implicit-def dead $f
+    $de = COPY %0
+    %0.sub_low:r16 = LD8ri 7
+    $hl = COPY %0
+    RET16 implicit-def $sps, implicit $sps, implicit $de, implicit $hl
+...
+---
+name: replace_word_between_byte_defs
+tracksRegLiveness: true
+# A full definition supplies both lanes without reading the preceding value.
+# CHECK-LABEL: name: replace_word_between_byte_defs
+# CHECK: [[PAIR:%[0-9]+]]:r16 = LD16ri 13312
+# CHECK-NEXT: {{%[0-9]+}}:r8 = COPY [[PAIR]].sub_low
+# CHECK-NEXT: {{%[0-9]+}}:r8 = COPY [[PAIR]].sub_high
+body: |
+  bb.0:
+    liveins: $de
+    undef %0.sub_high:r16 = COPY $d
+    %0.sub_low:r16 = COPY $e
+    JP16 %bb.1
+  bb.1:
+    $de = COPY %0
+    %0:r16 = LD16ri 13312
+    %0.sub_low:r16 = LD8ri 7
+    JP16 %bb.2
+  bb.2:
+    liveins: $de
+    $hl = COPY %0
+    RET16 implicit-def $sps, implicit $sps, implicit $de, implicit $hl
+...

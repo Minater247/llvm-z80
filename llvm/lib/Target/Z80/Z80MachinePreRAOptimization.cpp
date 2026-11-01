@@ -182,9 +182,9 @@ static bool selectBankInstructions(MachineFunction &MF) {
 }
 
 /// Allocate independently changing byte lanes between word uses. Constant
-/// high bytes are rematerialized; a high byte with one definition can stay in
-/// a byte register across blocks while low bytes change. Whole definitions and
-/// opaque uses retain their original pairs. Memory operations stay in place.
+/// high bytes are rematerialized; other high bytes can stay in byte registers
+/// across blocks while low bytes change. Word definitions update both lanes,
+/// preserving carries and replacements. Memory operations stay in place.
 static bool separateStableHighLanes(MachineFunction &MF) {
   if (!MF.getSubtarget<Z80Subtarget>().is16Bit())
     return false;
@@ -243,7 +243,7 @@ static bool separateStableHighLanes(MachineFunction &MF) {
       else if (MO.getSubReg() == Z80::sub_high) {
         ++HighDefs;
         HighBlock = MO.getParent()->getParent();
-      } else
+      } else if (MO.getSubReg())
         Eligible = false;
     }
     if (!Eligible || !LowDefs || (!HighValue && (HighDefs != 1 || LowDefs < 2)))
@@ -302,6 +302,7 @@ static bool separateStableHighLanes(MachineFunction &MF) {
     for (auto &MO : MRI.reg_nodbg_operands(R))
       Operands.push_back(&MO);
     DenseMap<MachineInstr *, Register> Pairs;
+    SmallPtrSet<MachineInstr *, 4> PairDefs;
     MRI.markUsesInDebugValueAsUndef(R);
     for (auto *MO : Operands) {
       if (unsigned Sub = MO->getSubReg()) {
@@ -314,22 +315,47 @@ static bool separateStableHighLanes(MachineFunction &MF) {
         Register &Pair = Pairs[&MI];
         if (!Pair) {
           Pair = MRI.createVirtualRegister(RC);
-          BuildMI(*MI.getParent(), MI, MI.getDebugLoc(),
-                  TII.get(TargetOpcode::COPY))
-              .addReg(Pair, RegState::Define | RegState::Undef, Z80::sub_low)
-              .addReg(Low);
-          if (HighValue)
-            BuildMI(*MI.getParent(), MI, MI.getDebugLoc(), TII.get(Z80::LD8ri))
-                .addReg(Pair, RegState::Define, Z80::sub_high)
-                .addImm(*HighValue);
-          else
+          bool ReadsPair =
+              llvm::any_of(MI.operands(), [PairReg = R](const auto &Op) {
+                return Op.isReg() && Op.getReg() == PairReg && Op.isUse() &&
+                       !Op.getSubReg() && !Op.isUndef();
+              });
+          if (ReadsPair) {
             BuildMI(*MI.getParent(), MI, MI.getDebugLoc(),
                     TII.get(TargetOpcode::COPY))
-                .addReg(Pair, RegState::Define, Z80::sub_high)
-                .addReg(High);
+                .addReg(Pair, RegState::Define | RegState::Undef, Z80::sub_low)
+                .addReg(Low);
+            if (HighValue)
+              BuildMI(*MI.getParent(), MI, MI.getDebugLoc(),
+                      TII.get(Z80::LD8ri))
+                  .addReg(Pair, RegState::Define, Z80::sub_high)
+                  .addImm(*HighValue);
+            else
+              BuildMI(*MI.getParent(), MI, MI.getDebugLoc(),
+                      TII.get(TargetOpcode::COPY))
+                  .addReg(Pair, RegState::Define, Z80::sub_high)
+                  .addReg(High);
+          }
         }
         MO->setReg(Pair);
+        if (MO->isDef()) {
+          MO->setIsDead(false);
+          PairDefs.insert(&MI);
+        }
       }
+    }
+    /* A word operation may change both lanes between partial definitions.
+       Publish its result back to the independent byte ranges, including the
+       high byte when arithmetic carries out of the low byte. */
+    for (MachineInstr *MI : PairDefs) {
+      auto Insert = std::next(MI->getIterator());
+      Register Pair = Pairs[MI];
+      BuildMI(*MI->getParent(), Insert, MI->getDebugLoc(),
+              TII.get(TargetOpcode::COPY), Low)
+          .addReg(Pair, 0, Z80::sub_low);
+      BuildMI(*MI->getParent(), Insert, MI->getDebugLoc(),
+              TII.get(TargetOpcode::COPY), High)
+          .addReg(Pair, 0, Z80::sub_high);
     }
     /* A range may originally require an index pair for an offset load. Its
        other word uses, such as call arguments, can use ordinary pairs once

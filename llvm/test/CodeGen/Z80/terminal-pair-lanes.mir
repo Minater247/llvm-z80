@@ -3,8 +3,10 @@
 # RUN: llc -run-pass=z80-machine-prera-opt,z80-prepare-live-ranges,greedy,virtregrewriter -verify-machineinstrs %s -o /dev/null
 # RUN: llc -start-before=z80-machine-prera-opt -verify-machineinstrs %s -o %t.s
 # RUN: %python %S/Inputs/cursor-values.py %t.s cursor_tail
+# RUN: %python %S/Inputs/cursor-values.py %t.s live_out_pair
 # RUN: llc -start-before=z80-machine-prera-opt -regalloc=greedy -verify-machineinstrs %s -o %t.greedy.s
 # RUN: %python %S/Inputs/cursor-values.py %t.greedy.s cursor_tail
+# RUN: %python %S/Inputs/cursor-values.py %t.greedy.s live_out_pair
 --- |
   target triple = "z80"
   declare i16 @external(i16)
@@ -61,10 +63,14 @@ tracksRegLiveness: true
 # CHECK-LABEL: name: live_out_pair
 # CHECK: bb.2:
 # CHECK-NEXT: successors: %bb.3
-# CHECK: %0:r16 = INC16r %0
+# CHECK: %[[PAIR:[0-9]+]]:r16 = INC16r %[[PAIR]]
+# CHECK-NEXT: %[[LO:[0-9]+]]:r8 = COPY %[[PAIR]].sub_low
+# CHECK-NEXT: %[[HI:[0-9]+]]:r8 = COPY %[[PAIR]].sub_high
 # CHECK-NEXT: JQ %bb.3
 # CHECK: bb.3:
-# CHECK: $a = LD8ap %0
+# CHECK: undef %[[LOAD:[0-9]+]].sub_low:r16 = COPY %[[LO]]
+# CHECK-NEXT: %[[LOAD]].sub_high:r16 = COPY %[[HI]]
+# CHECK-NEXT: $a = LD8ap %[[LOAD]]
 body: |
   bb.0:
     successors: %bb.1

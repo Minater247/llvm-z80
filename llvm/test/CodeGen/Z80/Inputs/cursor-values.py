@@ -35,7 +35,7 @@ for case in range(128):
                        for i in range(3)) & 255
         calls = 0
     else:
-        assert function == 'cursor_tail'
+        assert function in ('cursor_tail', 'live_out_pair')
         calls = case % 8 + 1
         cpu.put('de', page * 256 + 256 - calls)
         expected = cpu.mem[page * 256 + 1]
@@ -44,6 +44,6 @@ for case in range(128):
     assert cpu.calls == calls and cpu.sp == 0xf002, (function, case, 'calls/SP')
     assert (cpu.r['ixh'], cpu.r['ixl']) == (initial['ixh'], initial['ixl'])
     assert cpu.writes <= set(range(0xef80, 0xf000)), (function, case, 'writes')
-    if function == 'cursor_tail':
+    if function in ('cursor_tail', 'live_out_pair'):
         assert cpu.alt == alternate
 print('Checked 128', function, 'executions')
