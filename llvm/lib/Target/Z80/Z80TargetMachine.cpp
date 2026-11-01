@@ -49,6 +49,20 @@ public:
       : BaseT(TM, F.getDataLayout()), ST(TM->getSubtargetImpl(F)),
         TLI(ST->getTargetLowering()) {}
 
+  TypeSize getRegisterBitWidth(
+      TargetTransformInfo::RegisterKind Kind) const override {
+    return TypeSize::getFixed(Kind == TargetTransformInfo::RGK_Scalar
+                                 ? (ST->is24Bit() ? 24 : 16)
+                                 : 0);
+  }
+
+  unsigned getNumberOfRegisters(unsigned ClassID) const override {
+    /* Loop transforms budget the four primary pairs available alongside the
+       usual IX frame pointer. Alternate-bank transfers are priced after
+       instruction selection, and the target has no vector registers. */
+    return ClassID == 0 ? 4 : 0;
+  }
+
   InstructionCost getArithmeticInstrCost(
       unsigned Opcode, Type *Ty, TargetTransformInfo::TargetCostKind Kind,
       TargetTransformInfo::OperandValueInfo Op1 = {},
