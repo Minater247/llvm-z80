@@ -63,6 +63,13 @@ public:
                                   const TargetSubtargetInfo *STI) {}
   explicit Z80MachineFunctionInfo(MachineFunction &MF) {}
 
+  MachineFunctionInfo *
+  clone(BumpPtrAllocator &Allocator, MachineFunction &DestMF,
+        const DenseMap<MachineBasicBlock *, MachineBasicBlock *> &Src2DstMBB)
+      const override {
+    return DestMF.cloneInfo<Z80MachineFunctionInfo>(*this);
+  }
+
   unsigned getArgFrameSize() const { return ArgFrameSize; }
   void setArgFrameSize(unsigned Bytes) { ArgFrameSize = Bytes; }
 
