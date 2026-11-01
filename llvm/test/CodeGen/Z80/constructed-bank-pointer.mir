@@ -1,0 +1,70 @@
+# RUN: llc -mattr=+alternate-regs -run-pass=z80-machine-prera-opt -verify-machineinstrs %s -o - | FileCheck %s
+# RUN: llc -mattr=+alternate-regs -start-before=z80-machine-prera-opt -verify-machineinstrs %s -o %t.s
+# RUN: %python %S/Inputs/constructed-bank-pointer.py %t.s
+# RUN: llc -mattr=+alternate-regs -regalloc=greedy -start-before=z80-machine-prera-opt -verify-machineinstrs %s -o %t.greedy.s
+# RUN: %python %S/Inputs/constructed-bank-pointer.py %t.greedy.s
+# RUN: llc -mattr=-alternate-regs -start-before=z80-machine-prera-opt -verify-machineinstrs %s -o %t.reserved.s
+# RUN: %python %S/Inputs/constructed-bank-pointer.py %t.reserved.s
+--- |
+  target triple = "z80"
+  define i8 @constructed() { ret i8 0 }
+  define i8 @byte_user() { ret i8 0 }
+  define i8 @updated_byte() { ret i8 0 }
+...
+---
+name: constructed
+tracksRegLiveness: true
+# CHECK-LABEL: name: constructed
+# CHECK: undef %[[BUILD:[0-9]+]].sub_low:r16 = COPY $e
+# CHECK: %[[BUILD]].sub_high:r16 = COPY $d
+# CHECK-NEXT: %0:b16 = COPY %[[BUILD]]
+# CHECK: BANK_LD8ap %0
+body: |
+  bb.0:
+    successors: %bb.1
+    liveins: $de, $bc, $ix
+    undef %0.sub_low:r16 = COPY $e
+    $a = LD8ri 19
+    %0.sub_high:r16 = COPY $d
+    JQ %bb.1
+  bb.1:
+    liveins: $bc, $de, $ix
+    $hl = LD16ri 42
+    $a = LD8ap %0 :: (load (s8))
+    RET16 implicit-def $sps, implicit $sps, implicit $a, implicit $hl, implicit $bc, implicit $de, implicit $ix
+...
+---
+name: byte_user
+tracksRegLiveness: true
+# CHECK-LABEL: name: byte_user
+# CHECK: undef %[[BUILD:[0-9]+]].sub_high:r16 = COPY $d
+# CHECK: %[[BUILD]].sub_low:r16 = COPY $e
+# CHECK-NEXT: %0:b16 = COPY %[[BUILD]]
+# CHECK: $c = COPY %[[BUILD]].sub_low
+body: |
+  bb.0:
+    successors: %bb.1
+    liveins: $de
+    undef %0.sub_high:r16 = COPY $d
+    %0.sub_low:r16 = COPY $e
+    JQ %bb.1
+  bb.1:
+    $a = LD8ap %0 :: (load (s8))
+    $c = COPY %0.sub_low
+    RET16 implicit-def $sps, implicit $sps, implicit $a, implicit $c
+...
+---
+name: updated_byte
+tracksRegLiveness: true
+# CHECK-LABEL: name: updated_byte
+# CHECK-NOT: :b16
+# CHECK: $a = LD8ap %0
+body: |
+  bb.0:
+    liveins: $de
+    undef %0.sub_high:r16 = COPY $d
+    %0.sub_low:r16 = COPY $e
+    %0.sub_low:r16 = INC8r %0.sub_low, implicit-def dead $f
+    $a = LD8ap %0 :: (load (s8))
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...

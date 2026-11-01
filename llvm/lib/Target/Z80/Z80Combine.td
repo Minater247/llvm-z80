@@ -38,10 +38,16 @@ def constant_multiply : GICombineRule<
          [{ return matchConstantMultiply(*${mi}, MRI, STI, ${matchinfo}); }]),
   (apply [{ applyConstantMultiply(*${mi}, B, Observer, ${matchinfo}); }])>;
 
+def page_offset : GICombineRule<
+  (defs root:$mi),
+  (match (wip_match_opcode G_PTR_ADD):$mi,
+         [{ return matchPageOffset(*${mi}, MRI, VT); }]),
+  (apply [{ applyPageOffset(*${mi}, B, Observer); }])>;
+
 def Z80PreLegalizerCombiner
   : GICombiner<"Z80PreLegalizerCombinerImpl",
                [all_combines, combine_trunc_shift, flip_setcc_cond,
-                combine_load_store, constant_multiply]> {
+                combine_load_store, constant_multiply, page_offset]> {
   let CombineAllMethodName = "tryCombineAllImpl";
 }
 

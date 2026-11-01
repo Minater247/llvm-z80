@@ -37,7 +37,7 @@ using namespace llvm;
 
 namespace {
 /// Expose whole-pair bank choices after copy coalescing and before allocation.
-/// Partial-register consumers and opaque assembly retain primary operands.
+/// Byte accesses retain primary operands; completed pairs can move to a bank.
 static bool selectBankInstructions(MachineFunction &MF) {
   bool changed = false;
   auto &MRI = MF.getRegInfo();
@@ -56,22 +56,47 @@ static bool selectBankInstructions(MachineFunction &MF) {
   // Whole-pair pointer chains can stay in either bank. Subregister consumers
   // and instructions requiring a primary pair keep their existing classes.
   SmallDenseSet<Register, 32> Bankable;
-  for (unsigned I = 0; I != MRI.getNumVirtRegs(); ++I) {
+  std::optional<MachineDominatorTree> Dominators;
+  for (unsigned I = 0, E = MRI.getNumVirtRegs(); I != E; ++I) {
     Register R = Register::index2VirtReg(I);
     if (MRI.reg_nodbg_empty(R) ||
         !Z80::R16RegClass.hasSubClassEq(MRI.getRegClass(R)))
       continue;
     bool Eligible = true, HasBankOperation = false;
-    for (const auto &MO : MRI.reg_nodbg_operands(R)) {
+    SmallVector<MachineOperand *, 2> ByteDefs;
+    SmallVector<MachineOperand *, 2> ByteUses;
+    bool WholeCopy = false;
+    bool WholeDef = false;
+    for (auto &MO : MRI.reg_nodbg_operands(R)) {
       const auto &MI = *MO.getParent();
-      if (MO.getSubReg() || MI.isBundled()) {
+      if (MI.isBundled()) {
         Eligible = false;
         break;
       }
       unsigned Opc = MI.getOpcode();
+      if (MO.getSubReg()) {
+        if (MO.isDef() &&
+            (MO.getSubReg() == Z80::sub_low ||
+             MO.getSubReg() == Z80::sub_high) &&
+            (MI.isCopy() || Opc == Z80::LD8ri || Opc == Z80::LD8r0) &&
+            ByteDefs.size() < 2) {
+          ByteDefs.push_back(&MO);
+          continue;
+        }
+        if (MO.isUse() && MI.isCopy() &&
+            (MO.getSubReg() == Z80::sub_low ||
+             MO.getSubReg() == Z80::sub_high)) {
+          ByteUses.push_back(&MO);
+          continue;
+        }
+        Eligible = false;
+        break;
+      }
+      WholeDef |= MO.isDef();
       if (MI.isCopy()) {
         const auto &Other = MI.getOperand(MO.isDef() ? 1 : 0);
         Register CopyReg = Other.getReg();
+        WholeCopy |= MO.isUse() && CopyReg.isVirtual();
         if (Other.getSubReg() ||
             (CopyReg.isPhysical()
                  ? !Z80::R16RegClass.contains(CopyReg)
@@ -90,8 +115,51 @@ static bool selectBankInstructions(MachineFunction &MF) {
         break;
       }
     }
-    if (Eligible && HasBankOperation)
-      Bankable.insert(R);
+    if (!Eligible || (!HasBankOperation && !(WholeCopy && !ByteDefs.empty())) ||
+        (ByteDefs.empty() && !ByteUses.empty()))
+      continue;
+    if (!ByteDefs.empty()) {
+      if (WholeDef || ByteDefs.size() != 2 ||
+          ByteDefs[0]->getSubReg() == ByteDefs[1]->getSubReg() ||
+          ByteDefs[0]->getParent()->getParent() !=
+              ByteDefs[1]->getParent()->getParent())
+        continue;
+      /* Local constructions have little opportunity to recover the extra
+         transfer. Expose the choice for lifetimes extending beyond this
+         block, where calls and loops can otherwise force repeated spills. */
+      auto *DefBlock = ByteDefs[0]->getParent()->getParent();
+      if (llvm::none_of(MRI.use_nodbg_operands(R), [&](const MachineOperand &MO) {
+            return !MO.getSubReg() &&
+                   MO.getParent()->getParent() != DefBlock;
+          }))
+        continue;
+      if (!Dominators)
+        Dominators.emplace(MF);
+      if (Dominators->dominates(ByteDefs[1]->getParent(),
+                                ByteDefs[0]->getParent()))
+        std::swap(ByteDefs[0], ByteDefs[1]);
+      auto *Last = ByteDefs[1]->getParent();
+      if (!ByteDefs[0]->isUndef() || ByteDefs[1]->isUndef() ||
+          llvm::any_of(MRI.use_nodbg_operands(R), [&](const MachineOperand &MO) {
+            return !MO.getSubReg() &&
+                   !Dominators->dominates(Last, MO.getParent());
+          }))
+        continue;
+      /* Byte assembly requires the primary bank, but that constraint ends
+         once both lanes are defined. Separate the construction from the
+         whole-pair lifetime so a long-lived address can reside in either
+         bank. The allocator can coalesce the copy when it stays primary. */
+      Register Built = MRI.createVirtualRegister(MRI.getRegClass(R));
+      for (auto *MO : ByteDefs)
+        MO->setReg(Built);
+      for (auto *MO : ByteUses)
+        MO->setReg(Built);
+      BuildMI(*Last->getParent(), std::next(Last->getIterator()),
+              Last->getDebugLoc(), TII->get(TargetOpcode::COPY), R)
+          .addReg(Built);
+      changed = true;
+    }
+    Bankable.insert(R);
   }
   // A tied update must admit the same bank on both sides. Propagate rejected
   // endpoints through the chain before widening any register class.
@@ -129,7 +197,10 @@ static bool selectBankInstructions(MachineFunction &MF) {
       if (MI.getOpcode() == Z80::ADD16rr) {
         unsigned Op = &MO - &MI.getOperand(0);
         HasBankUse |= Op != 2 || Bankable.contains(MI.getOperand(0).getReg());
-      } else if (!MI.isCopy() && MI.getOpcode() != Z80::LD16ri)
+      } else if (MI.isCopy()) {
+        HasBankUse |= MO.isUse() &&
+                      Bankable.contains(MI.getOperand(0).getReg());
+      } else if (MI.getOpcode() != Z80::LD16ri)
         HasBankUse = true;
     }
     if (!HasBankUse)

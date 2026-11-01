@@ -83,6 +83,11 @@ static void applyConstantMultiply(MachineInstr &MI, MachineIRBuilder &Builder,
                                   GISelChangeObserver &Observer,
                                   const ConstantMultiply &Match);
 
+static bool matchPageOffset(MachineInstr &MI, MachineRegisterInfo &MRI,
+                            GISelValueTracking *VT);
+static void applyPageOffset(MachineInstr &MI, MachineIRBuilder &Builder,
+                            GISelChangeObserver &Observer);
+
 class Z80PreLegalizerCombinerImpl : public Combiner {
 protected:
   const CombinerHelper Helper;
@@ -203,6 +208,35 @@ static void applyConstantMultiply(MachineInstr &MI, MachineIRBuilder &Builder,
     auto Zero = Builder.buildConstant(Ty, 0);
     Builder.buildSub(Dst, Zero, Product);
   }
+  Observer.erasingInstr(MI);
+  MI.eraseFromParent();
+}
+
+/// Recognize a page-aligned 16-bit pointer plus an unsigned byte offset.
+/// Constant offsets retain the existing increment and immediate-address forms.
+static bool matchPageOffset(MachineInstr &MI, MachineRegisterInfo &MRI,
+                            GISelValueTracking *VT) {
+  LLT Ty = MRI.getType(MI.getOperand(0).getReg());
+  Register Base = MI.getOperand(1).getReg();
+  Register Offset = MI.getOperand(2).getReg();
+  return VT && Ty.isPointer() && Ty.getSizeInBits() == 16 &&
+         !getIConstantVRegValWithLookThrough(Offset, MRI) &&
+         VT->getKnownBits(Offset).countMinLeadingZeros() >= 8 &&
+         VT->getKnownBits(Base).countMinTrailingZeros() >= 8;
+}
+
+static void applyPageOffset(MachineInstr &MI, MachineIRBuilder &Builder,
+                            GISelChangeObserver &Observer) {
+  Builder.setInstrAndDebugLoc(MI);
+  LLT Byte = LLT::scalar(8), Word = LLT::scalar(16);
+  auto Base = Builder.buildPtrToInt(Word, MI.getOperand(1).getReg());
+  auto Shift = Builder.buildConstant(Byte, 8);
+  auto High = Builder.buildTrunc(Byte, Builder.buildLShr(Word, Base, Shift));
+  auto Low = Builder.buildTrunc(Byte, MI.getOperand(2).getReg());
+  /* The aligned base and byte index occupy disjoint lanes, so address
+     formation needs copies instead of pair arithmetic and its carry flag. */
+  auto Address = Builder.buildMergeValues(Word, {Low.getReg(0), High.getReg(0)});
+  Builder.buildIntToPtr(MI.getOperand(0).getReg(), Address);
   Observer.erasingInstr(MI);
   MI.eraseFromParent();
 }
