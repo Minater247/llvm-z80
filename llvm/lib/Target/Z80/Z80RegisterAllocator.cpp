@@ -214,6 +214,8 @@ class Z80RegisterAllocator final : public MachineFunctionPass,
   DenseMap<Register, unsigned> Stage;
   // Each blocked single-choice range gets one deferred allocation attempt.
   DenseSet<Register> Deferred;
+  // Retain equally cheap placements when spilling shortens an assigned range.
+  DenseMap<Register, MCRegister> PreviousAssignments;
   std::priority_queue<std::tuple<bool, double, Register>> Queue;
   unsigned RemainingStates = 0;
   bool OptSize = false;
@@ -250,6 +252,7 @@ class Z80RegisterAllocator final : public MachineFunctionPass,
   }
   void LRE_WillShrinkVirtReg(Register R) override {
     if (VRM->hasPhys(R)) {
+      PreviousAssignments[R] = VRM->getPhys(R);
       auto &LI = LIS->getInterval(R);
       Matrix->unassign(LI);
       enqueue(&LI);
@@ -321,6 +324,7 @@ public:
     SpillerInstance.reset();
     Stage.clear();
     Deferred.clear();
+    PreviousAssignments.clear();
     Queue = {};
   }
   bool runOnMachineFunction(MachineFunction &MF) override;
@@ -991,8 +995,14 @@ Z80RegisterAllocator::selectOrSplit(const LiveInterval &LI,
   // Repair searches still evaluate the full instruction objective themselves.
   if (Candidates.size() > 1)
     accessCosts(LI.reg(), Candidates);
-  llvm::stable_sort(Candidates, [](const auto &A, const auto &B) {
-    return A.first < B.first;
+  /* The spiller may shorten a range by folding its copy into a stack access.
+     Keeping its previous placement on a cost tie preserves the register value
+     available to nearby reloads, which stack forwarding can then reuse. */
+  MCRegister Previous = PreviousAssignments.lookup(LI.reg());
+  llvm::stable_sort(Candidates, [Previous](const auto &A, const auto &B) {
+    if (A.first != B.first)
+      return A.first < B.first;
+    return A.second == Previous && B.second != Previous;
   });
   // Try a cheap placement first. Search only where an occupied cheaper register
   // might avoid a costly bank transfer, or where no free register exists.

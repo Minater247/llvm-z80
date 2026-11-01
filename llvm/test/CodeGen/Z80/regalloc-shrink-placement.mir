@@ -1,0 +1,73 @@
+# RUN: llc -start-before=z80-regalloc -regalloc=z80 -verify-machineinstrs %s -o - | FileCheck %s
+#
+# Spilling a split byte range folds its copy into a reload of the index's low
+# lane. Its shortened sibling should keep E on a placement-cost tie, allowing
+# the following reload to reuse E. The undef inputs retain the pressure and
+# split geometry without requiring unrelated computations.
+# CHECK-LABEL: stable_placement:
+# CHECK: ld{{.*}}(ix - 1), e
+# CHECK-NOT: ld{{.*}}e, (ix - 1)
+# CHECK: add{{.*}}hl, de
+--- |
+  target triple = "z80"
+  define void @stable_placement() { ret void }
+...
+---
+name: stable_placement
+tracksRegLiveness: true
+registers:
+  - { id: 0, class: a16 }
+  - { id: 1, class: o16 }
+  - { id: 2, class: r8 }
+  - { id: 3, class: a16 }
+  - { id: 4, class: r16 }
+  - { id: 5, class: o16 }
+  - { id: 6, class: g8 }
+  - { id: 7, class: r8 }
+body: |
+  bb.0:
+    successors: %bb.1(0x80000000)
+  
+    %3:a16 = IMPLICIT_DEF
+    %1:o16 = IMPLICIT_DEF
+  
+  bb.1:
+    successors: %bb.2(0x80000000)
+  
+    %4:r16 = IMPLICIT_DEF
+    %4:r16 = IMPLICIT_DEF
+    %2:r8 = IMPLICIT_DEF
+    %6:g8 = IMPLICIT_DEF
+  
+  bb.2:
+    successors: %bb.3(0x04000000), %bb.2(0x7c000000)
+  
+    %0:a16 = IMPLICIT_DEF
+    undef %5.sub_low:o16 = COPY %6
+    undef %5.sub_high:o16 = IMPLICIT_DEF
+    %0:a16 = ADD16rr undef %0, undef %5, implicit-def dead $f
+    $a = LD8ap %4 :: (load (s8))
+    %4:r16 = INC16r undef %4
+    SUB8ar undef %7, implicit-def $a, implicit-def dead $f, implicit killed undef $a
+    %3:a16 = INC16r %3
+    $a = COPY %6
+    ADD8ai 8, implicit-def $a, implicit-def dead $f, implicit killed undef $a
+    %6:g8 = COPY killed undef $a
+    $a = COPY undef %1.sub_low
+    ADD8ai 4, implicit-def $a, implicit-def dead $f, implicit killed undef $a
+    ADD8ai 1, implicit-def $a, implicit-def $f, implicit killed undef $a
+    JQCC %bb.2, 2, implicit killed undef $f
+    JQ %bb.3
+  
+  bb.3:
+    successors: %bb.4(0x04000000), %bb.1(0x7c000000)
+  
+    %1:o16 = IMPLICIT_DEF
+    $a = COPY undef %2
+    CP8ai 23, implicit-def $f, implicit killed undef $a
+    JQCC %bb.1, 0, implicit killed undef $f
+    JQ %bb.4
+  
+  bb.4:
+    RET16 implicit-def $sps, implicit $sps
+...
