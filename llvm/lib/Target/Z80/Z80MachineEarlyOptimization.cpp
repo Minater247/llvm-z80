@@ -158,7 +158,11 @@ bool Z80MachineEarlyOptimization::runOnMachineFunction(MachineFunction &MF) {
           if (CallMI && Cost < CondCallThreshold) {
             Register TempReg = MRI.createVirtualRegister(&Z80::F8RegClass);
             DebugLoc DL = MBB.findBranchDebugLoc();
-            MBB.removeSuccessor(FalseMBB);
+            // Both outcomes now pass through the conditional call block. Its
+            // result copy supplies either the return value or the preloaded
+            // false value, so the old bypass input no longer reaches the PHI.
+            FalseMBB->removePHIsIncomingValuesForPredecessor(MBB);
+            MBB.removeSuccessor(FalseMBB, true);
             TII.removeBranch(MBB);
             BuildMI(&MBB, DL, TII.get(TargetOpcode::COPY), TempReg)
                 .addReg(Z80::F);
@@ -180,6 +184,7 @@ bool Z80MachineEarlyOptimization::runOnMachineFunction(MachineFunction &MF) {
               CallMI->addRegisterKilled(Res.PhysReg, &TRI, true);
             }
             Changed = true;
+            break;
           }
         }
       }

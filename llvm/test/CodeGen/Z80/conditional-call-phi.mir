@@ -1,0 +1,36 @@
+# RUN: llc -run-pass=z80-machine-early-opt -verify-machineinstrs %s -o - | FileCheck %s
+--- |
+  target triple = "z80"
+  declare i8 @callee()
+  define i8 @conditional(i8 %condition, i8 %fallback) { ret i8 0 }
+...
+---
+name: conditional
+tracksRegLiveness: true
+selected: true
+# CHECK-LABEL: name: conditional
+# CHECK: bb.0:
+# CHECK-NEXT: successors: %bb.1(0x80000000)
+# CHECK: CALL16CC @callee
+# CHECK: %3:r8 = PHI %2, %bb.1
+body: |
+  bb.0:
+    successors: %bb.1, %bb.2
+    liveins: $e, $d
+    %0:g8 = COPY $e
+    %1:r8 = COPY $d
+    BIT8gb %0, 0, implicit-def $f
+    JQCC %bb.1, 0, implicit $f
+    JQ %bb.2
+  bb.1:
+    successors: %bb.2
+    ADJCALLSTACKDOWN16 0, 0, 0, implicit-def $sps, implicit $sps
+    CALL16 @callee, csr_z80_c, implicit $sps, implicit-def $a
+    %2:r8 = COPY $a
+    ADJCALLSTACKUP16 0, 0, implicit-def $sps, implicit $sps
+    JQ %bb.2
+  bb.2:
+    %3:r8 = PHI %1, %bb.0, %2, %bb.1
+    $a = COPY %3
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...
