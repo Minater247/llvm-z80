@@ -1,0 +1,33 @@
+# RUN: llc -run-pass=z80-machine-late-opt -verify-machineinstrs %s -o - | FileCheck %s
+--- |
+  target triple = "z80"
+  define void @zero_carry() { ret void }
+  define void @keep_flags() { ret void }
+...
+---
+name: zero_carry
+tracksRegLiveness: true
+# CHECK-LABEL: name: zero_carry
+# CHECK: XOR8ar undef $a, implicit-def $a, implicit-def $f, implicit undef $a
+# CHECK: SBC16ao
+body: |
+  bb.0:
+    liveins: $hl, $de
+    $a = LD8r0
+    $d = COPY $a
+    Sub16ao $de, implicit-def $hl, implicit-def dead $f, implicit $hl
+    RET16 implicit-def $sps, implicit $sps, implicit $hl
+...
+---
+name: keep_flags
+tracksRegLiveness: true
+# CHECK-LABEL: name: keep_flags
+# CHECK: $a = LD8ri 0
+# CHECK-NEXT: ADC8ar
+body: |
+  bb.0:
+    liveins: $f, $b
+    $a = LD8r0
+    ADC8ar $b, implicit-def $a, implicit-def dead $f, implicit $a, implicit killed $f
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...

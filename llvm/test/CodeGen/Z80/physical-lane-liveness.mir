@@ -1,0 +1,39 @@
+# RUN: llc -run-pass=z80-post-rewrite -verify-machineinstrs %s -o - | FileCheck %s --check-prefix=PAIR
+# RUN: llc -run-pass=z80-dangling-reg -verify-machineinstrs %s -o - | FileCheck %s --check-prefix=FLAGS
+--- |
+  target triple = "z80"
+  define void @partial_pair() { ret void }
+  define void @dead_value_live_flags() { ret void }
+...
+---
+name: partial_pair
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 2, alignment: 1 }
+# PAIR-LABEL: name: partial_pair
+# PAIR: PUSH16r undef $hl, implicit-def $sps, implicit $sps, implicit $h{{$}}
+# PAIR: $hl = ADD16ao
+body: |
+  bb.0:
+    liveins: $hl, $bc, $de
+    $a = LD8gp killed $hl
+    $h = COPY $a
+    LD88or %stack.0, 0, $hl
+    $bc = ADD16rr $bc, $de, implicit-def dead $f
+    RET16 implicit-def $sps, implicit $sps, implicit $bc
+...
+---
+name: dead_value_live_flags
+tracksRegLiveness: true
+# FLAGS-LABEL: name: dead_value_live_flags
+# FLAGS: dead $a = RRC8g
+# FLAGS-NEXT: dead $a = KILL undef $a
+# FLAGS-NEXT: SBC8ar
+body: |
+  bb.0:
+    liveins: $a
+    dead $a = RRC8g killed $a, implicit-def $f
+    dead $a = KILL undef $a
+    SBC8ar undef $a, implicit-def $a, implicit-def dead $f, implicit undef $a, implicit killed $f
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...

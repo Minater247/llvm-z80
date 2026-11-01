@@ -131,7 +131,7 @@ bool Z80DanglingRegPass::runOnMachineFunction(MachineFunction &MF)
         // must still write the stack even when its HL result is overwritten.
         DefinedRegs.erase(Defined);
         bool SawStore = false;
-        if (MI.isSafeToMove(SawStore) &&
+        if (!MI.getOperand(0).isDead() && MI.isSafeToMove(SawStore) &&
             llvm::count_if(MI.operands(), [](const MachineOperand &MO) {
               return MO.isReg() && MO.isDef() && !MO.isDead();
             }) == 1)

@@ -107,7 +107,7 @@ static void markUseUndef(MachineInstr &MI, Register Reg,
 }
 
 /// Identify an undefined physical lane before an instruction. The nearest
-/// definition or use determines its state; block live-ins settle queries that
+/// definition or kill determines its state; block live-ins settle queries that
 /// reach block entry.
 static bool isUndefLane(MachineBasicBlock &MBB, MachineBasicBlock::iterator I,
                         MCRegister R, const TargetRegisterInfo &TRI) {
@@ -115,7 +115,9 @@ static bool isUndefLane(MachineBasicBlock &MBB, MachineBasicBlock::iterator I,
     auto Info = AnalyzePhysRegInBundle(*--I, R, &TRI);
     if (Info.DeadDef || Info.Clobbered || (Info.Killed && !Info.Defined))
       return true;
-    if (Info.Defined || Info.Read)
+    // A pair use can include an undefined byte. Only a definition establishes
+    // a value for this lane; an intervening read cannot revive a killed lane.
+    if (Info.Defined)
       return false;
   }
   LiveRegUnits Live(TRI);

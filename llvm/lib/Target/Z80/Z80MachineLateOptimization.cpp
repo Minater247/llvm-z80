@@ -387,9 +387,13 @@ Z80MachineLateOptimization::getKnownFlags(const MachineInstr &MI,
   case Z80::AND8ai:
   case Z80::AND8ap:
   case Z80::AND8ao:
-    return {HalfCarryFlag, SubtractFlag, CarryFlag};
-  case Z80::RCF:
+    return {HalfCarryFlag, SubtractFlag | CarryFlag};
   case Z80::XOR8ar:
+    if (MI.getOperand(0).getReg() == Z80::A)
+      return {ZeroFlag | ParityOverflowFlag,
+              SignFlag | HalfCarryFlag | SubtractFlag | CarryFlag};
+    LLVM_FALLTHROUGH;
+  case Z80::RCF:
   case Z80::XOR8ai:
   case Z80::XOR8ap:
   case Z80::XOR8ao:
@@ -397,7 +401,7 @@ Z80MachineLateOptimization::getKnownFlags(const MachineInstr &MI,
   case Z80::OR8ai:
   case Z80::OR8ap:
   case Z80::OR8ao:
-    return {0, HalfCarryFlag | SubtractFlag, CarryFlag};
+    return {0, HalfCarryFlag | SubtractFlag | CarryFlag};
   case Z80::ADD16as:
   case Z80::ADD24as:
     if (isKnownSpecificImm(Opc == Z80::ADD16as ? Z80::SPS : Z80::SPL, 0))
@@ -461,6 +465,24 @@ bool Z80MachineLateOptimization::runOnMachineFunction(MachineFunction &MF) {
     clobberAll();
     for (MachineBasicBlock::iterator I = MBB.begin(), E = MBB.end(); I != E;) {
       MachineInstrBuilder MIB(MF, I);
+      if (I->getOpcode() == Z80::LD8r0 &&
+          I->getOperand(0).getReg() == Z80::A) {
+        // Resolve the flag-neutral zero pseudo before reasoning about flags.
+        // XOR can supply carry to a later subtraction only when its physical
+        // flag definition is represented, and incoming flags are dead.
+        if (LiveUnits.available(Z80::F)) {
+          I->setDesc(TII.get(Z80::XOR8ar));
+          I->getOperand(0).setIsUse();
+          I->getOperand(0).setIsUndef();
+          MIB.addReg(Z80::A, RegState::ImplicitDefine)
+              .addReg(Z80::F, RegState::ImplicitDefine | RegState::Dead)
+              .addReg(Z80::A, RegState::Implicit | RegState::Undef);
+        } else {
+          I->setDesc(TII.get(Z80::LD8ri));
+          MIB.addImm(0);
+        }
+        Changed = true;
+      }
       advanceLiveRegUnitsForward(LiveUnits, *I);
       ++I;
 
