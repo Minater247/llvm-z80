@@ -2453,6 +2453,42 @@ bool Z80InstructionSelector::selectShift(MachineInstr &I,
   if (!Ty.isScalar())
     return false;
 
+  bool ShareShorterShift = false;
+  if (Ty == LLT::scalar(8) && Opc == TargetOpcode::G_LSHR &&
+      Amt->Value == 4) {
+    unsigned Remaining = 16;
+    for (const MachineInstr &Use : MRI.use_nodbg_instructions(SrcReg)) {
+      if (!Remaining-- || Use.getOpcode() == Z80::SRL8g) {
+        ShareShorterShift = true;
+        break;
+      }
+      if (Use.getOpcode() != Opc)
+        continue;
+      auto Other = getIConstantVRegVal(Use.getOperand(2).getReg(), MRI);
+      if (Other && Other->ugt(0) && Other->ult(4)) {
+        ShareShorterShift = true;
+        break;
+      }
+    }
+  }
+
+  if (Ty == LLT::scalar(8) && Opc == TargetOpcode::G_LSHR &&
+      Amt->Value == 4 && !ShareShorterShift) {
+    /* Four accumulator rotates and a mask cost 23 T-states instead of 32 for
+       four register shifts. Keep shared shorter shifts as register chains;
+       four-bit left shifts can use ADD A,A without paying for a mask. */
+    if (!RBI.constrainGenericRegister(SrcReg, Z80::R8RegClass, MRI))
+      return false;
+    MachineIRBuilder MIB(I);
+    MIB.buildCopy(Z80::A, SrcReg);
+    for (unsigned N = 0; N != 4; ++N)
+      MIB.buildInstr(Z80::RLCA);
+    MIB.buildInstr(Z80::AND8ai, {}, {int64_t(15)});
+    MIB.buildCopy(DstReg, Register(Z80::A));
+    I.eraseFromParent();
+    return RBI.constrainGenericRegister(DstReg, Z80::R8RegClass, MRI);
+  }
+
   if (Ty == LLT::scalar(8) &&
       (Opc == TargetOpcode::G_SHL || Opc == TargetOpcode::G_LSHR) &&
       Amt->Value.uge(5) && Amt->Value.ult(8)) {

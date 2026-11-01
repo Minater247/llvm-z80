@@ -20,7 +20,27 @@ for op in ('shl', 'lshr', 'ashr'):
             expected = (value << count if op == 'shl' else
                         value >> count if op == 'lshr' else signed >> count) & 255
             assert cpu.get('a') == expected, (op, count, value)
+            if op == 'lshr' and count == 4:
+                assert cpu.cycles <= 21 + 4*(8-count), (op, count, cpu.cycles)
             assert cpu.sp == 0xf002 and cpu.get('ix') == ix
             assert cpu.alt == alternate
             assert cpu.writes <= set(range(0xef00, 0xf000))
 print('Checked all 6144 constant byte shifts')
+
+for value in range(256):
+    for other in (0, 1, 128, 255):
+        cpu = execution.CPU(random.Random(value))
+        cpu.put('e', value)
+        cpu.put('d', other)
+        cpu.run(program, entry='live_shifts')
+        expected = ((value >> 4) | (other >> 5)) ^ value
+        assert cpu.get('a') == expected, (value, other, cpu.get('a'))
+        assert cpu.sp == 0xf002
+print('Checked 1024 live-operand shift combinations')
+
+for value in range(256):
+    cpu = execution.CPU(random.Random(value))
+    cpu.put('e', value)
+    cpu.run(program, entry='shared_shift')
+    assert cpu.get('a') == (value >> 2) ^ (value >> 4), value
+print('Checked 256 overlapping bit-field extractions')
