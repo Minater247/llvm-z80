@@ -1,0 +1,76 @@
+# RUN: llc -mtriple=z80 -start-before=z80-regalloc -regalloc=z80 -verify-machineinstrs %s -o %t.s
+# RUN: llc -mtriple=z80 -start-before=z80-regalloc -regalloc=z80 -mattr=+alternate-regs -verify-machineinstrs %s -o %t.bank.s
+# RUN: llc -mtriple=z80 -start-before=greedy -regalloc=greedy -verify-machineinstrs %s -o /dev/null
+#
+# Splitting the indexed store creates two unspillable operands. Its source can
+# occupy IY while long-lived values occupy the primary pairs. Allocate the index
+# operand by moving the source into a primary pair and spilling its occupant.
+# The undef inputs retain the register-class and live-range constraints.
+---
+name: index_reload_pressure
+tracksRegLiveness: true
+body: |
+  bb.0:
+    successors: %bb.1(0x80000000)
+  
+    %0:i16 = IMPLICIT_DEF
+    %1:g16 = IMPLICIT_DEF
+    %2:a16 = IMPLICIT_DEF
+    %3:r16 = IMPLICIT_DEF
+    %4:r16 = LD16ri 123
+    %5:a16 = LD16ri 4096
+    LD88or %0, 6, %1
+  
+  bb.1:
+    successors: %bb.2(0x04000000), %bb.3(0x7c000000)
+  
+    $a = COPY %3.sub_high
+    OR8ar undef %3.sub_low, implicit-def dead $a, implicit-def $f, implicit killed undef $a
+    JQCC %bb.3, 0, implicit killed undef $f
+  
+  bb.2:
+    successors: %bb.4(0x80000000)
+  
+    JQ %bb.4
+  
+  bb.3:
+    successors: %bb.1(0x80000000)
+  
+    %3:r16 = IMPLICIT_DEF
+    JQ %bb.1
+  
+  bb.4:
+    successors: %bb.5(0x04000000), %bb.10(0x7c000000)
+  
+    $a = COPY %4.sub_high
+    JQCC %bb.10, 0, implicit killed undef $f
+    JQ %bb.5
+  
+  bb.5:
+    successors: %bb.6(0x80000000)
+  
+  bb.6:
+    successors: %bb.7(0x04000000), %bb.6(0x7c000000)
+  
+    BIT8pb %2, 7, implicit-def $f
+    JQCC %bb.6, 0, implicit killed undef $f
+    JQ %bb.7
+  
+  bb.7:
+    successors: %bb.8(0x80000000)
+  
+  bb.8:
+    successors: %bb.9(0x04000000), %bb.8(0x7c000000)
+  
+    BIT8pb %2, 7, implicit-def $f
+    JQCC %bb.8, 0, implicit killed undef $f
+    JQ %bb.9
+  
+  bb.9:
+    RET16 implicit-def $sps, implicit $sps
+  
+  bb.10:
+    successors: %bb.4(0x80000000)
+  
+    JQ %bb.4
+...

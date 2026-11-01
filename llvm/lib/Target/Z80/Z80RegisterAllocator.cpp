@@ -1089,8 +1089,42 @@ Z80RegisterAllocator::selectOrSplit(const LiveInterval &LI,
     }
     return SpillReg;
   }
-  if (!LI.isSpillable())
+  if (!LI.isSpillable()) {
+    /* A reload can occupy the only index register needed by another reload.
+       Move that short range to a different register by displacing spillable
+       occupants there. The ordinary repair search keeps outside assignments
+       fixed, so it cannot discover this move through an occupied register. */
+    for (const auto &[Cost, P] : Candidates) {
+      auto Conflicts = blockers(LI, P);
+      if (Conflicts.size() != 1)
+        continue;
+      const auto &Other = LIS->getInterval(Conflicts.front());
+      if (Other.isSpillable())
+        continue;
+      for (MCRegister Q : domain(Other.reg())) {
+        if (TRI->regsOverlap(P, Q) ||
+            Matrix->checkRegMaskInterference(Other, Q) ||
+            Matrix->checkRegUnitInterference(Other, Q))
+          continue;
+        auto Displaced = blockers(Other, Q);
+        if (llvm::any_of(Displaced, [&](Register R) {
+              return !LIS->getInterval(R).isSpillable();
+            }))
+          continue;
+        Matrix->unassign(Other);
+        for (Register R : Displaced) {
+          const auto &Victim = LIS->getInterval(R);
+          Matrix->unassign(Victim);
+          LiveRangeEdit Edit(&Victim, NewRegs, *MF, *LIS, VRM, this, &DeadRemats);
+          spiller().spill(Edit);
+          ++NumSpills;
+        }
+        Matrix->assign(Other, Q);
+        return P;
+      }
+    }
     return ~0u;
+  }
   LiveRangeEdit Edit(&LI, NewRegs, *MF, *LIS, VRM, this, &DeadRemats);
   spiller().spill(Edit);
   ++NumSpills;
