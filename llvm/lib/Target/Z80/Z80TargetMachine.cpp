@@ -19,6 +19,7 @@
 #include "Z80MachineFunctionInfo.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/CodeGen/BasicTTIImpl.h"
 #include "llvm/CodeGen/GlobalISel/CSEInfo.h"
 #include "llvm/CodeGen/GlobalISel/CallLowering.h"
 #include "llvm/CodeGen/GlobalISel/IRTranslator.h"
@@ -33,6 +34,46 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/MC/TargetRegistry.h"
 using namespace llvm;
+
+namespace {
+class Z80TTIImpl final : public BasicTTIImplBase<Z80TTIImpl> {
+  using BaseT = BasicTTIImplBase<Z80TTIImpl>;
+  friend BaseT;
+  const Z80Subtarget *ST;
+  const Z80TargetLowering *TLI;
+  const Z80Subtarget *getST() const { return ST; }
+  const Z80TargetLowering *getTLI() const { return TLI; }
+
+public:
+  Z80TTIImpl(const Z80TargetMachine *TM, const Function &F)
+      : BaseT(TM, F.getDataLayout()), ST(TM->getSubtargetImpl(F)),
+        TLI(ST->getTargetLowering()) {}
+
+  InstructionCost getArithmeticInstrCost(
+      unsigned Opcode, Type *Ty, TargetTransformInfo::TargetCostKind Kind,
+      TargetTransformInfo::OperandValueInfo Op1 = {},
+      TargetTransformInfo::OperandValueInfo Op2 = {},
+      ArrayRef<const Value *> Args = {},
+      const Instruction *Context = nullptr) const override {
+    if (!ST->hasZ180Ops() && !ST->hasEZ80Ops() &&
+        Opcode == Instruction::Add &&
+        Ty->isIntegerTy() && Ty->getIntegerBitWidth() > 8 &&
+        (Kind == TargetTransformInfo::TCK_RecipThroughput ||
+         Kind == TargetTransformInfo::TCK_Latency))
+      /* Normalize pair arithmetic to a four-T-state byte ALU operation.
+         The first pair uses ADD (11 T states); subsequent pairs need ADC
+         (15 T states). Keep wider additions at least as costly as their
+         legalized pieces, including widths that use runtime helpers. */
+      return 3 + 4 * ((Ty->getIntegerBitWidth() + 15) / 16 - 1);
+    return BaseT::getArithmeticInstrCost(Opcode, Ty, Kind, Op1, Op2, Args, Context);
+  }
+};
+} // namespace
+
+TargetTransformInfo
+Z80TargetMachine::getTargetTransformInfo(const Function &F) const {
+  return TargetTransformInfo(std::make_unique<Z80TTIImpl>(this, F));
+}
 
 extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeZ80Target() {
   // Register the target.

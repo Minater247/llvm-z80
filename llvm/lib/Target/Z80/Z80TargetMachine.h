@@ -35,6 +35,7 @@ public:
                    bool JIT);
   ~Z80TargetMachine() override = default;
   bool useIPRA() const override { return true; }
+  TargetTransformInfo getTargetTransformInfo(const Function &F) const override;
   void reset() override;
   const Z80Subtarget *getSubtargetImpl(const Function &F) const override;
 
