@@ -1442,9 +1442,11 @@ public:
     // number of clusters and destinations should be enough to decide whether to
     // build bit tests.
 
-    // To lower a range with bit tests, the range must fit the bitwidth of a
-    // machine word.
-    if (!rangeFitsInWord(Low, High, DL))
+    // Bit-test lowering requires a native word shift and a range that fits
+    // that word. Use the same legality requirement as findBitTestClusters so
+    // cost estimates and jump-table selection only prefer realizable tests.
+    if (!isOperationLegal(ISD::SHL, getPointerTy(DL)) ||
+        !rangeFitsInWord(Low, High, DL))
       return false;
 
     unsigned NumDests = DestCmps.size();

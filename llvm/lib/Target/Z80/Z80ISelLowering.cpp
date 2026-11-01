@@ -41,6 +41,13 @@ Z80TargetLowering::Z80TargetLowering(const Z80TargetMachine &TM,
   // Compute derived properties from the register classes
   computeRegisterProperties(STI.getRegisterInfo());
 
+  /* Z80-family shifts operate one bit at a time. Variable counts require
+     expansion, so shared lowering must price them as sequences when choosing
+     between comparisons and shift-based switch tests. */
+  for (MVT VT : {MVT::i8, MVT::i16, MVT::i24})
+    for (unsigned Op : {ISD::SHL, ISD::SRL, ISD::SRA})
+      setOperationAction(Op, VT, Expand);
+
   // Legalize add-with-carry on 16-bit so multi-precision expansion (i32)
   // forms become pairs of ADDC/ADDE instead of libcalls.
   setOperationAction(ISD::ADDC, MVT::i16, Legal);
