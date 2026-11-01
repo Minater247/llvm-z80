@@ -868,6 +868,11 @@ Z80LegalizerInfo::legalizeShift(LegalizerHelper &Helper, MachineInstr &MI,
 
   // Split wide values into supported pieces so constant shifts can discard
   // unused lanes and variable shifts can use the same native byte operations.
+  /* Binary splitting creates unsupported 12-bit lanes for native ADL words.
+     Constant shifts divide directly into three bytes, discarding empty lanes. */
+  if (Ty == LLT::scalar(24) &&
+      getIConstantVRegValWithLookThrough(MI.getOperand(2).getReg(), MRI))
+    return Helper.narrowScalarShiftMultiway(MI, LLT::scalar(8));
   if (Ty.isScalar() && (Ty.getSizeInBits() == 16 || Ty.getSizeInBits() > 24))
     if (Helper.narrowScalar(MI, 0, LLT::scalar(Ty.getSizeInBits() > 16 ? 16 : 8)) ==
         LegalizerHelper::Legalized)
