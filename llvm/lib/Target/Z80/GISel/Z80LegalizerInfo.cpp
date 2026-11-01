@@ -758,6 +758,20 @@ Z80LegalizerInfo::legalizeShift(LegalizerHelper &Helper, MachineInstr &MI,
     }
   }
 
+  /* Extending loads may still be combined when the shift is legalized. Let
+     byte narrowing discard their known-zero high lane before selecting pairs. */
+  if (Ty == LLT::scalar(16) && (Opc == G_LSHR || Opc == G_ASHR)) {
+    if (auto Amt =
+            getIConstantVRegValWithLookThrough(MI.getOperand(2).getReg(), MRI)) {
+      if (Amt->Value.ugt(0) && Amt->Value.ule(4)) {
+        auto *VT = Helper.getValueTracking();
+        if (!VT || VT->getKnownBits(MI.getOperand(1).getReg())
+                           .countMinLeadingZeros() < 8)
+          return LegalizerHelper::AlreadyLegal;
+      }
+    }
+  }
+
   // There is no byte-sized shift libcall. Lower a variable byte shift to
   // three conditional constant steps, all supported by native selection.
   // Counts >= 8 are poison in LLVM IR, so choosing their low three bits is a

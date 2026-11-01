@@ -2504,6 +2504,42 @@ bool Z80InstructionSelector::selectShift(MachineInstr &I,
   if (!Ty.isScalar())
     return false;
 
+  if (Ty == LLT::scalar(16) &&
+      (Opc == TargetOpcode::G_LSHR || Opc == TargetOpcode::G_ASHR) &&
+      Amt->Value.ugt(0) && Amt->Value.ule(4)) {
+    /* Keep the carry between each high-byte shift and low-byte rotate.
+       Separating the halves into shifts, masks and ORs adds instructions and
+       accumulator pressure. Larger counts benefit from byte extraction. */
+    const TargetRegisterClass &RC =
+        STI.hasIndexHalfRegs() ? Z80::R16RegClass : Z80::G16RegClass;
+    if (!RBI.constrainGenericRegister(SrcReg, RC, MRI) ||
+        !RBI.constrainGenericRegister(DstReg, RC, MRI))
+      return false;
+    MachineIRBuilder MIB(I);
+    LLT Byte = LLT::scalar(8);
+    Register Lo = MRI.createGenericVirtualRegister(Byte);
+    Register Hi = MRI.createGenericVirtualRegister(Byte);
+    MIB.buildInstr(TargetOpcode::COPY, {Lo}, {})
+        .addReg(SrcReg, 0, Z80::sub_low);
+    MIB.buildInstr(TargetOpcode::COPY, {Hi}, {})
+        .addReg(SrcReg, 0, Z80::sub_high);
+    for (unsigned N = Amt->Value.getZExtValue(); N; --N) {
+      auto Shift = MIB.buildInstr(
+          Opc == TargetOpcode::G_LSHR ? Z80::SRL8g : Z80::SRA8g, {Byte}, {Hi});
+      auto Rotate = MIB.buildInstr(Z80::RR8g, {Byte}, {Lo});
+      if (!constrainSelectedInstRegOperands(*Shift, TII, TRI, RBI) ||
+          !constrainSelectedInstRegOperands(*Rotate, TII, TRI, RBI))
+        return false;
+      Hi = Shift.getReg(0);
+      Lo = Rotate.getReg(0);
+    }
+    auto Pair = MIB.buildInstr(TargetOpcode::REG_SEQUENCE, {DstReg},
+                              {Lo, int64_t(Z80::sub_low), Hi,
+                               int64_t(Z80::sub_high)});
+    I.eraseFromParent();
+    return constrainSelectedInstRegOperands(*Pair, TII, TRI, RBI);
+  }
+
   bool ShareShorterShift = false;
   if (Ty == LLT::scalar(8) && Opc == TargetOpcode::G_LSHR &&
       Amt->Value == 4) {
