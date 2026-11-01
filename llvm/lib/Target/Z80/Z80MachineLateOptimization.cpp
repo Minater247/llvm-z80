@@ -693,14 +693,17 @@ bool Z80MachineLateOptimization::runOnMachineFunction(MachineFunction &MF) {
       }
       case Z80::LD24r0:
       case Z80::LD24r_1:
-        if (DstReg != Z80::UHL || !(KnownFlagsMask & CarryFlag) ||
+        if (DstReg != Z80::UHL || !LiveUnits.available(Z80::F) ||
+            !(KnownFlagsMask & CarryFlag) ||
             ((Opc == Z80::LD24r0) ^ !(KnownFlagsVal & CarryFlag)))
           break;
         LLVM_DEBUG(dbgs() << "Replacing: "; MIB->dump();
                    dbgs() << "     With: ");
         MIB->setDesc(TII.get(Z80::SBC24aa));
         MIB->getOperand(0).setImplicit();
-        MIB->getOperand(1).setImplicit();
+        /* Constant loads have only a destination operand. The subtraction
+           introduces a flag definition and consumes the known carry. */
+        MIB.addReg(Z80::F, RegState::ImplicitDefine | RegState::Dead);
         MIB.addReg(DstReg, RegState::Implicit | RegState::Undef);
         MIB.addReg(Z80::F, RegState::Implicit | getKillRegState(reuse(Z80::F)));
         break;

@@ -1,0 +1,46 @@
+# RUN: llc -run-pass=z80-machine-late-opt -verify-machineinstrs %s -o - | FileCheck %s
+--- |
+  target triple = "ez80"
+  define void @zero_dead_flags() { ret void }
+  define void @ones_dead_flags() { ret void }
+  define void @ones_live_flags() { ret void }
+...
+---
+name: zero_dead_flags
+tracksRegLiveness: true
+# CHECK-LABEL: name: zero_dead_flags
+# CHECK: XOR8ar
+# CHECK: $c = LD8gg $a
+# CHECK-NEXT: SBC24aa implicit-def $uhl, implicit-def dead $f, implicit undef $uhl, implicit killed $f
+body: |
+  bb.0:
+    $a = LD8r0
+    $c = LD8r0
+    $uhl = LD24r0
+    RET24 implicit-def $spl, implicit $spl, implicit $uhl, implicit $c
+...
+---
+name: ones_dead_flags
+tracksRegLiveness: true
+# CHECK-LABEL: name: ones_dead_flags
+# CHECK: SCF implicit-def $f
+# CHECK-NEXT: SBC24aa implicit-def $uhl, implicit-def dead $f, implicit undef $uhl, implicit killed $f
+body: |
+  bb.0:
+    SCF implicit-def dead $f
+    $uhl = LD24r_1
+    RET24 implicit-def $spl, implicit $spl, implicit $uhl
+...
+---
+name: ones_live_flags
+tracksRegLiveness: true
+# CHECK-LABEL: name: ones_live_flags
+# CHECK: SCF implicit-def $f
+# CHECK-NEXT: $uhl = LD24r_1
+# CHECK-NEXT: RET24
+body: |
+  bb.0:
+    SCF implicit-def $f
+    $uhl = LD24r_1
+    RET24 implicit-def $spl, implicit $spl, implicit $uhl, implicit $f
+...
