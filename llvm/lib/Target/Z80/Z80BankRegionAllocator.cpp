@@ -155,7 +155,8 @@ bool Z80BankRegionAllocator::runOnMachineFunction(MachineFunction &MF) {
     Live.addLiveOuts(MBB);
     for (const auto &MI : reverse(MBB)) {
       if (MI.getOpcode() == Save ||
-          (MI.getOpcode() == Z80::LD8ap && MI.getIterator() != MBB.begin() &&
+          ((MI.getOpcode() == Z80::LD8ap || MI.getOpcode() == Z80::LD8gp) &&
+           MI.getIterator() != MBB.begin() &&
            std::prev(MI.getIterator())->getOpcode() == Load))
         LiveAfter.try_emplace(&MI, Live.getBitVector());
       Live.stepBackward(MI);
@@ -174,13 +175,26 @@ bool Z80BankRegionAllocator::runOnMachineFunction(MachineFunction &MF) {
       // A read-only cursor does not need a matching save. Read through its
       // resident bank when the temporary main-bank pointer dies at the load.
       // This also avoids moving an alternate pair through an index register
-      // merely to issue a single accumulator load.
-      if (It != MBB.end() && It->getOpcode() == Z80::LD8ap &&
+      // merely to issue a single byte load.
+      if (It != MBB.end() &&
+          (It->getOpcode() == Z80::LD8ap || It->getOpcode() == Z80::LD8gp) &&
           It->getOperand(1).getReg() == Main) {
         auto &Read = *It;
         LiveRegUnits Out(TRI);
         Out.addUnits(LiveAfter.find(&Read)->second);
-        if (Out.available(Main)) {
+        MCRegister Byte = Read.getOperand(0).getReg();
+        bool Bridge = Byte != Z80::A;
+        bool PreserveA = Bridge && !Out.available(Z80::A);
+        /* A load may overwrite a lane of its own address. That result is
+           exported through A after EXX; only the remaining address lanes
+           must be dead. A live accumulator can cross through unused AF'. */
+        Out.removeReg(Byte);
+        unsigned Cost = (Bytes ? 2 : 8) + Bridge * (Bytes ? 1 : 4) +
+                        PreserveA * (Bytes ? 2 : 8);
+        if (Z80::G8RegClass.contains(Byte) && Out.available(Main) &&
+            (!PreserveA || FreeAF) && Cost < (Bytes ? 4u : 29u)) {
+          if (PreserveA)
+            BuildMI(MBB, Entry, Entry.getDebugLoc(), TII.get(Z80::EXAF));
           auto Enter = BuildMI(MBB, Entry, Entry.getDebugLoc(),
                                TII.get(Wide ? Z80::EXX24 : Z80::EXX16));
           Entries.insert(Enter);
@@ -200,11 +214,19 @@ bool Z80BankRegionAllocator::runOnMachineFunction(MachineFunction &MF) {
               if (!Out.available(R))
                 Enter.addReg(R, RegState::Implicit);
           }
+          Read.setDesc(TII.get(Z80::LD8ap));
+          Read.getOperand(0).setReg(Z80::A);
+          Read.getOperand(0).setIsDead(false);
           Read.getOperand(1).setReg(Bank);
           Read.getOperand(1).setIsKill(false);
           It = std::next(Read.getIterator());
           Exits.insert(BuildMI(MBB, It, Read.getDebugLoc(),
                                TII.get(Wide ? Z80::EXX24 : Z80::EXX16)));
+          if (Bridge)
+            BuildMI(MBB, It, Read.getDebugLoc(), TII.get(Z80::LD8gg), Byte)
+                .addReg(Z80::A, RegState::Kill);
+          if (PreserveA)
+            BuildMI(MBB, It, Read.getDebugLoc(), TII.get(Z80::EXAF));
           Entry.eraseFromParent();
           ++NumBankRegions;
           Changed = true;

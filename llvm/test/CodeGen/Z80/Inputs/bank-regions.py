@@ -78,6 +78,7 @@ def main():
                           '$iyl = INC8r $iyl, implicit-def $f\n'
                           '    $a = LD8ap $iy', live, True))
     read_only = set()
+    needs_free_af = set()
     for bank in ('bc', 'de', 'hl'):
         for main in ('bc', 'de', 'hl', 'iy'):
             for export in (False, True):
@@ -86,6 +87,22 @@ def main():
                     live += ['iyh', 'iyl']
                 read_only.add(len(cases))
                 cases.append((bank, main, f'$a = LD8ap ${main}', live, not export))
+        # A byte result can replace either address lane or an independent
+        # register. Preserve A and flags when the caller keeps them live.
+        for byte in 'bcdehl':
+            for preserve_a in (False, True):
+                for keep_high in (False, True):
+                    live = [r for r in 'fbcde' if r != byte] + [byte]
+                    if preserve_a:
+                        live += ['a']
+                    if keep_high:
+                        live += ['l' if byte == 'h' else 'h']
+                    i = len(cases)
+                    read_only.add(i)
+                    if preserve_a:
+                        needs_free_af.add(i)
+                    cases.append((bank, 'hl', f'${byte} = LD8gp $hl',
+                                  live, not keep_high))
     count = 0
     for busy_af in (False, True):
         work = args.work / ('occupied-af' if busy_af else 'free-af')
@@ -126,6 +143,7 @@ body: |
              '-run-pass=z80-bank-regions', str(source), '-o', '-'], text=True)
         assert 'EXX16' not in disabled
         for i, (*_, expected) in enumerate(cases):
+            expected &= not (busy_af and i in needs_free_af)
             body = re.search(rf'^name: +f{i}\n.*?^\.\.\.', text, re.M | re.S)[0]
             assert ('EXX16' in body) == expected, (i, cases[i], body)
             if i == fused_case:
@@ -139,6 +157,7 @@ body: |
             outputs.append(output.read_text())
         rng = random.Random(24703)
         for i, (_, main, _, live, optimized) in enumerate(cases):
+            optimized &= not (busy_af and i in needs_free_af)
             bodies = [re.search(rf'^f{i}:.*?^\s*\.size', s, re.M | re.S)[0]
                       for s in outputs]
             for _ in range(32):
