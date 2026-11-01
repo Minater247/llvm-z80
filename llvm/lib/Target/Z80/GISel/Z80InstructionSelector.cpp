@@ -1603,6 +1603,18 @@ bool Z80InstructionSelector::selectALU8(MachineInstr &I,
       I.getOperand(2).setReg(RHSReg);
     }
 
+  /* Unit byte steps have register forms. Keep them out of the accumulator
+     path so surrounding values can retain A and the result can stay in its
+     own byte register. Overflow-producing operations use separate lowering. */
+  if ((OpcReg == Z80::ADD8ar || OpcReg == Z80::SUB8ar) && RHSConst &&
+      (RHSConst->isOne() || RHSConst->isAllOnes())) {
+    bool Inc = RHSConst->isOne() == (OpcReg == Z80::ADD8ar);
+    I.setDesc(TII.get(Inc ? Z80::INC8r : Z80::DEC8r));
+    I.removeOperand(2);
+    I.addImplicitDefUseOperands(*I.getMF());
+    return constrainSelectedInstRegOperands(I, TII, TRI, RBI);
+  }
+
   MachineIRBuilder Builder(I);
   if (!selectCopy(*Builder.buildCopy(Z80::A, LHSReg), MRI))
     return false;
