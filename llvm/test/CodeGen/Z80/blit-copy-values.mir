@@ -1,0 +1,81 @@
+# RUN: llc -run-pass=z80-blit-folder -verify-machineinstrs %s -o - | FileCheck %s
+--- |
+  target triple = "z80"
+  define void @separate_lanes() { ret void }
+  define void @direct_lane_copy() { ret void }
+  define void @store_other_lane() { ret void }
+  define void @restore_offset() { ret void }
+...
+---
+name: separate_lanes
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $de
+    %0:r16 = COPY $de
+    %1:g8 = COPY %0.sub_low
+    $a = COPY %1
+    LD8ma 16384, implicit $a
+    %2:g8 = COPY %0.sub_high
+    $a = COPY %2
+    RRCA implicit-def $a, implicit-def $f, implicit $a
+    AND8ai 128, implicit-def $a, implicit-def $f, implicit $a
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+# CHECK-LABEL: name: separate_lanes
+# CHECK: %1:g8 = COPY %0.sub_low
+# CHECK: $a = COPY %1
+# CHECK: %2:g8 = COPY %0.sub_high
+# CHECK-NEXT: $a = COPY %2
+# CHECK-NEXT: RRCA
+...
+---
+name: direct_lane_copy
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $de
+    %0:r16 = COPY $de
+    $a = COPY %0.sub_low
+    LD8ma 16384, implicit $a
+    $a = COPY %0.sub_high
+    RRCA implicit-def $a, implicit-def $f, implicit $a
+    AND8ai 128, implicit-def $a, implicit-def $f, implicit $a
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+# CHECK-LABEL: name: direct_lane_copy
+# CHECK: $a = COPY %0.sub_low
+# CHECK: LD8ma
+# CHECK-NEXT: $a = COPY %0.sub_high
+# CHECK-NEXT: RRCA
+...
+---
+name: store_other_lane
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $de, $hl, $a
+    %0:g16 = COPY $de
+    %1:a16 = COPY $hl
+    %0.sub_low:g16 = COPY $a
+    LD8pg %1, %0.sub_high
+    RET16 implicit-def $sps, implicit $sps
+# CHECK-LABEL: name: store_other_lane
+# CHECK: %0.sub_low:g16 = COPY $a
+# CHECK-NEXT: LD8pg %1, %0.sub_high
+...
+---
+name: restore_offset
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $de, $a
+    $hl = COPY $de
+    $hl = INC16r $hl
+    $hl = COPY $de
+    LD8pg $hl, $a
+    RET16 implicit-def $sps, implicit $sps
+# CHECK-LABEL: name: restore_offset
+# CHECK: $hl = COPY $de
+# CHECK-NEXT: $hl = INC16r $hl
+# CHECK-NEXT: $hl = COPY $de
+# CHECK-NEXT: LD8pg $hl, $a
+...

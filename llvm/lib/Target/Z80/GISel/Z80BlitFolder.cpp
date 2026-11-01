@@ -70,7 +70,8 @@ bool Z80BlitFolder::runOnMachineFunction(MachineFunction &MF)
           if (MI0.getOpcode() != TargetOpcode::COPY) {
             break;
           }
-          if (MI0.getFlags() != 0) {
+          if (MI0.getFlags() != 0 || MI0.getOperand(0).getSubReg() ||
+              MI0.getOperand(1).getSubReg()) {
             break;
           }
           if (MI1.getOpcode() != TargetOpcode::COPY) {
@@ -105,7 +106,8 @@ bool Z80BlitFolder::runOnMachineFunction(MachineFunction &MF)
           if (MI0.getOpcode() != TargetOpcode::COPY) {
             break;
           }
-          if (MI0.getFlags() != 0) {
+          if (MI0.getFlags() != 0 || MI0.getOperand(0).getSubReg() ||
+              MI0.getOperand(1).getSubReg()) {
             break;
           }
           if (MI1.getOpcode() != Z80::LD8pg) {
@@ -138,7 +140,8 @@ bool Z80BlitFolder::runOnMachineFunction(MachineFunction &MF)
           if (MI0.getOpcode() != TargetOpcode::COPY) {
             break;
           }
-          if (MI0.getFlags() != 0) {
+          if (MI0.getFlags() != 0 || MI0.getOperand(0).getSubReg() ||
+              MI0.getOperand(1).getSubReg()) {
             break;
           }
           if (MI1.getOpcode() != Z80::LD8og) {
@@ -207,6 +210,9 @@ bool Z80BlitFolder::runOnMachineFunction(MachineFunction &MF)
           if (MI0.getOpcode() != TargetOpcode::COPY) {
             break;
           }
+          if (MI0.getOperand(0).getSubReg() ||
+              MI0.getOperand(1).getSubReg())
+            break;
           Register Dst = MI0.getOperand(0).getReg();
           Register Src = MI0.getOperand(1).getReg();
           if (Dst.isVirtual()) {
@@ -217,7 +223,7 @@ bool Z80BlitFolder::runOnMachineFunction(MachineFunction &MF)
           if (!DstRE.isRegOff()) {
             break;
           }
-          if (DstRE.getRegOff().first == Src) {
+          if (DstRE.getRegOff().first == Src && DstRE.getRegOff().second == 0) {
             LLVM_DEBUG(dbgs() << "@Z80BlitFolder: dropping: "; MI.dump());
             MI.removeFromParent();
             applied = true;

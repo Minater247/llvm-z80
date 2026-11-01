@@ -103,6 +103,13 @@ void Z80Tracker::process(MachineInstr& MI)
     auto& MO1 = MI.getOperand(1);
     Register Dst = MO0.getReg();
     Register Src = MO1.getReg();
+    /* Entries describe whole-register values. A lane copy cannot establish
+       equality with its parent register or with a different lane of it. */
+    if (MO0.getSubReg() || MO1.getSubReg()) {
+      getReg(Src).use(MI);
+      clobber(Dst, true);
+      return;
+    }
     auto& DstRE = getReg(Dst);
     auto& SrcRE = getReg(Src);
     SrcRE.use(MI);
