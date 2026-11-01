@@ -21,6 +21,7 @@ let Namespace = "Z80" in {
   // Subregister indices.
   def sub_low   : SubRegIndex<8>;
   def sub_high  : SubRegIndex<8, 8>;
+  def sub_upper : SubRegIndex<8, 16>;
   def sub_short : SubRegIndex<16>;
 
   class Z80RegPair<Z80Reg high, Z80Reg low,
@@ -42,11 +43,12 @@ let Namespace = "Z80" in {
     let CoveredBySubRegs = 1;
   }
 
-  class EZ80ExtReg<Z80Reg short>
+  class EZ80ExtReg<Z80Reg short, Z80Reg upper>
     : Z80Reg<short.AsmName, short.HWEncoding>
     , DwarfRegAlias<short> {
-    let SubRegs = [short];
-    let SubRegIndices = [sub_short];
+    let SubRegs = [short, upper];
+    let SubRegIndices = [sub_short, sub_upper];
+    let CoveredBySubRegs = 1;
   }
 }
 
@@ -86,13 +88,20 @@ let CostPerUse = [1] in {
 
 
 // 24-bit registers
-def UBC : EZ80ExtReg<BC>;
-def UDE : EZ80ExtReg<DE>;
-def UHL : EZ80ExtReg<HL>;
+/* Upper-byte registers model liveness and aliasing. Instructions access these
+   bytes through the full 24-bit register; byte operand classes exclude them. */
+def BCU : Z80Reg<"bcu">;
+def DEU : Z80Reg<"deu">;
+def HLU : Z80Reg<"hlu">;
+def IXU : Z80Reg<"ixu">;
+def IYU : Z80Reg<"iyu">;
+def UBC : EZ80ExtReg<BC, BCU>;
+def UDE : EZ80ExtReg<DE, DEU>;
+def UHL : EZ80ExtReg<HL, HLU>;
 // 24-bit index registers
 let CostPerUse = [1] in {
-  def UIX : EZ80ExtReg<IX>;
-  def UIY : EZ80ExtReg<IY>;
+  def UIX : EZ80ExtReg<IX, IXU>;
+  def UIY : EZ80ExtReg<IY, IYU>;
 }
 
 // Storage in the alternate bank. These registers are never directly encoded
@@ -116,9 +125,12 @@ let SubRegIndices = [sub_high, sub_low], CoveredBySubRegs = 1 in {
   let SubRegs = [H_ALT, L_ALT] in
   def HL_ALT : Z80Reg<"hl_alt">;
 }
-def UBC_ALT : EZ80ExtReg<BC_ALT>;
-def UDE_ALT : EZ80ExtReg<DE_ALT>;
-def UHL_ALT : EZ80ExtReg<HL_ALT>;
+def BCU_ALT : Z80Reg<"bcu_alt">;
+def DEU_ALT : Z80Reg<"deu_alt">;
+def HLU_ALT : Z80Reg<"hlu_alt">;
+def UBC_ALT : EZ80ExtReg<BC_ALT, BCU_ALT>;
+def UDE_ALT : EZ80ExtReg<DE_ALT, DEU_ALT>;
+def UHL_ALT : EZ80ExtReg<HL_ALT, HLU_ALT>;
 
 // misc registers
 def SPS : Z80Reg<"sp", 3>, DwarfRegNum<[6]>;
