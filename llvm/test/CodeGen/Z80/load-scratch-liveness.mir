@@ -1,0 +1,72 @@
+# RUN: llc -mattr=+alternate-regs -run-pass=postrapseudos,z80-bank-regions -verify-machineinstrs %s -o %t.mir
+# RUN: FileCheck %s < %t.mir
+# RUN: llc -mattr=+alternate-regs -start-after=z80-branch-select %t.mir -o %t.s
+# RUN: %python %S/Inputs/load-scratch-liveness.py %t.s
+--- |
+  target triple = "z80"
+  define void @address() { ret void }
+  define void @overlap() { ret void }
+  define void @low() { ret void }
+  define void @high() { ret void }
+  define void @dead() { ret void }
+...
+---
+name: address
+tracksRegLiveness: true
+# CHECK-LABEL: name: address
+# CHECK: $hl = ALT_LOAD16 $hl_alt
+# CHECK-NEXT: $e = LD8gp $hl
+# CHECK-NEXT: PUSH16r undef $hl, implicit-def $sps, implicit $sps, implicit $l, implicit $h
+body: |
+  bb.0:
+    liveins: $hl_alt, $ix
+    $hl = ALT_LOAD16 $hl_alt
+    $e = LD8gp $hl :: (load (s8))
+    $iy = LD88ro $ix, 0 :: (load (s16))
+    LD8pg $hl, $e :: (store (s8))
+    RET16 implicit-def $sps, implicit $sps, implicit $hl, implicit $iy, implicit $e
+...
+---
+name: overlap
+tracksRegLiveness: true
+# CHECK-LABEL: name: overlap
+# CHECK: PUSH16r undef $de, implicit-def $sps, implicit $sps, implicit $e, implicit $d
+body: |
+  bb.0:
+    liveins: $hl, $de
+    $hl = LD88rp $hl :: (load (s16))
+    RET16 implicit-def $sps, implicit $sps, implicit $hl, implicit $de
+...
+---
+name: low
+tracksRegLiveness: true
+# CHECK-LABEL: name: low
+# CHECK: PUSH16r undef $hl, implicit-def $sps, implicit $sps, implicit $l{{$}}
+body: |
+  bb.0:
+    liveins: $ix, $l
+    $iy = LD88ro $ix, 0 :: (load (s16))
+    RET16 implicit-def $sps, implicit $sps, implicit $l, implicit $iy
+...
+---
+name: high
+tracksRegLiveness: true
+# CHECK-LABEL: name: high
+# CHECK: PUSH16r undef $hl, implicit-def $sps, implicit $sps, implicit $h{{$}}
+body: |
+  bb.0:
+    liveins: $ix, $h
+    $iy = LD88ro $ix, 0 :: (load (s16))
+    RET16 implicit-def $sps, implicit $sps, implicit $h, implicit $iy
+...
+---
+name: dead
+tracksRegLiveness: true
+# CHECK-LABEL: name: dead
+# CHECK: PUSH16r undef $hl, implicit-def $sps, implicit $sps{{$}}
+body: |
+  bb.0:
+    liveins: $ix
+    $iy = LD88ro $ix, 0 :: (load (s16))
+    RET16 implicit-def $sps, implicit $sps, implicit $iy
+...

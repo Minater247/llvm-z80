@@ -1,0 +1,17 @@
+# RUN: llc -run-pass=postrapseudos -verify-machineinstrs %s -o %t.mir
+# RUN: FileCheck %s < %t.mir
+# RUN: llc -run-pass=none -verify-machineinstrs %t.mir -o /dev/null
+--- |
+  target triple = "z80"
+  define void @clear_carry() { ret void }
+...
+---
+name: clear_carry
+tracksRegLiveness: true
+# CHECK-LABEL: name: clear_carry
+# CHECK: OR8aa implicit-def $f, implicit undef $a
+body: |
+  bb.0:
+    RCF implicit-def $f
+    RET16 implicit-def $sps, implicit $sps, implicit $f
+...

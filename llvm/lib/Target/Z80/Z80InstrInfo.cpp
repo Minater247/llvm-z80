@@ -1516,6 +1516,7 @@ bool Z80InstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
   }
   case Z80::RCF:
     MI.setDesc(get(Z80::OR8aa));
+    MIB.addReg(Z80::A, RegState::Implicit | RegState::Undef);
     break;
   case Z80::LD8r0:
     if (MI.getOperand(0).getReg() == Z80::A) {
@@ -1637,11 +1638,19 @@ bool Z80InstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
         Is24Bit
             ? TRI.getMatchingSuperReg(Reg, Z80::sub_short, &Z80::R24RegClass)
             : Reg;
-    if (Index || Overlap)
-      // Save scratch register
-      applySPAdjust(
-          *BuildMI(MBB, MI, DL, get(Is24Bit ? Z80::PUSH24r : Z80::PUSH16r))
-               .addReg(ScratchReg, RegState::Undef));
+    if (Index || Overlap) {
+      auto Save = BuildMI(MBB, MI, DL,
+                          get(Is24Bit ? Z80::PUSH24r : Z80::PUSH16r))
+                      .addReg(ScratchReg, RegState::Undef);
+      /* The stack carries the incoming scratch value across the byte loads.
+         Keep its defined, live lanes visible to later liveness consumers;
+         otherwise they can discard the value restored by EX (SP) or POP. */
+      for (unsigned Sub : {Z80::sub_low, Z80::sub_high, Z80::sub_upper})
+        if (MCRegister Lane = TRI.getSubReg(ScratchReg, Sub))
+          if (!isUndefLane(MBB, MI, Lane, TRI) && isLive(Lane, MI))
+            Save.addReg(Lane, RegState::Implicit);
+      applySPAdjust(*Save);
+    }
     MI.setDesc(get(HighOpc));
     DstOp.setReg(TRI.getSubReg(Reg, Z80::sub_high));
     if (LowOpc != HighOpc) {
