@@ -1061,6 +1061,31 @@ bool Z80InstructionSelector::selectLoadStore(MachineInstr &I,
     const auto &Use = *MRI.use_nodbg_instructions(ValReg).begin();
     AccumulatorByte = Use.isCopy() && Use.getOperand(0).getReg() == Z80::A;
   }
+  bool SharedAccumulatorByte = false;
+  if (IsLoad && Ty == LLT::scalar(8) && !STI.hasEZ80Ops()) {
+    /* Several accumulator consumers can share one load through A. Retaining
+       a general byte copy after it keeps the value allocatable across blocks,
+       while the load itself admits BC and DE instead of requiring HL/IX/IY.
+       Bit tests and byte stores can also consume A directly. */
+    unsigned AccumulatorUses = 0, Budget = 32;
+    bool Compatible = true;
+    for (const auto &Use : MRI.use_nodbg_instructions(ValReg)) {
+      if (!Budget--) {
+        Compatible = false;
+        break;
+      }
+      if (Use.isCopy() && Use.getOperand(0).getReg() == Z80::A) {
+        ++AccumulatorUses;
+        continue;
+      }
+      if (Use.getOpcode() == Z80::BIT8gb ||
+          Use.getOpcode() == Z80::LD8pg || Use.getOpcode() == Z80::LD8og)
+        continue;
+      Compatible = false;
+      break;
+    }
+    SharedAccumulatorByte = Compatible && AccumulatorUses > 1;
+  }
   bool UnitStep = false;
   if ((AddressByte || CopyByte || AccumulatorByte) && PtrMI &&
       PtrMI->getOpcode() == TargetOpcode::G_PTR_ADD)
@@ -1345,7 +1370,7 @@ bool Z80InstructionSelector::selectLoadStore(MachineInstr &I,
     return selectCopy(*Copy, MRI) &&
            constrainSelectedInstRegOperands(I, TII, TRI, RBI);
   }
-  if (AddressByte && !IsOff && RMWOps.empty()) {
+  if ((AddressByte || SharedAccumulatorByte) && !IsOff && RMWOps.empty()) {
     MachineIRBuilder Builder(I);
     Builder.setInsertPt(Builder.getMBB(), std::next(Builder.getInsertPt()));
     auto Copy = Builder.buildCopy(ValReg, Register(Z80::A));
