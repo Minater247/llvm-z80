@@ -45,24 +45,39 @@ struct Access {
 struct Slot {
   unsigned Width = 0;
   bool Valid = true;
-  double Saving = 0;
+  double Saving = 0, PairByteSaving = 0;
   MCRegister Assigned;
   unsigned UnavailableBanks = 0;
 };
 
-static unsigned bankBit(MCRegister R) {
+static unsigned bankMask(MCRegister R) {
   switch (R.id()) {
   case Z80::A_ALT:
     return 1;
-  case Z80::HL_ALT:
-  case Z80::UHL_ALT:
+  case Z80::L_ALT:
     return 2;
-  case Z80::DE_ALT:
-  case Z80::UDE_ALT:
+  case Z80::H_ALT:
     return 4;
-  case Z80::BC_ALT:
-  case Z80::UBC_ALT:
+  case Z80::E_ALT:
     return 8;
+  case Z80::D_ALT:
+    return 16;
+  case Z80::C_ALT:
+    return 32;
+  case Z80::B_ALT:
+    return 64;
+  case Z80::HL_ALT:
+    return 2 | 4;
+  case Z80::DE_ALT:
+    return 8 | 16;
+  case Z80::BC_ALT:
+    return 32 | 64;
+  case Z80::UHL_ALT:
+    return 2 | 4 | 128;
+  case Z80::UDE_ALT:
+    return 8 | 16 | 256;
+  case Z80::UBC_ALT:
+    return 32 | 64 | 512;
   default:
     llvm_unreachable("Unexpected alternate register");
   }
@@ -70,7 +85,8 @@ static unsigned bankBit(MCRegister R) {
 
 // Native stack-relative access versus a bank transfer. These reflect actual
 // pseudo expansion, including saving the accumulator or an index-load scratch.
-static int saving(const Access &A, unsigned Width, bool Bytes) {
+static int saving(const Access &A, unsigned Width, bool Bytes,
+                  bool PairByte = false) {
   bool Index = Z80::I8RegClass.contains(A.Reg) ||
                Z80::I16RegClass.contains(A.Reg) ||
                Z80::I24RegClass.contains(A.Reg);
@@ -82,6 +98,12 @@ static int saving(const Access &A, unsigned Width, bool Bytes) {
     return int(Old) - int(New);
   }
   unsigned Old = Bytes ? (Index ? 7 : 3) : (Index ? 48 : 19);
+  if (PairByte) {
+    unsigned New = A.Reg == Z80::A ? (Bytes ? 3 : 12)
+                                 : (Bytes ? 6 + unsigned(Index)
+                                          : 37 + 4 * unsigned(Index));
+    return int(Old) - int(New);
+  }
   unsigned New = A.Reg == Z80::A
                      ? (Bytes ? (A.Load ? 6 : 4) : (A.Load ? 37 : 29))
                      : (Bytes ? 3 + unsigned(Index) : 12 + 4 * unsigned(Index));
@@ -219,6 +241,8 @@ bool Z80AlternateRegAllocator::runOnMachineFunction(MachineFunction &MF) {
                           ? 1.0
                           : MBFI.getBlockFreqRelativeToEntryBlock(&MBB);
       S.Saving += Weight * saving(Accesses.back(), S.Width, Bytes);
+      if (S.Width == 1)
+        S.PairByteSaving += Weight * saving(Accesses.back(), 1, Bytes, true);
     }
 
   struct CursorRegion {
@@ -303,10 +327,12 @@ bool Z80AlternateRegAllocator::runOnMachineFunction(MachineFunction &MF) {
 
   SmallVector<BitVector, 16> Conflicts(N, BitVector(N));
   const auto &TRI = *ST.getRegisterInfo();
-  const MCRegister Banks[] = {
-      Z80::A_ALT, ST.is24Bit() ? Z80::UHL_ALT : Z80::HL_ALT,
-      ST.is24Bit() ? Z80::UDE_ALT : Z80::DE_ALT,
-      ST.is24Bit() ? Z80::UBC_ALT : Z80::BC_ALT};
+  SmallVector<MCRegister, 7> Banks = {Z80::A_ALT};
+  if (ST.is24Bit())
+    Banks.append({Z80::UHL_ALT, Z80::UDE_ALT, Z80::UBC_ALT});
+  else
+    Banks.append({Z80::L_ALT, Z80::H_ALT, Z80::E_ALT, Z80::D_ALT,
+                  Z80::C_ALT, Z80::B_ALT});
   bool HasFixedBanks = llvm::any_of(Banks, [&](MCRegister R) {
     return MF.getRegInfo().isPhysRegUsed(R, true);
   });
@@ -329,9 +355,9 @@ bool Z80AlternateRegAllocator::runOnMachineFunction(MachineFunction &MF) {
         for (MCRegister R : Banks)
           if ((HasFixedBanks && !FixedLive.available(R)) ||
               MI.modifiesRegister(R, &TRI) || MI.readsRegister(R, &TRI))
-            FixedBanks |= bankBit(R);
+            FixedBanks |= bankMask(R);
       if (MI.isCall() && !HasMask)
-        FixedBanks = 15;
+        FixedBanks = ~0u;
       auto Region = CursorRegions.find(&MI);
       if (Region != CursorRegions.end()) {
         const auto &R = Region->second;
@@ -375,27 +401,38 @@ bool Z80AlternateRegAllocator::runOnMachineFunction(MachineFunction &MF) {
     for (int J : Conflicts[I].set_bits())
       Conflicts[J].set(I);
   }
+  auto BestSaving = [&](unsigned I) {
+    return Slots[I].Width == 1
+               ? std::max(Slots[I].Saving, Slots[I].PairByteSaving)
+               : Slots[I].Saving;
+  };
   SmallVector<unsigned, 16> Order;
   for (unsigned I = 0; I != N; ++I)
-    if (Slots[I].Valid && Slots[I].Saving > 0)
+    if (Slots[I].Valid && BestSaving(I) > 0)
       Order.push_back(I);
   llvm::stable_sort(Order, [&](unsigned A, unsigned B) {
-    return Slots[A].Saving > Slots[B].Saving;
+    return BestSaving(A) > BestSaving(B);
   });
   for (unsigned I : Order) {
     const auto &RC = Slots[I].Width == 1   ? Z80::ALT8RegClass
                      : Slots[I].Width == 2 ? Z80::ALT16RegClass
                                            : Z80::ALT24RegClass;
+    double Best = 0;
     for (MCRegister R : RC) {
-      if (Slots[I].UnavailableBanks & bankBit(R))
+      double Saving = Slots[I].Width == 1 && R != Z80::A_ALT
+                          ? Slots[I].PairByteSaving
+                          : Slots[I].Saving;
+      if (Saving <= Best || (Slots[I].UnavailableBanks & bankMask(R)))
         continue;
       bool Available = true;
       for (int J : Conflicts[I].set_bits())
-        if (Slots[J].Assigned == R)
+        if (Slots[J].Assigned && TRI.regsOverlap(Slots[J].Assigned, R)) {
           Available = false;
+          break;
+        }
       if (Available) {
         Slots[I].Assigned = R;
-        break;
+        Best = Saving;
       }
     }
   }

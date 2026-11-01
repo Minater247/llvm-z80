@@ -43,7 +43,7 @@ body: |
   bb.0:
     liveins: $hl
     LD88or %stack.0, 0, $hl
-    CALL16 @callee, CustomRegMask($de_alt), implicit-def $sps, implicit $sps
+    CALL16 @callee, CustomRegMask($de_alt, $d_alt, $e_alt), implicit-def $sps, implicit $sps
     $de = LD88ro %stack.0, 0
     KILL $de
     RET16 implicit-def $sps, implicit $sps
@@ -57,8 +57,8 @@ body: |
   bb.0:
     liveins: $hl
     LD88or %stack.0, 0, $hl
-    CALL16 @callee, CustomRegMask($de_alt), implicit-def $sps, implicit $sps
-    CALL16 @callee, CustomRegMask($bc_alt), implicit-def $sps, implicit $sps
+    CALL16 @callee, CustomRegMask($de_alt, $d_alt, $e_alt), implicit-def $sps, implicit $sps
+    CALL16 @callee, CustomRegMask($bc_alt, $b_alt, $c_alt), implicit-def $sps, implicit $sps
     $de = LD88ro %stack.0, 0
     KILL $de
     RET16 implicit-def $sps, implicit $sps
@@ -86,7 +86,7 @@ body: |
   bb.0:
     liveins: $hl
     LD88or %stack.0, 0, $hl
-    CALL16 @callee, CustomRegMask($de_alt), implicit-def $de_alt, implicit-def $sps, implicit $sps
+    CALL16 @callee, CustomRegMask($de_alt, $d_alt, $e_alt), implicit-def $de_alt, implicit-def $sps, implicit $sps
     $de = LD88ro %stack.0, 0
     KILL $de
     RET16 implicit-def $sps, implicit $sps
@@ -104,6 +104,6 @@ body: |
   bb.1:
     $de = LD88ro %stack.0, 0
     KILL $de
-    CALL16 @callee, CustomRegMask($de_alt), implicit-def $sps, implicit $sps
+    CALL16 @callee, CustomRegMask($de_alt, $d_alt, $e_alt), implicit-def $sps, implicit $sps
     JP16 %bb.1
 ...

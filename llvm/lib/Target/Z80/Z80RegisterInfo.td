@@ -102,9 +102,20 @@ def F_ALT : Z80Reg<"f_alt">;
 let SubRegs = [A_ALT, F_ALT], SubRegIndices = [sub_high, sub_low],
     CoveredBySubRegs = 1 in
 def AF_ALT : Z80Reg<"af_alt">;
-def BC_ALT : Z80Reg<"bc_alt">;
-def DE_ALT : Z80Reg<"de_alt">;
-def HL_ALT : Z80Reg<"hl_alt">;
+def B_ALT : Z80Reg<"b_alt">;
+def C_ALT : Z80Reg<"c_alt">;
+def D_ALT : Z80Reg<"d_alt">;
+def E_ALT : Z80Reg<"e_alt">;
+def H_ALT : Z80Reg<"h_alt">;
+def L_ALT : Z80Reg<"l_alt">;
+let SubRegIndices = [sub_high, sub_low], CoveredBySubRegs = 1 in {
+  let SubRegs = [B_ALT, C_ALT] in
+  def BC_ALT : Z80Reg<"bc_alt">;
+  let SubRegs = [D_ALT, E_ALT] in
+  def DE_ALT : Z80Reg<"de_alt">;
+  let SubRegs = [H_ALT, L_ALT] in
+  def HL_ALT : Z80Reg<"hl_alt">;
+}
 def UBC_ALT : EZ80ExtReg<BC_ALT>;
 def UDE_ALT : EZ80ExtReg<DE_ALT>;
 def UHL_ALT : EZ80ExtReg<HL_ALT>;
@@ -162,7 +173,7 @@ def Z24 : Z80RC24<(add SPL, PC)>;
 // Transfer pseudos name these storage classes. Ordinary instruction classes
 // exclude their members; B16 below offers whole pairs to bank-aware operations.
 let isAllocatable = 0 in {
-  def ALT8 : Z80RC8<(add A_ALT)>;
+  def ALT8 : Z80RC8<(add A_ALT, L_ALT, H_ALT, E_ALT, D_ALT, C_ALT, B_ALT)>;
   def ALT16 : Z80RC16<(add HL_ALT, DE_ALT, BC_ALT)>;
   def ALT24 : Z80RC24<(add UHL_ALT, UDE_ALT, UBC_ALT)>;
 }

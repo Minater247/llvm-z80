@@ -1005,10 +1005,9 @@ multiclass ORInstr<bits<3> opcode, string mnemonic> {
 
 defm OR : ORInstr<6, "or">;
 
-let isCompare = false, Defs = [A, F], Uses = [A] in
-def OR8aa : I<NoPre, 0xB7, "or", "\ta", "",
-               (outs), (ins),
-               [(set A, F, (Z80or_flag A, A))]>;
+// A self-test preserves the accumulator and exposes a zero comparison.
+let isCompare = true, Defs = [F], Uses = [A] in
+def OR8aa : I<NoPre, 0xB7, "or", "\ta", "", (outs), (ins)>;
 
 multiclass CPInstr<Prefix prefix, bits<3> opcode, string mnemonic,
                    bit compare = false> {

@@ -2030,9 +2030,8 @@ Z80InstructionSelector::foldCompare(MachineInstr &I, MachineIRBuilder &MIB,
             Ops.push_back(static_cast<uint64_t>(BitIdx));
           }
         } else {
-          Opc = Z80::OR8ar;
+          Opc = Z80::OR8aa;
           Ops.clear();
-          Ops.push_back(Reg);
         }
       } else if (OpSize == 16) {
         // Generic 16-bit zero test that does not force use of HL: A = H; OR L

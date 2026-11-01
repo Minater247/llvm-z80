@@ -36,6 +36,13 @@ def main():
             cases.append((f'${bank}_alt = BANK_DEC16 ${bank}_alt\n'
                           f'    ${destination} = ALT_LOAD16 ${bank}_alt\n'
                           f'    $a = LD8ap ${destination}', destination))
+    for bank in 'bcdehl':
+        cases.append((f'$a = ALT_LOAD8 ${bank}_alt\n'
+                      '    ADD8ai 1, implicit-def $a, implicit-def $f, implicit $a\n'
+                      f'    ${bank}_alt = ALT_SAVE8 $a', None))
+        for destination in 'bcdehl':
+            cases.append((f'$a = ALT_LOAD8 ${bank}_alt\n'
+                          f'    ${destination}_alt = ALT_SAVE8 $a', None))
     mir = '--- |\n  target triple = "z80"\n'
     for index in range(len(cases)):
         mir += f'  define void @case{index}() nounwind {{ ret void }}\n'

@@ -1,0 +1,120 @@
+# RUN: llc -mattr=+alternate-regs -run-pass=z80-alternate-regalloc -verify-machineinstrs %s -o - | FileCheck %s
+# RUN: llc -mattr=-alternate-regs -run-pass=z80-alternate-regalloc -verify-machineinstrs %s -o - | FileCheck %s --check-prefix=OFF
+# RUN: llc -mattr=+alternate-regs -start-before=z80-alternate-regalloc -verify-machineinstrs %s -o %t.s
+# RUN: %python %S/Inputs/byte-bank-spills.py %t.s
+# OFF-NOT: ALT_SAVE8
+--- |
+  target triple = "z80"
+  declare void @external()
+  define i8 @two_bytes() { ret i8 0 }
+  define i8 @word_bytes() { ret i8 0 }
+  define i8 @fixed_lane() { ret i8 0 }
+  define i8 @partial_neighbor() { ret i8 0 }
+  define i8 @call_live() { ret i8 0 }
+...
+---
+name: two_bytes
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 1, alignment: 1 }
+  - { id: 1, type: spill-slot, size: 1, alignment: 1 }
+# Both values are live together and occupy different lanes of one pair.
+# CHECK-LABEL: name: two_bytes
+# CHECK: $l_alt = ALT_SAVE8 $a
+# CHECK: $h_alt = ALT_SAVE8 $a
+# CHECK: $a = ALT_LOAD8 $l_alt
+# CHECK: $a = ALT_LOAD8 $h_alt
+body: |
+  bb.0:
+    liveins: $hl
+    $a = COPY $l
+    LD8or %stack.0, 0, $a
+    $a = COPY $h
+    LD8or %stack.1, 0, $a
+    $a = LD8ro %stack.0, 0
+    $b = COPY $a
+    $a = LD8ro %stack.1, 0
+    ADD8ar $b, implicit-def $a, implicit-def $f, implicit $a
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...
+---
+name: word_bytes
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 2, alignment: 1 }
+  - { id: 1, type: spill-slot, size: 1, alignment: 1 }
+  - { id: 2, type: spill-slot, size: 1, alignment: 1 }
+# A whole-pair spill excludes both of its byte aliases.
+# CHECK-LABEL: name: word_bytes
+# CHECK: $hl_alt = ALT_SAVE16 $hl
+# CHECK: $e_alt = ALT_SAVE8 $a
+# CHECK: $d_alt = ALT_SAVE8 $a
+# CHECK: $de = ALT_LOAD16 $hl_alt
+# CHECK: $a = ALT_LOAD8 $e_alt
+# CHECK: $a = ALT_LOAD8 $d_alt
+body: |
+  bb.0:
+    liveins: $hl, $a, $c
+    LD88or %stack.0, 0, $hl
+    LD8or %stack.1, 0, $a
+    $a = COPY $c
+    LD8or %stack.2, 0, $a
+    $de = LD88ro %stack.0, 0
+    $a = LD8ro %stack.1, 0
+    $b = COPY $a
+    $a = LD8ro %stack.2, 0
+    ADD8ar $b, implicit-def $a, implicit-def $f, implicit $a
+    RET16 implicit-def $sps, implicit $sps, implicit $a, implicit $de
+...
+---
+name: fixed_lane
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 1, alignment: 1 }
+# A fixed high lane leaves the low lane available throughout the spill.
+# CHECK-LABEL: name: fixed_lane
+# CHECK: $l_alt = ALT_SAVE8 $a
+# CHECK: $a = ALT_LOAD8 $l_alt
+body: |
+  bb.0:
+    liveins: $a, $h_alt
+    LD8or %stack.0, 0, $a
+    $a = LD8ro %stack.0, 0
+    RET16 implicit-def $sps, implicit $sps, implicit $a, implicit $h_alt
+...
+---
+name: partial_neighbor
+tracksRegLiveness: true
+# A word region must preserve a live byte in a neighboring alternate pair.
+# CHECK-LABEL: name: partial_neighbor
+# CHECK: $hl = ALT_LOAD16 $de_alt
+# CHECK: $a = ALT_LOAD8 $h_alt
+body: |
+  bb.0:
+    liveins: $h_alt, $de_alt
+    $hl = ALT_LOAD16 $de_alt
+    $hl = INC16r $hl
+    $de_alt = ALT_SAVE16 $hl
+    $a = ALT_LOAD8 $h_alt
+    RET16 implicit-def $sps, implicit $sps, implicit $a, implicit $de_alt
+...
+---
+name: call_live
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 1, alignment: 1 }
+# An unknown callee can overwrite every alternate byte.
+# CHECK-LABEL: name: call_live
+# CHECK-NOT: ALT_SAVE
+# CHECK: LD8or %stack.0
+# CHECK: CALL16
+# CHECK: $a = LD8ro %stack.0
+# CHECK-NOT: ALT_LOAD
+body: |
+  bb.0:
+    liveins: $a
+    LD8or %stack.0, 0, $a
+    CALL16 @external, csr_z80_c, implicit-def $sps, implicit $sps
+    $a = LD8ro %stack.0, 0
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...

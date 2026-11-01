@@ -47,7 +47,7 @@ body: |
   bb.0:
     liveins: $uhl
     LD24or %stack.0, 0, $uhl
-    CALL24 @callee, CustomRegMask($ude_alt), implicit-def $spl, implicit $spl
+    CALL24 @callee, CustomRegMask($ude_alt, $de_alt, $d_alt, $e_alt), implicit-def $spl, implicit $spl
     $ude = LD24ro %stack.0, 0
     KILL $ude
     RET24 implicit-def $spl, implicit $spl
@@ -61,8 +61,8 @@ body: |
   bb.0:
     liveins: $uhl
     LD24or %stack.0, 0, $uhl
-    CALL24 @callee, CustomRegMask($ude_alt), implicit-def $spl, implicit $spl
-    CALL24 @callee, CustomRegMask($ubc_alt), implicit-def $spl, implicit $spl
+    CALL24 @callee, CustomRegMask($ude_alt, $de_alt, $d_alt, $e_alt), implicit-def $spl, implicit $spl
+    CALL24 @callee, CustomRegMask($ubc_alt, $bc_alt, $b_alt, $c_alt), implicit-def $spl, implicit $spl
     $ude = LD24ro %stack.0, 0
     KILL $ude
     RET24 implicit-def $spl, implicit $spl
@@ -90,7 +90,7 @@ body: |
   bb.0:
     liveins: $uhl
     LD24or %stack.0, 0, $uhl
-    CALL24 @callee, CustomRegMask($ude_alt), implicit-def $ude_alt, implicit-def $spl, implicit $spl
+    CALL24 @callee, CustomRegMask($ude_alt, $de_alt, $d_alt, $e_alt), implicit-def $ude_alt, implicit-def $spl, implicit $spl
     $ude = LD24ro %stack.0, 0
     KILL $ude
     RET24 implicit-def $spl, implicit $spl
@@ -108,6 +108,6 @@ body: |
   bb.1:
     $ude = LD24ro %stack.0, 0
     KILL $ude
-    CALL24 @callee, CustomRegMask($ude_alt), implicit-def $spl, implicit $spl
+    CALL24 @callee, CustomRegMask($ude_alt, $de_alt, $d_alt, $e_alt), implicit-def $spl, implicit $spl
     JP24 %bb.1
 ...

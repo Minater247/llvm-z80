@@ -24,7 +24,8 @@ def main():
         prefix = 'u' if bits == 24 else ''
         for save in (True, False):
             for reg in ['a', 'b', 'c', 'd', 'e', 'h', 'l', 'ixh', 'ixl', 'iyh', 'iyl']:
-                cases.append((save, 8, reg, 'a_alt'))
+                for alt in ('a', 'b', 'c', 'd', 'e', 'h', 'l'):
+                    cases.append((save, 8, reg, alt + '_alt'))
             for reg in ['bc', 'de', 'hl', 'ix', 'iy']:
                 for alt in ['bc', 'de', 'hl']:
                     cases.append((save, bits, prefix + reg, prefix + alt + '_alt'))
@@ -96,7 +97,7 @@ body: |
                 shadow = alt.removesuffix('_alt').removeprefix('u')
                 if save:
                     write(shadow, read(main, initial), expected_alt)
-                    if main == 'a':
+                    if main == 'a' and shadow == 'a':
                         expected_alt['f'] = initial['f']
                 else:
                     write(main, read(shadow, alternate), expected)

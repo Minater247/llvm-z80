@@ -25,15 +25,15 @@ body: |
   bb.0:
     liveins: $bc
     %0:r16 = COPY $bc
-    CALL16 @external, CustomRegMask($ix, $a_alt, $bc_alt, $de_alt, $hl_alt), implicit-def $sps, implicit $sps
+    CALL16 @external, CustomRegMask($ix,  $a_alt,  $bc_alt,  $de_alt,  $hl_alt, $b_alt, $c_alt, $d_alt, $e_alt, $h_alt, $l_alt), implicit-def $sps, implicit $sps
     $de = COPY %0
     LD16mr 8192, $de :: (store (s16))
     $hl = LD16ri 8194
     %1:g8 = LD8gp $hl :: (volatile load (s8))
-    CALL16 @external, CustomRegMask($ix, $a_alt, $bc_alt, $de_alt, $hl_alt), implicit-def $sps, implicit $sps
+    CALL16 @external, CustomRegMask($ix,  $a_alt,  $bc_alt,  $de_alt,  $hl_alt, $b_alt, $c_alt, $d_alt, $e_alt, $h_alt, $l_alt), implicit-def $sps, implicit $sps
     $l = COPY %1
     KILL $l
-    CALL16 @external, CustomRegMask($ix, $a_alt, $bc_alt, $de_alt, $hl_alt), implicit-def $sps, implicit $sps
+    CALL16 @external, CustomRegMask($ix,  $a_alt,  $bc_alt,  $de_alt,  $hl_alt, $b_alt, $c_alt, $d_alt, $e_alt, $h_alt, $l_alt), implicit-def $sps, implicit $sps
     $l = COPY %1
     RET16 implicit-def $sps, implicit $sps, implicit $l
 ...

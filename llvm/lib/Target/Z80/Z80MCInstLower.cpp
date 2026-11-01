@@ -302,6 +302,33 @@ void Z80AsmPrinter::emitInstruction(const MachineInstr *MI) {
       Pop(Load ? Main : Bank);
       if (Save)
         Emit(Exchange);
+    } else if (Alt != Z80::A_ALT) {
+      MCRegister Bank = Alt == Z80::L_ALT ? Z80::L
+                        : Alt == Z80::H_ALT ? Z80::H
+                        : Alt == Z80::E_ALT ? Z80::E
+                        : Alt == Z80::D_ALT ? Z80::D
+                        : Alt == Z80::C_ALT ? Z80::C : Z80::B;
+      unsigned Move = Z80::I8RegClass.contains(Main)
+                          ? (Z80::X8RegClass.contains(Main) ? Z80::LD8xx
+                                                          : Z80::LD8yy)
+                          : Z80::LD8gg;
+      unsigned Exchange = Wide ? Z80::EXX24 : Z80::EXX16;
+      /* A stays visible through EXX. Preserve it when it bridges a transfer
+         between a primary byte and an alternate byte. LD and EXX preserve F. */
+      if (Main != Z80::A) {
+        Push(Z80::AF);
+        if (Save)
+          Emit(Move, {Z80::A, Main});
+      }
+      Emit(Exchange);
+      Emit(Z80::LD8gg, {Load ? MCRegister(Z80::A) : Bank,
+                       Load ? Bank : MCRegister(Z80::A)});
+      Emit(Exchange);
+      if (Main != Z80::A) {
+        if (Load)
+          Emit(Move, {Main, Z80::A});
+        Pop(Z80::AF);
+      }
     } else if (Main == Z80::A && Save) {
       Push(Z80::AF);
       Emit(Z80::EXAF);

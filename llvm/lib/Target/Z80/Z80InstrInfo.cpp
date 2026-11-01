@@ -203,6 +203,8 @@ unsigned Z80InstrInfo::getInstSizeInBytes(const MachineInstr &MI) const {
   case Z80::ALT_LOAD8: {
     bool Load = MI.getOpcode() == Z80::ALT_LOAD8;
     MCRegister R = MI.getOperand(Load ? 0 : 1).getReg();
+    if (MI.getOperand(Load ? 1 : 0).getReg() != Z80::A_ALT)
+      return R == Z80::A ? 3 : 6 + unsigned(Z80::I8RegClass.contains(R));
     return R == Z80::A ? (Load ? 6 : 4)
                        : 3 + unsigned(Z80::I8RegClass.contains(R));
   }
@@ -1924,14 +1926,17 @@ bool Z80InstrInfo::analyzeCompare(const MachineInstr &MI, Register &SrcReg,
                                   int64_t &CmpValue) const {
   switch (MI.getOpcode()) {
   default: return false;
+  case Z80::OR8aa:
+    SrcReg = Z80::A;
+    SrcReg2 = Register();
+    CmpMask = ~0;
+    CmpValue = 0;
+    break;
   case Z80::OR8ar:
   case Z80::TST8ag:
     SrcReg = Z80::A;
-    if (MI.getOperand(1).getReg() != SrcReg)
-      return false;
-    // Compare against zero.
-    SrcReg2 = 0;
-    CmpMask = 0;
+    SrcReg2 = MI.getOperand(0).getReg();
+    CmpMask = ~0;
     CmpValue = 0;
     break;
   case Z80::CP8ai:
@@ -1969,6 +1974,13 @@ bool Z80InstrInfo::analyzeCompare(const MachineInstr &MI, Register &SrcReg,
     for (Register *Reg : {&SrcReg, &SrcReg2})
       if (Reg->isPhysical() && *Reg == I->getOperand(0).getReg())
         *Reg = I->getOperand(1).getReg();
+  if (MI.getOpcode() == Z80::OR8ar || MI.getOpcode() == Z80::TST8ag) {
+    /* A self-test compares one value with zero. An OR or AND of distinct
+       values cannot reuse either operand's flags, even when A is implicit. */
+    if (SrcReg != SrcReg2)
+      return false;
+    SrcReg2 = Register();
+  }
   return true;
 }
 
@@ -2091,13 +2103,36 @@ bool Z80InstrInfo::optimizeCompareInstr(MachineInstr &CmpInstr, Register SrcReg,
       CmpInstr.removeOperand(DeadDef);
   }
 
-  // Get the unique definition of SrcReg.
-  MachineInstr *MI;
+  // Follow copies to the instruction that produced the compared value.
+  MachineInstr *MI = nullptr;
+  MachineInstr *Use = &CmpInstr;
   Register LookthroughReg = SrcReg;
-  do
-    MI = MRI->getUniqueVRegDef(LookthroughReg);
-  while (MI && MI->isFullCopy() &&
-         (LookthroughReg = MI->getOperand(1).getReg()).isVirtual());
+  unsigned Budget = 64;
+  while (Budget) {
+    --Budget;
+    if (LookthroughReg.isVirtual()) {
+      MI = MRI->getUniqueVRegDef(LookthroughReg);
+    } else if (IsCmpZero && LookthroughReg == Z80::A) {
+      /* Accumulator ALU instructions define A implicitly. The virtual result
+         is a following COPY, so find A's reaching definition at that copy. */
+      MI = nullptr;
+      auto I = Use->getIterator();
+      while (I != Use->getParent()->begin() && Budget) {
+        --Budget;
+        auto &Previous = *--I;
+        if (Previous.modifiesRegister(Z80::A, &TRI)) {
+          MI = &Previous;
+          break;
+        }
+      }
+    } else {
+      break;
+    }
+    if (!MI || !MI->isFullCopy())
+      break;
+    Use = MI;
+    LookthroughReg = MI->getOperand(1).getReg();
+  }
   if (!MI) return false;
 
   MachineBasicBlock::iterator I = CmpInstr, Def = MI;

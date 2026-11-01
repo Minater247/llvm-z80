@@ -35,6 +35,18 @@ STATISTIC(NumBankJoins, "Adjacent alternate-bank arithmetic regions joined");
 namespace {
 MCRegister mainReg(MCRegister Alt) {
   switch (Alt.id()) {
+  case Z80::B_ALT:
+    return Z80::B;
+  case Z80::C_ALT:
+    return Z80::C;
+  case Z80::D_ALT:
+    return Z80::D;
+  case Z80::E_ALT:
+    return Z80::E;
+  case Z80::H_ALT:
+    return Z80::H;
+  case Z80::L_ALT:
+    return Z80::L;
   case Z80::BC_ALT:
     return Z80::BC;
   case Z80::DE_ALT:
@@ -100,6 +112,13 @@ bool Z80BankRegionAllocator::runOnMachineFunction(MachineFunction &MF) {
     unsigned Opc = MI.getOpcode(), Op = Opc == Z80::BANK_LD8ap ? 1 : 0;
     unsigned MainOpc = 0;
     switch (Opc) {
+    case Z80::ALT_SAVE8:
+    case Z80::ALT_LOAD8:
+      Op = Opc == Z80::ALT_LOAD8 ? 1 : 0;
+      if (MI.getOperand(1 - Op).getReg() != Z80::A)
+        return 0;
+      MainOpc = Z80::LD8gg;
+      break;
     case Z80::BANK_ADD16:
       if (!mainReg(MI.getOperand(2).getReg()))
         return 0;
@@ -446,7 +465,8 @@ bool Z80BankRegionAllocator::runOnMachineFunction(MachineFunction &MF) {
           if (MO.isReg() && MO.isUse())
             MO.setIsUndef(true);
         for (MCRegister R : {Z80::B, Z80::C, Z80::D, Z80::E, Z80::H, Z80::L,
-                             Z80::BC_ALT, Z80::DE_ALT, Z80::HL_ALT})
+                             Z80::B_ALT, Z80::C_ALT, Z80::D_ALT, Z80::E_ALT,
+                             Z80::H_ALT, Z80::L_ALT})
           if (!In.available(R))
             Enter.addReg(R, RegState::Implicit);
         for (auto I = First->getIterator(); I != End;) {
@@ -488,7 +508,8 @@ bool Z80BankRegionAllocator::runOnMachineFunction(MachineFunction &MF) {
         for (auto &MO : Exit->operands())
           if (MO.isReg() && MO.isUse())
             MO.setIsUndef(true);
-        for (MCRegister R : {Z80::BC_ALT, Z80::DE_ALT, Z80::HL_ALT}) {
+        for (MCRegister R : {Z80::B_ALT, Z80::C_ALT, Z80::D_ALT, Z80::E_ALT,
+                             Z80::H_ALT, Z80::L_ALT}) {
           MCRegister Main = mainReg(R);
           if (!Out.available(R))
             Exit.addReg(Main, RegState::Implicit);
@@ -522,6 +543,7 @@ bool Z80BankRegionAllocator::runOnMachineFunction(MachineFunction &MF) {
                    return MO.isRegMask() ||
                           (MO.isReg() && MO.getReg() &&
                            (switched(MO.getReg(), TRI) ||
+                            Z80::ALT8RegClass.contains(MO.getReg()) ||
                             Z80::ALT16RegClass.contains(MO.getReg()) ||
                             Z80::ALT24RegClass.contains(MO.getReg())));
                  })) {

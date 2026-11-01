@@ -1,0 +1,178 @@
+# RUN: llc -run-pass=peephole-opt -verify-machineinstrs %s -o - | FileCheck %s
+# RUN: llc -start-before=peephole-opt -verify-machineinstrs %s -o %t.s
+# RUN: %python %S/Inputs/accumulator-flags.py %t.s
+--- |
+  target triple = "z80"
+  define i8 @zero_add() { ret i8 0 }
+  define i8 @zero_copy() { ret i8 0 }
+  define i8 @zero_cp() { ret i8 0 }
+  define i8 @distinct_or() { ret i8 0 }
+  define i8 @parity() { ret i8 0 }
+  define i8 @carry() { ret i8 0 }
+  define i8 @flags_overwritten() { ret i8 0 }
+...
+---
+name: zero_add
+tracksRegLiveness: true
+# CHECK-LABEL: name: zero_add
+# CHECK: ADD8ai
+# CHECK-NOT: OR8aa
+# CHECK-NOT: CP8ai
+# CHECK: JQCC
+body: |
+  bb.0:
+    successors: %bb.1, %bb.2
+    liveins: $a, $b
+    ADD8ai -1, implicit-def $a, implicit-def $f, implicit $a
+    %1:r8 = COPY $a
+    $a = COPY %1
+    OR8aa implicit-def $f, implicit $a
+    JQCC %bb.2, 1, implicit killed $f
+    JQ %bb.1
+  bb.1:
+    $a = LD8ri 0
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+  bb.2:
+    $a = LD8ri 1
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...
+---
+name: zero_copy
+tracksRegLiveness: true
+# CHECK-LABEL: name: zero_copy
+# CHECK: ADD8ai
+# CHECK-NOT: OR8aa
+# CHECK-NOT: CP8ai
+# CHECK: JQCC
+body: |
+  bb.0:
+    successors: %bb.1, %bb.2
+    liveins: $a, $b
+    ADD8ai -1, implicit-def $a, implicit-def $f, implicit $a
+    %0:r8 = COPY $a
+    $a = COPY %0
+    %1:r8 = COPY $a
+    $a = COPY %1
+    OR8aa implicit-def $f, implicit $a
+    JQCC %bb.2, 1, implicit killed $f
+    JQ %bb.1
+  bb.1:
+    $a = LD8ri 0
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+  bb.2:
+    $a = LD8ri 1
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...
+---
+name: zero_cp
+tracksRegLiveness: true
+# CHECK-LABEL: name: zero_cp
+# CHECK: ADD8ai
+# CHECK-NOT: OR8aa
+# CHECK-NOT: CP8ai
+# CHECK: JQCC
+body: |
+  bb.0:
+    successors: %bb.1, %bb.2
+    liveins: $a, $b
+    ADD8ai -1, implicit-def $a, implicit-def $f, implicit $a
+    %1:r8 = COPY $a
+    $a = COPY %1
+    CP8ai 0, implicit-def $f, implicit $a
+    JQCC %bb.2, 1, implicit killed $f
+    JQ %bb.1
+  bb.1:
+    $a = LD8ri 0
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+  bb.2:
+    $a = LD8ri 1
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...
+---
+name: distinct_or
+tracksRegLiveness: true
+# CHECK-LABEL: name: distinct_or
+# CHECK: ADD8ai
+# CHECK: OR8ar
+# CHECK: JQCC
+body: |
+  bb.0:
+    successors: %bb.1, %bb.2
+    liveins: $a, $b
+    ADD8ai 1, implicit-def $a, implicit-def $f, implicit $a
+    OR8ar $b, implicit-def $a, implicit-def $f, implicit $a
+    JQCC %bb.2, 1, implicit killed $f
+    JQ %bb.1
+  bb.1:
+    $a = LD8ri 0
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+  bb.2:
+    $a = LD8ri 1
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...
+---
+name: parity
+tracksRegLiveness: true
+# CHECK-LABEL: name: parity
+# CHECK: ADD8ai
+# CHECK: OR8aa
+# CHECK: JQCC
+body: |
+  bb.0:
+    successors: %bb.1, %bb.2
+    liveins: $a, $b
+    ADD8ai 1, implicit-def $a, implicit-def $f, implicit $a
+    %1:r8 = COPY $a
+    $a = COPY %1
+    OR8aa implicit-def $f, implicit $a
+    JQCC %bb.2, 5, implicit killed $f
+    JQ %bb.1
+  bb.1:
+    $a = LD8ri 0
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+  bb.2:
+    $a = LD8ri 1
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...
+---
+name: carry
+tracksRegLiveness: true
+# CHECK-LABEL: name: carry
+# CHECK: ADD8ai
+# CHECK: OR8aa
+# CHECK: RET16
+body: |
+  bb.0:
+    liveins: $a, $b
+    ADD8ai 1, implicit-def $a, implicit-def $f, implicit $a
+    %1:r8 = COPY $a
+    $a = COPY %1
+    OR8aa implicit-def $f, implicit $a
+    ADC8ai 0, implicit-def $a, implicit-def $f, implicit $a, implicit $f
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...
+---
+name: flags_overwritten
+tracksRegLiveness: true
+# CHECK-LABEL: name: flags_overwritten
+# CHECK: ADD8ai
+# CHECK: OR8aa
+# CHECK: JQCC
+body: |
+  bb.0:
+    successors: %bb.1, %bb.2
+    liveins: $a, $b
+    ADD8ai 1, implicit-def $a, implicit-def $f, implicit $a
+    CP8ai 3, implicit-def $f, implicit $a
+    %1:r8 = COPY $a
+    $a = COPY %1
+    OR8aa implicit-def $f, implicit $a
+    JQCC %bb.2, 1, implicit killed $f
+    JQ %bb.1
+  bb.1:
+    $a = LD8ri 0
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+  bb.2:
+    $a = LD8ri 1
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...
