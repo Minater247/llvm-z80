@@ -17,6 +17,7 @@
 #include "Z80InstrInfo.h"
 #include "Z80MachineFunctionInfo.h"
 #include "Z80Subtarget.h"
+#include "llvm/CodeGen/LiveRegUnits.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
@@ -33,13 +34,15 @@ Z80FrameLowering::Z80FrameLowering(const Z80Subtarget &STI)
       STI(STI), TII(*STI.getInstrInfo()), TRI(STI.getRegisterInfo()),
       Is24Bit(STI.is24Bit()), SlotSize(Is24Bit ? 3 : 2) {}
 
-/// hasFP - Return true if the specified function should have a dedicated frame
-/// pointer register.  This is true if the function has variable sized allocas
-/// or if frame pointer elimination is disabled.
+/// Select a dedicated frame pointer for ordinary stack frames. Verified
+/// SP-based argument loads and static-stack functions use their own addressing;
+/// variable objects and frame-address consumers require a frame pointer.
 bool Z80FrameLowering::hasFPImpl(const MachineFunction &MF) const {
   const MachineFrameInfo &MFI = MF.getFrameInfo();
   if (MFI.hasVarSizedObjects() || MFI.isFrameAddressTaken())
     return true;
+  if (MF.getInfo<Z80MachineFunctionInfo>()->usesSPArgumentLoads())
+    return false;
   auto& F = MF.getFunction();
   if (F.hasFnAttribute("static_stack_needs_ix"))
       return false;
@@ -498,10 +501,87 @@ shouldUseAltFP(MachineFunction &MF, MCRegister AltFPReg,
   return Z80MachineFunctionInfo::AFPM_Partial;
 }
 
+/// Read a leaf function's first stack word without a dedicated frame pointer.
+/// The load stays at its original position and preserves the return address,
+/// argument bytes and SP. AF must be dead there. Other stack objects, stack
+/// adjustments, unwind information and explicit frame-pointer requests retain
+/// their normal frame representation.
+static bool useStackArgumentPops(MachineFunction &MF,
+                                ArrayRef<CalleeSavedInfo> CSI) {
+  const auto &ST = MF.getSubtarget<Z80Subtarget>();
+  const auto &TII = *ST.getInstrInfo();
+  const auto &TRI = *ST.getRegisterInfo();
+  auto &MFI = MF.getFrameInfo();
+  const auto &F = MF.getFunction();
+  if (!ST.is16Bit() || ST.hasEZ80Ops() || !CSI.empty() ||
+      MFI.getObjectIndexBegin() == 0 ||
+      (F.getCallingConv() != CallingConv::C &&
+       F.getCallingConv() != CallingConv::Fast) ||
+      F.isVarArg() || F.hasOptNone() ||
+      F.hasFnAttribute(Attribute::Naked) || F.hasFnAttribute("interrupt") ||
+      F.hasFnAttribute("static_stack_needs_ix") || MF.needsFrameMoves() ||
+      MFI.hasVarSizedObjects() || MFI.isFrameAddressTaken() ||
+      MFI.isReturnAddressTaken() || MFI.hasStackMap() || MFI.hasPatchPoint() ||
+      MF.getTarget().Options.DisableFramePointerElim(MF))
+    return false;
+  for (int I = 0; I != MFI.getObjectIndexEnd(); ++I)
+    if (!MFI.isDeadObjectIndex(I))
+      return false;
+
+  MachineInstr *Load = nullptr;
+  for (auto &MBB : MF)
+    for (auto &MI : MBB) {
+      if (MI.isDebugInstr())
+        continue;
+      if (MI.isCall() || MI.isInlineAsm() || MI.isCFIInstruction() ||
+          (MI.getOpcode() != Z80::RET16 &&
+           (MI.readsRegister(Z80::SPS, &TRI) ||
+            MI.modifiesRegister(Z80::SPS, &TRI))))
+        return false;
+      for (const auto &MO : MI.operands()) {
+        if (!MO.isFI())
+          continue;
+        int FI = MO.getIndex();
+        if (Load || &MBB != &MF.front() || MI.isBundled() ||
+            MI.getOpcode() != Z80::LD88ro || &MO != &MI.getOperand(1) ||
+            !MFI.isFixedObjectIndex(FI) || MFI.getObjectOffset(FI) != 0 ||
+            MFI.getObjectSize(FI) != 2 || MI.getOperand(2).getImm() != 0 ||
+            !Z80::R16RegClass.contains(MI.getOperand(0).getReg()) ||
+            MI.hasOrderedMemoryRef())
+          return false;
+        Load = &MI;
+      }
+    }
+  if (!Load)
+    return false;
+  auto &MBB = *Load->getParent();
+  LiveRegUnits Live(TRI);
+  Live.addLiveOuts(MBB);
+  for (auto I = MBB.rbegin(); &*I != Load; ++I)
+    Live.stepBackward(*I);
+  if (!Live.available(Z80::AF))
+    return false;
+
+  /* POP AF holds the return address while the next POP reads the argument.
+     Both pushes restore the original stack bytes before ordinary code resumes;
+     the intervening pair transfers preserve AF's exact bits. */
+  auto DL = Load->getDebugLoc();
+  Register Dst = Load->getOperand(0).getReg();
+  BuildMI(MBB, *Load, DL, TII.get(Z80::POP16AF));
+  BuildMI(MBB, *Load, DL, TII.get(Z80::POP16r), Dst)
+      .cloneMemRefs(*Load);
+  BuildMI(MBB, *Load, DL, TII.get(Z80::PUSH16r)).addReg(Dst);
+  BuildMI(MBB, *Load, DL, TII.get(Z80::PUSH16AF));
+  Load->eraseFromParent();
+  MF.getInfo<Z80MachineFunctionInfo>()->setUsesSPArgumentLoads();
+  return true;
+}
+
 bool Z80FrameLowering::assignCalleeSavedSpillSlots(
     MachineFunction &MF, const TargetRegisterInfo *TRI,
     std::vector<CalleeSavedInfo> &CSI) const {
   auto &FuncInfo = *MF.getInfo<Z80MachineFunctionInfo>();
+  useStackArgumentPops(MF, CSI);
   FuncInfo.setUsesAltFP(shouldUseAltFP(MF, Is24Bit ? Z80::UIY : Z80::IY, TRI));
   MF.getRegInfo().freezeReservedRegs();
 

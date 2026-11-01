@@ -1,0 +1,205 @@
+# RUN: llc -run-pass=prologepilog -verify-machineinstrs %s -o - | FileCheck %s
+# RUN: %python %S/Inputs/stack-argument-pops.py --llc llc --work %t
+--- |
+  target triple = "z80"
+  declare void @sink()
+  define void @plain() nounwind { ret void }
+  define void @live_a() nounwind { ret void }
+  define void @live_flags() nounwind { ret void }
+  define void @forced_frame() nounwind "frame-pointer"="all" { ret void }
+  define void @unwind() nounwind uwtable { ret void }
+  define void @callee() nounwind { ret void }
+  define void @adjusted_stack() nounwind { ret void }
+  define void @volatile_arg() nounwind { ret void }
+  define void @second_arg() nounwind { ret void }
+  define void @local_frame() nounwind { ret void }
+...
+---
+name: plain
+tracksRegLiveness: true
+fixedStack:
+  - { id: 0, offset: 0, size: 2, alignment: 1, isImmutable: true }
+# CHECK-LABEL: name: plain
+# CHECK-NOT: frame-setup
+# CHECK: POP16AF
+# CHECK-NEXT: $de = POP16r
+# CHECK-NEXT: PUSH16r $de
+# CHECK-NEXT: PUSH16AF
+# CHECK-NOT: frame-destroy
+# CHECK: RET16
+body: |
+  bb.0:
+    liveins: $a, $hl
+    $de = LD88ro %fixed-stack.0, 0 :: (load (s16) from %fixed-stack.0)
+    $hl = COPY $de
+    RET16 implicit-def $sps, implicit $sps, implicit $hl
+...
+---
+name: live_a
+tracksRegLiveness: true
+fixedStack:
+  - { id: 0, offset: 0, size: 2, alignment: 1, isImmutable: true }
+# CHECK-LABEL: name: live_a
+# CHECK: frame-setup
+# CHECK-NOT: POP16AF
+# CHECK: $de = LD88ro
+# CHECK-NOT: POP16AF
+# CHECK: RET16
+body: |
+  bb.0:
+    liveins: $a, $hl
+    $de = LD88ro %fixed-stack.0, 0 :: (load (s16) from %fixed-stack.0)
+    $hl = COPY $de
+    RET16 implicit-def $sps, implicit $sps, implicit $hl, implicit $a
+...
+---
+name: live_flags
+tracksRegLiveness: true
+fixedStack:
+  - { id: 0, offset: 0, size: 2, alignment: 1, isImmutable: true }
+# CHECK-LABEL: name: live_flags
+# CHECK: frame-setup
+# CHECK-NOT: POP16AF
+# CHECK: $de = LD88ro
+# CHECK-NOT: POP16AF
+# CHECK: RET16
+body: |
+  bb.0:
+    liveins: $a, $hl
+    $a = LD8ri 7
+    ADD8ai 3, implicit-def $a, implicit-def $f, implicit $a
+    $de = LD88ro %fixed-stack.0, 0 :: (load (s16) from %fixed-stack.0)
+    $hl = COPY $de
+    KILL $f
+    RET16 implicit-def $sps, implicit $sps, implicit $hl
+...
+---
+name: forced_frame
+tracksRegLiveness: true
+fixedStack:
+  - { id: 0, offset: 0, size: 2, alignment: 1, isImmutable: true }
+# CHECK-LABEL: name: forced_frame
+# CHECK: frame-setup
+# CHECK-NOT: POP16AF
+# CHECK: $de = LD88ro
+# CHECK-NOT: POP16AF
+# CHECK: RET16
+body: |
+  bb.0:
+    liveins: $a, $hl
+    $de = LD88ro %fixed-stack.0, 0 :: (load (s16) from %fixed-stack.0)
+    $hl = COPY $de
+    RET16 implicit-def $sps, implicit $sps, implicit $hl
+...
+---
+name: unwind
+tracksRegLiveness: true
+fixedStack:
+  - { id: 0, offset: 0, size: 2, alignment: 1, isImmutable: true }
+# CHECK-LABEL: name: unwind
+# CHECK: frame-setup
+# CHECK-NOT: POP16AF
+# CHECK: $de = LD88ro
+# CHECK-NOT: POP16AF
+# CHECK: RET16
+body: |
+  bb.0:
+    liveins: $a, $hl
+    $de = LD88ro %fixed-stack.0, 0 :: (load (s16) from %fixed-stack.0)
+    $hl = COPY $de
+    RET16 implicit-def $sps, implicit $sps, implicit $hl
+...
+---
+name: callee
+tracksRegLiveness: true
+fixedStack:
+  - { id: 0, offset: 0, size: 2, alignment: 1, isImmutable: true }
+# CHECK-LABEL: name: callee
+# CHECK: frame-setup
+# CHECK-NOT: POP16AF
+# CHECK: $de = LD88ro
+# CHECK-NOT: POP16AF
+# CHECK: RET16
+body: |
+  bb.0:
+    liveins: $a, $hl
+    $de = LD88ro %fixed-stack.0, 0 :: (load (s16) from %fixed-stack.0)
+    CALL16 @sink, csr_z80_c, implicit-def $sps, implicit $sps
+    $hl = LD16ri 0
+    RET16 implicit-def $sps, implicit $sps, implicit $hl
+...
+---
+name: adjusted_stack
+tracksRegLiveness: true
+fixedStack:
+  - { id: 0, offset: 0, size: 2, alignment: 1, isImmutable: true }
+# CHECK-LABEL: name: adjusted_stack
+# CHECK: frame-setup
+# CHECK-NOT: POP16AF
+# CHECK: $de = LD88ro
+# CHECK-NOT: POP16AF
+# CHECK: RET16
+body: |
+  bb.0:
+    liveins: $a, $hl
+    PUSH16r $hl, implicit-def $sps, implicit $sps
+    $de = LD88ro %fixed-stack.0, 0 :: (load (s16) from %fixed-stack.0)
+    $hl = POP16r implicit-def $sps, implicit $sps
+    RET16 implicit-def $sps, implicit $sps, implicit $hl
+...
+---
+name: volatile_arg
+tracksRegLiveness: true
+fixedStack:
+  - { id: 0, offset: 0, size: 2, alignment: 1, isImmutable: true }
+# CHECK-LABEL: name: volatile_arg
+# CHECK: frame-setup
+# CHECK-NOT: POP16AF
+# CHECK: $de = LD88ro
+# CHECK-NOT: POP16AF
+# CHECK: RET16
+body: |
+  bb.0:
+    liveins: $a, $hl
+    $de = LD88ro %fixed-stack.0, 0 :: (volatile load (s16) from %fixed-stack.0)
+    $hl = COPY $de
+    RET16 implicit-def $sps, implicit $sps, implicit $hl
+...
+---
+name: second_arg
+tracksRegLiveness: true
+fixedStack:
+  - { id: 0, offset: 2, size: 2, alignment: 1, isImmutable: true }
+# CHECK-LABEL: name: second_arg
+# CHECK: frame-setup
+# CHECK-NOT: POP16AF
+# CHECK: $de = LD88ro
+# CHECK-NOT: POP16AF
+# CHECK: RET16
+body: |
+  bb.0:
+    liveins: $a, $hl
+    $de = LD88ro %fixed-stack.0, 0 :: (load (s16) from %fixed-stack.0)
+    $hl = COPY $de
+    RET16 implicit-def $sps, implicit $sps, implicit $hl
+...
+---
+name: local_frame
+tracksRegLiveness: true
+fixedStack:
+  - { id: 0, offset: 0, size: 2, alignment: 1, isImmutable: true }
+stack:
+  - { id: 0, type: spill-slot, size: 2, alignment: 1 }
+# CHECK-LABEL: name: local_frame
+# CHECK: frame-setup
+# CHECK-NOT: POP16AF
+# CHECK: $de = LD88ro
+# CHECK-NOT: POP16AF
+# CHECK: RET16
+body: |
+  bb.0:
+    liveins: $a, $hl
+    $de = LD88ro %fixed-stack.0, 0 :: (load (s16) from %fixed-stack.0)
+    $hl = COPY $de
+    RET16 implicit-def $sps, implicit $sps, implicit $hl
+...

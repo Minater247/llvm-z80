@@ -250,3 +250,11 @@
 
 void f0() {}
 void f1() { f0(); }
+
+// Optimized Z80 code permits omission; explicit requests and unoptimized code
+// retain frame pointers. Backend frame lowering still handles required frames.
+// RUN: %clang -### --target=z80 -S -O2 %s 2>&1 | FileCheck --check-prefix=KEEP-NONE %s
+// RUN: %clang -### --target=z80 -S -Os %s 2>&1 | FileCheck --check-prefix=KEEP-NONE %s
+// RUN: %clang -### --target=z80 -S -O0 %s 2>&1 | FileCheck --check-prefix=KEEP-ALL %s
+// RUN: %clang -### --target=z80 -S -O2 -fno-omit-frame-pointer %s 2>&1 | FileCheck --check-prefix=KEEP-ALL %s
+// RUN: %clang -### --target=z80 -S -O0 -fomit-frame-pointer %s 2>&1 | FileCheck --check-prefix=KEEP-NONE %s

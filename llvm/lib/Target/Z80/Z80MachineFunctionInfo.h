@@ -46,6 +46,10 @@ private:
   /// created.
   bool HasIllegalLEA = false;
 
+  /// Stack arguments are read through balanced POP/PUSH sequences, so the
+  /// function needs no dedicated frame pointer.
+  bool UsesSPArgumentLoads = false;
+
   /// UsesAltFP - We use an alternate frame pointer as an optimization.
   AltFPMode UsesAltFP = AFPM_None;
 
@@ -70,6 +74,9 @@ public:
 
   bool getHasIllegalLEA() const { return HasIllegalLEA; }
   void setHasIllegalLEA(bool V = true) { HasIllegalLEA = V; }
+
+  bool usesSPArgumentLoads() const { return UsesSPArgumentLoads; }
+  void setUsesSPArgumentLoads() { UsesSPArgumentLoads = true; }
 
   AltFPMode getUsesAltFP() const { return UsesAltFP; }
   void setUsesAltFP(AltFPMode V) { UsesAltFP = V; }
