@@ -40,4 +40,26 @@ for x in range(256):
         assert cpu.get('a')==(x*factor)&255,(x,factor,cpu.get('a'))
         assert cpu.sp==0xf002
         count+=1
+for bits, factors, inputs in [(8, [3,5,6,7,9,10,12,14,15,17,18,20,24], range(256)),
+                              (16, [3,6,7,12,14,15], values)]:
+    for x in inputs:
+        for factor in factors:
+            cpu=e.CPU(rng);cpu.put('de',x)
+            name=('byte' if bits==8 else 'mul')+'_negative'+str(factor)
+            cpu.run(program,entry=name)
+            assert cpu.get('a' if bits==8 else 'hl')==(-x*factor)&((1<<bits)-1),(name,x)
+            assert cpu.sp==0xf002
+            count+=1
+for x in range(256):
+    for y in [0, 1, 127, 255]:
+        cpu=e.CPU(rng);cpu.put('e',x);cpu.put('d',y)
+        cpu.run(program,entry='live_negative')
+        assert cpu.get('a')==(((-12*x+y)&255)^x),(x,y)
+        assert cpu.sp==0xf002
+        count+=1
+for x in range(-8, 9):
+    cpu=e.CPU(rng);cpu.put('e',x&255)
+    cpu.run(program,entry='nowrap_negative15')
+    assert cpu.get('a')==(-15*x)&255,x
+    count+=1
 print('Checked',count,'constant products and live-operand cases')

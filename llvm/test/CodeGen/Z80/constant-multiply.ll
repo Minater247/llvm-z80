@@ -6,6 +6,8 @@
 ; RUN: %python %S/Inputs/constant-multiply.py %t.greedy.s
 ; RUN: llc -mattr=+alternate-regs -verify-machineinstrs %s -o %t.bank.s
 ; RUN: %python %S/Inputs/constant-multiply.py %t.bank.s
+; RUN: llc -regalloc=greedy -mattr=+alternate-regs -verify-machineinstrs %s -o %t.greedy-bank.s
+; RUN: %python %S/Inputs/constant-multiply.py %t.greedy-bank.s
 ; RUN: llc -mtriple=ez80 -verify-machineinstrs %s -o - | FileCheck %s
 ; RUN: llc -mattr=+z180 -verify-machineinstrs %s -o - | FileCheck %s --check-prefix=HW
 
@@ -229,4 +231,157 @@ define i16 @live_even_products(i16 %x, i16 %y) {
   %sum = add i16 %a, %b
   %r = xor i16 %sum, %x
   ret i16 %r
+}
+
+; Negative factors arise when forming a remainder from a quotient.
+; CHECK-LABEL: byte_negative3:
+; CHECK-NOT: call{{[ \t]+}}__{{(mul|neg)}}
+; CHECK: ret
+define i8 @byte_negative3(i8 %x) minsize {
+  %r = mul i8 %x, -3
+  ret i8 %r
+}
+; CHECK-LABEL: byte_negative5:
+; CHECK-NOT: call{{[ \t]+}}__{{(mul|neg)}}
+; CHECK: ret
+define i8 @byte_negative5(i8 %x) minsize {
+  %r = mul i8 %x, -5
+  ret i8 %r
+}
+; CHECK-LABEL: byte_negative6:
+; CHECK-NOT: call{{[ \t]+}}__{{(mul|neg)}}
+; CHECK: ret
+define i8 @byte_negative6(i8 %x) minsize {
+  %r = mul i8 %x, -6
+  ret i8 %r
+}
+; CHECK-LABEL: byte_negative7:
+; CHECK-NOT: call{{[ \t]+}}__{{(mul|neg)}}
+; CHECK: ret
+define i8 @byte_negative7(i8 %x) minsize {
+  %r = mul i8 %x, -7
+  ret i8 %r
+}
+; CHECK-LABEL: byte_negative9:
+; CHECK-NOT: call{{[ \t]+}}__{{(mul|neg)}}
+; CHECK: ret
+define i8 @byte_negative9(i8 %x) minsize {
+  %r = mul i8 %x, -9
+  ret i8 %r
+}
+; CHECK-LABEL: byte_negative10:
+; CHECK-NOT: call{{[ \t]+}}__{{(mul|neg)}}
+; CHECK: ret
+define i8 @byte_negative10(i8 %x) minsize {
+  %r = mul i8 %x, -10
+  ret i8 %r
+}
+; CHECK-LABEL: byte_negative12:
+; CHECK-NOT: call{{[ \t]+}}__{{(mul|neg)}}
+; CHECK: ret
+define i8 @byte_negative12(i8 %x) minsize {
+  %r = mul i8 %x, -12
+  ret i8 %r
+}
+; CHECK-LABEL: byte_negative14:
+; CHECK-NOT: call{{[ \t]+}}__{{(mul|neg)}}
+; CHECK: ret
+define i8 @byte_negative14(i8 %x) minsize {
+  %r = mul i8 %x, -14
+  ret i8 %r
+}
+; CHECK-LABEL: byte_negative15:
+; CHECK-NOT: call{{[ \t]+}}__{{(mul|neg)}}
+; CHECK: ret
+define i8 @byte_negative15(i8 %x) minsize {
+  %r = mul i8 %x, -15
+  ret i8 %r
+}
+; CHECK-LABEL: byte_negative17:
+; CHECK-NOT: call{{[ \t]+}}__{{(mul|neg)}}
+; CHECK: ret
+define i8 @byte_negative17(i8 %x) minsize {
+  %r = mul i8 %x, -17
+  ret i8 %r
+}
+; CHECK-LABEL: byte_negative18:
+; CHECK-NOT: call{{[ \t]+}}__{{(mul|neg)}}
+; CHECK: ret
+define i8 @byte_negative18(i8 %x) minsize {
+  %r = mul i8 %x, -18
+  ret i8 %r
+}
+; CHECK-LABEL: byte_negative20:
+; CHECK-NOT: call{{[ \t]+}}__{{(mul|neg)}}
+; CHECK: ret
+define i8 @byte_negative20(i8 %x) minsize {
+  %r = mul i8 %x, -20
+  ret i8 %r
+}
+; CHECK-LABEL: byte_negative24:
+; CHECK-NOT: call{{[ \t]+}}__{{(mul|neg)}}
+; CHECK: ret
+define i8 @byte_negative24(i8 %x) minsize {
+  %r = mul i8 %x, -24
+  ret i8 %r
+}
+; CHECK-LABEL: mul_negative3:
+; CHECK-NOT: call{{[ \t]+}}__{{(mul|neg)}}
+; CHECK: ret
+define i16 @mul_negative3(i16 %x) minsize {
+  %r = mul i16 %x, -3
+  ret i16 %r
+}
+; CHECK-LABEL: mul_negative6:
+; CHECK-NOT: call{{[ \t]+}}__{{(mul|neg)}}
+; CHECK: ret
+define i16 @mul_negative6(i16 %x) minsize {
+  %r = mul i16 %x, -6
+  ret i16 %r
+}
+; CHECK-LABEL: mul_negative7:
+; CHECK-NOT: call{{[ \t]+}}__{{(mul|neg)}}
+; CHECK: ret
+define i16 @mul_negative7(i16 %x) minsize {
+  %r = mul i16 %x, -7
+  ret i16 %r
+}
+; CHECK-LABEL: mul_negative12:
+; CHECK-NOT: call{{[ \t]+}}__{{(mul|neg)}}
+; CHECK: ret
+define i16 @mul_negative12(i16 %x) minsize {
+  %r = mul i16 %x, -12
+  ret i16 %r
+}
+; CHECK-LABEL: mul_negative14:
+; CHECK-NOT: call{{[ \t]+}}__{{(mul|neg)}}
+; CHECK: ret
+define i16 @mul_negative14(i16 %x) minsize {
+  %r = mul i16 %x, -14
+  ret i16 %r
+}
+; CHECK-LABEL: mul_negative15:
+; CHECK-NOT: call{{[ \t]+}}__{{(mul|neg)}}
+; CHECK: ret
+define i16 @mul_negative15(i16 %x) minsize {
+  %r = mul i16 %x, -15
+  ret i16 %r
+}
+
+; CHECK-LABEL: live_negative:
+; CHECK-NOT: call{{[ \t]+}}__{{(mul|neg)}}
+; CHECK: ret
+define i8 @live_negative(i8 %x, i8 %y) minsize {
+  %product = mul i8 %x, -12
+  %sum = add i8 %product, %y
+  %r = xor i8 %sum, %x
+  ret i8 %r
+}
+
+; CHECK-LABEL: nowrap_negative15:
+; CHECK-NOT: call{{[ \t]+}}__{{(mul|neg)}}
+; CHECK: ret
+define i8 @nowrap_negative15(i8 %x) minsize {
+  %r = mul nsw i8 %x, -15
+  ret i8 %r
 }

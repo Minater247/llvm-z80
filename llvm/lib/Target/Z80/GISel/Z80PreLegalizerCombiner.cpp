@@ -49,6 +49,8 @@ struct ConstantMultiply {
   unsigned Shift;
   unsigned PostShift;
   bool Subtract;
+  bool Reverse;
+  bool Negate;
 };
 
 #define GET_GICOMBINER_TYPES
@@ -131,7 +133,7 @@ bool Z80PreLegalizerCombinerImpl::tryCombineAll(MachineInstr &MI) const {
 }
 
 /// Recognize byte or native-pair products that use at most four doublings and
-/// one add or subtract, preserving the low bits of modular multiplication.
+/// one add or subtract, plus an optional byte negation, preserving modular bits.
 /// Factor out powers of two to include even constants such as 6, 12 and 24.
 /// Hardware byte multiplication remains available on Z180 and eZ80 targets.
 static bool matchConstantMultiply(MachineInstr &MI, MachineRegisterInfo &MRI,
@@ -145,7 +147,8 @@ static bool matchConstantMultiply(MachineInstr &MI, MachineRegisterInfo &MRI,
       getIConstantVRegValWithLookThrough(MI.getOperand(2).getReg(), MRI);
   if (!Factor)
     return false;
-  uint64_t Value = Factor->Value.getLimitedValue();
+  bool Negative = Factor->Value.isNegative();
+  uint64_t Value = (Negative ? -Factor->Value : Factor->Value).getLimitedValue();
   if (Value < 3 || Value > 32)
     return false;
   unsigned PostShift = llvm::countr_zero(Value);
@@ -153,13 +156,18 @@ static bool matchConstantMultiply(MachineInstr &MI, MachineRegisterInfo &MRI,
   if (Value == 1)
     return false;
   bool Subtract = !isPowerOf2_64(Value - 1);
+  /* Pair negation can require a runtime call when optimizing for size.
+     Express negative pair factors directly as x - (x << k) instead. */
+  if (Negative && Ty != LLT::scalar(8))
+    Subtract = true;
   uint64_t Power = Subtract ? Value + 1 : Value - 1;
   if (!isPowerOf2_64(Power))
     return false;
   unsigned Shift = Log2_64(Power);
   if (Shift + PostShift > 4)
     return false;
-  Match = {MI.getOperand(1).getReg(), Shift, PostShift, Subtract};
+  Match = {MI.getOperand(1).getReg(), Shift, PostShift, Subtract,
+           Negative && Subtract, Negative && !Subtract};
   return true;
 }
 
@@ -171,18 +179,29 @@ static void applyConstantMultiply(MachineInstr &MI, MachineIRBuilder &Builder,
   LLT Ty = Builder.getMRI()->getType(Dst);
   auto Amount = Builder.buildConstant(LLT::scalar(8), Match.Shift);
   auto Shifted = Builder.buildShl(Ty, Match.Src, Amount);
-  Register Partial = Match.PostShift
+  Register Partial = Match.PostShift || Match.Negate
                          ? Builder.getMRI()->createGenericVirtualRegister(Ty)
                          : Dst;
   /* The intermediate shift may wrap even when the original product has a
      no-wrap flag. Keep the new operations modular instead of copying flags. */
-  if (Match.Subtract)
-    Builder.buildSub(Partial, Shifted, Match.Src);
-  else
+  if (Match.Subtract) {
+    if (Match.Reverse)
+      Builder.buildSub(Partial, Match.Src, Shifted);
+    else
+      Builder.buildSub(Partial, Shifted, Match.Src);
+  } else
     Builder.buildAdd(Partial, Shifted, Match.Src);
+  Register Product = Partial;
   if (Match.PostShift) {
     auto PostAmount = Builder.buildConstant(LLT::scalar(8), Match.PostShift);
-    Builder.buildShl(Dst, Partial, PostAmount);
+    Product = Match.Negate
+                  ? Builder.getMRI()->createGenericVirtualRegister(Ty)
+                  : Dst;
+    Builder.buildShl(Product, Partial, PostAmount);
+  }
+  if (Match.Negate) {
+    auto Zero = Builder.buildConstant(Ty, 0);
+    Builder.buildSub(Dst, Zero, Product);
   }
   Observer.erasingInstr(MI);
   MI.eraseFromParent();
