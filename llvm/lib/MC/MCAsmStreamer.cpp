@@ -1343,6 +1343,7 @@ void MCAsmStreamer::emitValueImpl(const MCExpr *Value, unsigned Size,
   default: break;
   case 1: Directive = MAI->getData8bitsDirective();  break;
   case 2: Directive = MAI->getData16bitsDirective(); break;
+  case 3: Directive = MAI->getData24bitsDirective(); break;
   case 4: Directive = MAI->getData32bitsDirective(); break;
   case 8: Directive = MAI->getData64bitsDirective(); break;
   }

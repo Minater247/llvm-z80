@@ -249,6 +249,10 @@ protected:
   const char *Data32bitsDirective;
   const char *Data64bitsDirective;
 
+  /// Directive for three-byte data, including relocatable addresses. When
+  /// absent, absolute constants are emitted with smaller directives.
+  const char *Data24bitsDirective = nullptr;
+
   /// True if data directives support signed values
   bool SupportsSignedData = true;
 
@@ -460,6 +464,7 @@ public:
 
   const char *getData8bitsDirective() const { return Data8bitsDirective; }
   const char *getData16bitsDirective() const { return Data16bitsDirective; }
+  const char *getData24bitsDirective() const { return Data24bitsDirective; }
   const char *getData32bitsDirective() const { return Data32bitsDirective; }
   const char *getData64bitsDirective() const { return Data64bitsDirective; }
   bool supportsSignedData() const { return SupportsSignedData; }

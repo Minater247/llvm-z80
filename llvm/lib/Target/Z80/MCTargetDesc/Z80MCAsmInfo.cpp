@@ -34,6 +34,7 @@ Z80MCAsmInfoELF::Z80MCAsmInfoELF(const Triple &T) {
 
   Data8bitsDirective = "\tdb\t";
   Data16bitsDirective = "\tdw\t";
+  Data24bitsDirective = "\td24\t";
   Data32bitsDirective = "\td32\t";
   Data64bitsDirective = nullptr;
 
