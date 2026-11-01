@@ -1052,11 +1052,41 @@ bool Z80InstructionSelector::selectLoadStore(MachineInstr &I,
                     MRI.getType(Addr.getOperand(0).getReg()).isPointer();
     }
   }
+  MachineInstr *ValMI = MRI.getVRegDef(ValReg);
+  bool CopyByte = !IsLoad && Ty.getSizeInBits() == 8 && ValMI &&
+                  ValMI->getOpcode() == TargetOpcode::G_LOAD &&
+                  MRI.hasOneNonDBGUse(ValReg);
+  bool AccumulatorByte = false;
+  if (IsLoad && Ty.getSizeInBits() == 8 && MRI.hasOneNonDBGUse(ValReg)) {
+    const auto &Use = *MRI.use_nodbg_instructions(ValReg).begin();
+    AccumulatorByte = Use.isCopy() && Use.getOperand(0).getReg() == Z80::A;
+  }
   bool UnitStep = false;
-  if (AddressByte && PtrMI &&
+  if ((AddressByte || CopyByte || AccumulatorByte) && PtrMI &&
       PtrMI->getOpcode() == TargetOpcode::G_PTR_ADD)
     if (auto Step = getIConstantVRegVal(PtrMI->getOperand(2).getReg(), MRI)) {
-      UnitStep = Step->isOne() || Step->isAllOnes();
+      bool UnitOffset = Step->isOne() || Step->isAllOnes();
+      UnitStep = AddressByte && UnitOffset;
+      if (!UnitStep && UnitOffset && !STI.hasEZ80Ops()) {
+        /* A single adjacent field can reuse its indexed base. A longer
+           cursor chain amortizes the increment instead. Pointer definitions
+           are selected after their memory uses, so recognize the next step
+           before selection rewrites it to use this cursor. */
+        unsigned Remaining = 16;
+        Register Base = PtrMI->getOperand(1).getReg();
+        for (const MachineInstr &Use : MRI.use_nodbg_instructions(Base)) {
+          if (!Remaining--)
+            break;
+          if (Use.getParent() != I.getParent() ||
+              Use.getOpcode() != TargetOpcode::G_PTR_ADD)
+            continue;
+          auto Offset = getIConstantVRegVal(Use.getOperand(2).getReg(), MRI);
+          if (Offset && Offset->getSExtValue() == 2 * Step->getSExtValue()) {
+            UnitStep = true;
+            break;
+          }
+        }
+      }
       // Consecutive accesses are commonly expressed as offsets from one base.
       // Keep the address explicit when selection can reuse the preceding
       // cursor with one increment, preserving primary and alternate choices.
@@ -1090,7 +1120,6 @@ bool Z80InstructionSelector::selectLoadStore(MachineInstr &I,
   SmallVector<unsigned, 3> RMWOps;
   SmallVector<MachineInstr *, 2> MemMOs;
   MemMOs.push_back(&I);
-  MachineInstr *ValMI = MRI.getVRegDef(ValReg);
   if (!IsLoad && Ty.getSizeInBits() == 8 && ValMI) {
     unsigned ValLastOpIdx = ValMI->getNumExplicitOperands() - 1;
     if (std::next(MachineBasicBlock::iterator(ValMI)) == I &&
@@ -1306,6 +1335,16 @@ bool Z80InstructionSelector::selectLoadStore(MachineInstr &I,
       MOs.push_back(MachineOperand::CreateReg(PtrReg, false));
   }
   bool IsOff = MOs.size() == 2;
+  if (CopyByte && !IsOff && RMWOps.empty()) {
+    /* Transferring the byte through A lets the destination use BC or DE while
+       the source uses HL. Both memory operations retain their positions. */
+    MachineIRBuilder Builder(I);
+    auto Copy = Builder.buildCopy(Register(Z80::A), ValReg);
+    I.setDesc(TII.get(Z80::LD8pa));
+    MIB.add(MOs[0]).addReg(Z80::A);
+    return selectCopy(*Copy, MRI) &&
+           constrainSelectedInstRegOperands(I, TII, TRI, RBI);
+  }
   if (AddressByte && !IsOff && RMWOps.empty()) {
     MachineIRBuilder Builder(I);
     Builder.setInsertPt(Builder.getMBB(), std::next(Builder.getInsertPt()));
