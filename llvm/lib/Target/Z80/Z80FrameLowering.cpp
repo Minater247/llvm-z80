@@ -41,7 +41,8 @@ bool Z80FrameLowering::hasFPImpl(const MachineFunction &MF) const {
   const MachineFrameInfo &MFI = MF.getFrameInfo();
   if (MFI.hasVarSizedObjects() || MFI.isFrameAddressTaken())
     return true;
-  if (MF.getInfo<Z80MachineFunctionInfo>()->usesSPArgumentLoads())
+  if (MF.getInfo<Z80MachineFunctionInfo>()->usesSPArgumentLoads() ||
+      MF.getInfo<Z80MachineFunctionInfo>()->hasEmptyFrame())
     return false;
   auto& F = MF.getFunction();
   if (F.hasFnAttribute("static_stack_needs_ix"))
@@ -577,12 +578,51 @@ static bool useStackArgumentPops(MachineFunction &MF,
   return true;
 }
 
+/// Recognize a fully allocated function that needs no frame storage or base.
+/// Explicit frame requests, frame observations and unwind metadata retain their
+/// normal frame. Calls with register arguments can use the ordinary stack.
+static bool hasEmptyFrame(MachineFunction &MF, ArrayRef<CalleeSavedInfo> CSI) {
+  const auto &MFI = MF.getFrameInfo();
+  const auto &F = MF.getFunction();
+  const auto &ST = MF.getSubtarget<Z80Subtarget>();
+  const auto &TRI = *ST.getRegisterInfo();
+  const auto &TII = *ST.getInstrInfo();
+  if (!CSI.empty() || MFI.getNumObjects() || MFI.hasVarSizedObjects() ||
+      MFI.isFrameAddressTaken() || MFI.isReturnAddressTaken() ||
+      MFI.hasStackMap() || MFI.hasPatchPoint() || F.isVarArg() ||
+      F.hasOptNone() || F.hasFnAttribute(Attribute::Naked) ||
+      F.hasFnAttribute("interrupt") || F.hasFnAttribute("static_stack_needs_ix") ||
+      MF.needsFrameMoves() ||
+      MF.getTarget().Options.DisableFramePointerElim(MF))
+    return false;
+  MCRegister FrameReg = ST.is24Bit() ? Z80::UIX : Z80::IX;
+  for (const auto &MBB : MF)
+    for (const auto &MI : MBB) {
+      if (MI.isDebugInstr())
+        continue;
+      if (MI.isInlineAsm() || MI.isCFIInstruction() ||
+          MI.readsRegister(FrameReg, &TRI) ||
+          MI.modifiesRegister(FrameReg, &TRI) ||
+          (TII.isFrameInstr(MI) && TII.getFrameAdjustment(MI)))
+        return false;
+      for (const auto &MO : MI.operands())
+        if (MO.isFI())
+          return false;
+    }
+  return true;
+}
+
 bool Z80FrameLowering::assignCalleeSavedSpillSlots(
     MachineFunction &MF, const TargetRegisterInfo *TRI,
     std::vector<CalleeSavedInfo> &CSI) const {
   auto &FuncInfo = *MF.getInfo<Z80MachineFunctionInfo>();
   useStackArgumentPops(MF, CSI);
-  FuncInfo.setUsesAltFP(shouldUseAltFP(MF, Is24Bit ? Z80::UIY : Z80::IY, TRI));
+  /* Decide after allocation so an unexpected spill cannot invalidate the
+     reserved-register set used by the allocator. */
+  if (hasEmptyFrame(MF, CSI))
+    FuncInfo.setHasEmptyFrame();
+  if (hasFP(MF))
+    FuncInfo.setUsesAltFP(shouldUseAltFP(MF, Is24Bit ? Z80::UIY : Z80::IY, TRI));
   MF.getRegInfo().freezeReservedRegs();
 
   bool UseShadow = shouldUseShadow(MF);

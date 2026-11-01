@@ -50,6 +50,9 @@ private:
   /// function needs no dedicated frame pointer.
   bool UsesSPArgumentLoads = false;
 
+  /// Register allocation finished without frame objects or frame-register uses.
+  bool HasEmptyFrame = false;
+
   /// UsesAltFP - We use an alternate frame pointer as an optimization.
   AltFPMode UsesAltFP = AFPM_None;
 
@@ -77,6 +80,9 @@ public:
 
   bool usesSPArgumentLoads() const { return UsesSPArgumentLoads; }
   void setUsesSPArgumentLoads() { UsesSPArgumentLoads = true; }
+
+  bool hasEmptyFrame() const { return HasEmptyFrame; }
+  void setHasEmptyFrame() { HasEmptyFrame = true; }
 
   AltFPMode getUsesAltFP() const { return UsesAltFP; }
   void setUsesAltFP(AltFPMode V) { UsesAltFP = V; }
