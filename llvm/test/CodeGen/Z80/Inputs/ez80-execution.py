@@ -19,6 +19,8 @@ class CPU:
     def get(self, r):
         if r == 'sp':
             return self.sp
+        if r == 'af':
+            return self.reg['a'] * 256 + self.reg['f']
         if r in self.reg:
             return self.reg[r]
         if r in PAIRS:
@@ -28,6 +30,8 @@ class CPU:
     def put(self, r, value):
         if r == 'sp':
             self.sp = value & MASK
+        elif r == 'af':
+            self.reg['a'], self.reg['f'] = (value >> 8) & 255, value & 255
         elif r in self.reg:
             self.reg[r] = value & 255
         else:
@@ -98,17 +102,21 @@ class CPU:
             elif op in ('inc', 'dec'):
                 self.put(args[0], self.get(args[0]) + (1 if op == 'inc' else -1))
             elif op == 'push':
-                assert args[0] in PAIRS, args
+                assert args[0] in PAIRS or args[0] == 'af', args
                 self.sp -= 3
                 self.store(self.sp, self.get(args[0]), 3)
             elif op == 'pop':
-                assert args[0] in PAIRS, args
+                assert args[0] in PAIRS or args[0] == 'af', args
                 self.put(args[0], self.load(self.sp, 3))
                 self.sp += 3
             elif op == 'ex' and args == ['de', 'hl']:
                 de, hl = self.get('de'), self.get('hl')
                 self.put('de', hl)
                 self.put('hl', de)
+            elif op == 'ex' and args[0] == '(sp)':
+                old = self.load(self.sp, 3)
+                self.store(self.sp, self.get(args[1]), 3)
+                self.put(args[1], old)
             elif op == 'exx':
                 for pair in ('bc', 'de', 'hl'):
                     for r in PAIRS[pair]:

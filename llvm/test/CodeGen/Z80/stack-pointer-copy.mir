@@ -1,0 +1,8 @@
+# RUN: %python %S/Inputs/stack-pointer-copy.py --emit 16 %t.16.mir
+# RUN: llc -start-before=postrapseudos -verify-machineinstrs %t.16.mir -o %t.16.s
+# RUN: %python %S/Inputs/stack-pointer-copy.py --check 16 %t.16.s
+# RUN: %python %S/Inputs/stack-pointer-copy.py --emit 24 %t.24.mir
+# RUN: llc -start-before=postrapseudos -verify-machineinstrs %t.24.mir -o %t.24.s
+# RUN: %python %S/Inputs/stack-pointer-copy.py --check 24 %t.24.s
+# Stack-pointer copies preserve the live scratch lanes and AF, account for
+# temporary pushes, and omit the flag save when flags have no following use.

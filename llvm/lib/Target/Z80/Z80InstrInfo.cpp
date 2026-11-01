@@ -828,21 +828,39 @@ void Z80InstrInfo::copyPhysReg(MachineBasicBlock &MBB,
     // Copies from SP.
     Is24Bit |= SrcReg == Z80::SPL;
     unsigned SPAdj = Is24Bit ? 3 : 2;
+    bool PreserveFlags =
+        MBB.computeRegisterLiveness(&TRI, Z80::F, MI) !=
+        MachineBasicBlock::LQR_Dead;
     MCRegister PopReg, ExReg;
+    SmallVector<MCRegister, 3> SavedLanes;
+    if (DstReg == Z80::UBC || DstReg == Z80::BC ||
+        DstReg == Z80::UDE || DstReg == Z80::DE) {
+      /* Preserve each defined HL lane through the temporary stack address.
+         Undefined lanes and the old destination impose no input dependency. */
+      for (MCRegister R : {Z80::L, Z80::H, Z80::HLU})
+        if ((R != Z80::HLU || Is24Bit) && !isUndefLane(MBB, MI, R, TRI))
+          SavedLanes.push_back(R);
+    }
     if (DstReg == Z80::UBC || DstReg == Z80::BC) {
       PopReg = DstReg;
       DstReg = Is24Bit ? Z80::UHL : Z80::HL;
-      applySPAdjust(
-          *BuildMI(MBB, MI, DL, get(Is24Bit ? Z80::PUSH24r : Z80::PUSH16r))
-               .addReg(DstReg));
+      auto Push = BuildMI(MBB, MI, DL,
+                          get(Is24Bit ? Z80::PUSH24r : Z80::PUSH16r))
+                      .addReg(DstReg, RegState::Undef);
+      for (MCRegister R : SavedLanes)
+        Push.addReg(R, RegState::Implicit);
+      applySPAdjust(*Push);
     } else if (DstReg == Z80::UDE || DstReg == Z80::DE) {
       ExReg = DstReg;
       DstReg = Is24Bit ? Z80::UHL : Z80::HL;
-      BuildMI(MBB, MI, DL, get(Is24Bit ? Z80::EX24DE : Z80::EX16DE))
-          .addReg(ExReg, RegState::ImplicitDefine)
-          .addReg(DstReg, RegState::ImplicitKill);
+      auto Ex = BuildMI(MBB, MI, DL,
+                        get(Is24Bit ? Z80::EX24DE : Z80::EX16DE));
+      markUseUndef(*Ex, ExReg, TRI);
+      markUseUndef(*Ex, DstReg, TRI);
+      markDefDead(*Ex, DstReg, TRI);
+      for (MCRegister R : SavedLanes)
+        Ex.addReg(R, RegState::Implicit);
     }
-    bool PreserveFlags = true;
     unsigned BaseImm = PopReg ? SPAdj : 0;
     if (PreserveFlags)
       BaseImm += SPAdj;
@@ -850,10 +868,15 @@ void Z80InstrInfo::copyPhysReg(MachineBasicBlock &MBB,
             DstReg)
         .addImm(BaseImm);
     if (PreserveFlags) {
-      MachineInstr &PushAF = applySPAdjust(
-          *BuildMI(MBB, MI, DL,
-                   get(Is24Bit ? Z80::PUSH24AF : Z80::PUSH16AF)));
-      markUseUndef(PushAF, Z80::AF, TRI);
+      auto PushAF = BuildMI(MBB, MI, DL,
+                            get(Is24Bit ? Z80::PUSH24AF : Z80::PUSH16AF));
+      markUseUndef(*PushAF, Z80::AF, TRI);
+      /* POP AF restores the incoming values. Make those dependencies visible
+         to subsequent copy propagation even though the full AF use is undef. */
+      for (MCRegister R : {Z80::A, Z80::F})
+        if (!isUndefLane(MBB, PushAF->getIterator(), R, TRI))
+          PushAF.addReg(R, RegState::Implicit);
+      applySPAdjust(*PushAF);
     }
     BuildMI(MBB, MI, DL, get(SrcReg == Z80::SPL ? Z80::ADD24as : Z80::ADD16as),
             DstReg).addReg(DstReg)->addRegisterDead(Z80::F, &getRegisterInfo());
@@ -865,10 +888,14 @@ void Z80InstrInfo::copyPhysReg(MachineBasicBlock &MBB,
           .addReg(DstReg);
       applySPAdjust(*BuildMI(MBB, MI, DL,
                              get(Is24Bit ? Z80::POP24r : Z80::POP16r), PopReg));
-    } else if (ExReg)
-      BuildMI(MBB, MI, DL, get(Is24Bit ? Z80::EX24DE : Z80::EX16DE))
-          .addReg(ExReg, RegState::ImplicitDefine)
-          .addReg(DstReg, RegState::Implicit | getRegState(MI->getOperand(0)));
+    } else if (ExReg) {
+      auto Ex = BuildMI(MBB, MI, DL,
+                        get(Is24Bit ? Z80::EX24DE : Z80::EX16DE));
+      markUseUndef(*Ex, ExReg, TRI);
+      for (MCRegister R : SavedLanes)
+        Ex.addReg(R == Z80::L ? Z80::E : R == Z80::H ? Z80::D : Z80::DEU,
+                  RegState::Implicit);
+    }
     return;
   }
   Is24Bit = Z80::R24RegClass.contains(DstReg, SrcReg);
