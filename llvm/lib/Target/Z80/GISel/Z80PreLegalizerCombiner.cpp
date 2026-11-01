@@ -47,6 +47,7 @@ namespace {
 struct ConstantMultiply {
   Register Src;
   unsigned Shift;
+  unsigned PostShift;
   bool Subtract;
 };
 
@@ -129,10 +130,10 @@ bool Z80PreLegalizerCombinerImpl::tryCombineAll(MachineInstr &MI) const {
   return tryCombineAllImpl(MI);
 }
 
-/// Recognize byte or native-pair multiplication by a small power of two plus or
-/// minus one. These constants use at most four doublings and one add or subtract,
-/// preserving the low bits of the original modular multiplication. Hardware
-/// byte multiplication remains available on Z180 and eZ80 targets.
+/// Recognize byte or native-pair products that use at most four doublings and
+/// one add or subtract, preserving the low bits of modular multiplication.
+/// Factor out powers of two to include even constants such as 6, 12 and 24.
+/// Hardware byte multiplication remains available on Z180 and eZ80 targets.
 static bool matchConstantMultiply(MachineInstr &MI, MachineRegisterInfo &MRI,
                                   const Z80Subtarget &ST,
                                   ConstantMultiply &Match) {
@@ -145,13 +146,20 @@ static bool matchConstantMultiply(MachineInstr &MI, MachineRegisterInfo &MRI,
   if (!Factor)
     return false;
   uint64_t Value = Factor->Value.getLimitedValue();
-  if (Value < 3 || Value > 17)
+  if (Value < 3 || Value > 32)
+    return false;
+  unsigned PostShift = llvm::countr_zero(Value);
+  Value >>= PostShift;
+  if (Value == 1)
     return false;
   bool Subtract = !isPowerOf2_64(Value - 1);
   uint64_t Power = Subtract ? Value + 1 : Value - 1;
   if (!isPowerOf2_64(Power))
     return false;
-  Match = {MI.getOperand(1).getReg(), Log2_64(Power), Subtract};
+  unsigned Shift = Log2_64(Power);
+  if (Shift + PostShift > 4)
+    return false;
+  Match = {MI.getOperand(1).getReg(), Shift, PostShift, Subtract};
   return true;
 }
 
@@ -163,12 +171,19 @@ static void applyConstantMultiply(MachineInstr &MI, MachineIRBuilder &Builder,
   LLT Ty = Builder.getMRI()->getType(Dst);
   auto Amount = Builder.buildConstant(LLT::scalar(8), Match.Shift);
   auto Shifted = Builder.buildShl(Ty, Match.Src, Amount);
+  Register Partial = Match.PostShift
+                         ? Builder.getMRI()->createGenericVirtualRegister(Ty)
+                         : Dst;
   /* The intermediate shift may wrap even when the original product has a
      no-wrap flag. Keep the new operations modular instead of copying flags. */
   if (Match.Subtract)
-    Builder.buildSub(Dst, Shifted, Match.Src);
+    Builder.buildSub(Partial, Shifted, Match.Src);
   else
-    Builder.buildAdd(Dst, Shifted, Match.Src);
+    Builder.buildAdd(Partial, Shifted, Match.Src);
+  if (Match.PostShift) {
+    auto PostAmount = Builder.buildConstant(LLT::scalar(8), Match.PostShift);
+    Builder.buildShl(Dst, Partial, PostAmount);
+  }
   Observer.erasingInstr(MI);
   MI.eraseFromParent();
 }

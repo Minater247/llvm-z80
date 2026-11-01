@@ -13,7 +13,7 @@ values=[0,1,2,255,256,4095,4096,8191,8192,9362,32767,32768,65534,65535]
 values += [rng.randrange(65536) for _ in range(256)]
 count=0
 for x in values:
-    for factor in [3,5,7,9,15,17]:
+    for factor in [3,5,6,7,9,10,12,14,15,17,18,20,24]:
         cpu=e.CPU(rng);cpu.put('de',x)
         cpu.run(program,entry='mul'+str(factor))
         assert cpu.get('hl')==(x*factor)&65535,(x,factor,cpu.get('hl'))
@@ -24,13 +24,17 @@ for x in values:
     cpu.run(program,entry='live_products')
     assert cpu.get('hl')==(17*x+3*y)&65535,(x,y,cpu.get('hl'))
     count+=1
+    cpu=e.CPU(rng);cpu.put('de',x);cpu.put('bc',y)
+    cpu.run(program,entry='live_even_products')
+    assert cpu.get('hl')==((14*x+24*y)^x)&65535,(x,y,cpu.get('hl'))
+    count+=1
     if x<=9362:
         cpu=e.CPU(rng);cpu.put('de',x)
         cpu.run(program,entry='nowrap7')
         assert cpu.get('hl')==7*x,(x,cpu.get('hl'))
         count+=1
 for x in range(256):
-    for factor in [3,5,7,9,15,17]:
+    for factor in [3,5,6,7,9,10,12,14,15,17,18,20,24]:
         cpu=e.CPU(rng);cpu.put('e',x)
         cpu.run(program,entry='byte'+str(factor))
         assert cpu.get('a')==(x*factor)&255,(x,factor,cpu.get('a'))

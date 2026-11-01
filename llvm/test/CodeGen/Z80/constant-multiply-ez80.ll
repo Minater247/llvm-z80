@@ -19,3 +19,21 @@ define i24 @sub24(i24 %x) {
   %r = mul i24 %x, 7
   ret i24 %r
 }
+
+; CHECK-LABEL: even24:
+; CHECK-NOT: call
+; CHECK: add hl, hl
+; CHECK: ret
+define i24 @even24(i24 %x) {
+  %r = mul i24 %x, 24
+  ret i24 %r
+}
+; CHECK-LABEL: even14:
+; CHECK-NOT: call
+; CHECK: sbc hl,
+; CHECK: add hl, hl
+; CHECK: ret
+define i24 @even14(i24 %x) {
+  %r = mul i24 %x, 14
+  ret i24 %r
+}
