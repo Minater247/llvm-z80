@@ -615,7 +615,7 @@ static bool hasEmptyFrame(MachineFunction &MF, ArrayRef<CalleeSavedInfo> CSI) {
   const auto &ST = MF.getSubtarget<Z80Subtarget>();
   const auto &TRI = *ST.getRegisterInfo();
   const auto &TII = *ST.getInstrInfo();
-  if (!CSI.empty() || MFI.getNumObjects() || MFI.hasVarSizedObjects() ||
+  if (!CSI.empty() || MFI.hasVarSizedObjects() ||
       MFI.hasOpaqueSPAdjustment() || MFI.isFrameAddressTaken() ||
       MFI.isReturnAddressTaken() || MFI.hasStackMap() || MFI.hasPatchPoint() ||
       F.isVarArg() || F.hasOptNone() || F.hasFnAttribute(Attribute::Naked) ||
@@ -623,6 +623,12 @@ static bool hasEmptyFrame(MachineFunction &MF, ArrayRef<CalleeSavedInfo> CSI) {
       F.hasFnAttribute("static_stack_needs_ix") || MF.needsFrameMoves() ||
       MF.getTarget().Options.DisableFramePointerElim(MF))
     return false;
+  /* Bank allocation can remove every spill while leaving dead frame-object
+     entries behind. Only surviving objects require stack storage. */
+  for (int I = MFI.getObjectIndexBegin(), E = MFI.getObjectIndexEnd(); I != E;
+       ++I)
+    if (!MFI.isDeadObjectIndex(I))
+      return false;
   MCRegister FrameReg = ST.is24Bit() ? Z80::UIX : Z80::IX;
   for (const auto &MBB : MF)
     for (const auto &MI : MBB) {

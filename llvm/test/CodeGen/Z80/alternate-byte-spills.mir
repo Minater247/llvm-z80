@@ -2,6 +2,7 @@
 # RUN: llc -mattr=-alternate-regs -run-pass=z80-alternate-regalloc -verify-machineinstrs %s -o - | FileCheck %s --check-prefix=OFF
 # RUN: llc -mattr=+alternate-regs -start-before=z80-alternate-regalloc -verify-machineinstrs %s -o %t.s
 # RUN: %python %S/Inputs/byte-bank-spills.py %t.s
+# RUN: FileCheck %s --check-prefix=FRAME < %t.s
 # OFF-NOT: ALT_SAVE8
 --- |
   target triple = "z80"
@@ -19,6 +20,11 @@ stack:
   - { id: 0, type: spill-slot, size: 1, alignment: 1 }
   - { id: 1, type: spill-slot, size: 1, alignment: 1 }
 # Both values are live together and occupy different lanes of one pair.
+# Removing all stack spills also releases the frame pointer, despite the
+# dead frame-object entries retained by MachineFrameInfo.
+# FRAME-LABEL: two_bytes:
+# FRAME-NOT: ix
+# FRAME: ret
 # CHECK-LABEL: name: two_bytes
 # CHECK: $l_alt = ALT_SAVE8 $a
 # CHECK: $h_alt = ALT_SAVE8 $a

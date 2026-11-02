@@ -914,6 +914,114 @@ static SmallVector<CursorRebase, 16> findCursorRebases(MachineFunction &MF,
   return Result;
 }
 
+/// Delay incoming address-register copies until their first block of use. Simple
+/// polling regions retain the incoming value in its original register when
+/// every path to that block preserves it. Scans are bounded to eight blocks
+/// and 128 instructions per copy; calls and irregular control flow retain
+/// their original copies.
+static bool sinkIncomingCopies(MachineFunction &MF) {
+  auto &MRI = MF.getRegInfo();
+  const auto &TRI = *MF.getSubtarget().getRegisterInfo();
+  auto &Entry = MF.front();
+  bool Changed = false;
+  for (auto &Copy : llvm::make_early_inc_range(Entry)) {
+    if (!Copy.isCopy() || Copy.isBundled())
+      continue;
+    const auto &Dst = Copy.getOperand(0);
+    const auto &Src = Copy.getOperand(1);
+    if (!Dst.getReg().isVirtual() || Dst.getSubReg() ||
+        !Src.getReg().isPhysical() || Src.getSubReg() || Src.isUndef() ||
+        !MRI.isLiveIn(Src.getReg()))
+      continue;
+    if (!Z80::A16RegClass.hasSubClassEq(MRI.getRegClass(Dst.getReg())) &&
+        !Z80::A24RegClass.hasSubClassEq(MRI.getRegClass(Dst.getReg())))
+      continue;
+    MachineBasicBlock *UseBlock = nullptr;
+    bool Safe = true;
+    for (auto &MO : MRI.reg_nodbg_operands(Dst.getReg())) {
+      if (MO.getParent() == &Copy)
+        continue;
+      auto *MBB = MO.getParent()->getParent();
+      if (MBB == &Entry || (UseBlock && UseBlock != MBB)) {
+        Safe = false;
+        break;
+      }
+      UseBlock = MBB;
+    }
+    if (!Safe || !UseBlock || UseBlock->isPredecessor(UseBlock))
+      continue;
+    auto First = llvm::find_if(*UseBlock, [&](const auto &MI) {
+      return !MI.isDebugInstr() && llvm::any_of(MI.operands(), [&](const auto &MO) {
+        return MO.isReg() && MO.getReg() == Dst.getReg();
+      });
+    });
+    SmallVector<MachineBasicBlock *, 8> Region;
+    auto *MBB = UseBlock;
+    while (MBB != &Entry && Safe) {
+      if (Region.size() == 8 || llvm::is_contained(Region, MBB)) {
+        Safe = false;
+        break;
+      }
+      Region.push_back(MBB);
+      MachineBasicBlock *Pred = nullptr;
+      for (auto *P : MBB->predecessors())
+        if (P != MBB) {
+          if (Pred && Pred != P)
+            Safe = false;
+          Pred = P;
+        }
+      if (!Pred) {
+        Safe = false;
+        break;
+      }
+      for (auto *S : Pred->successors())
+        Safe &= S == Pred || S == MBB;
+      MBB = Pred;
+    }
+    if (!Safe)
+      continue;
+    Region.push_back(&Entry);
+    unsigned Scanned = 0;
+    for (auto *Block : Region) {
+      auto Begin = Block == &Entry ? std::next(Copy.getIterator())
+                                  : Block->begin();
+      auto End = Block == UseBlock ? First : Block->end();
+      for (auto I = Begin; I != End; ++I) {
+        if (I->isDebugInstr())
+          continue;
+        if (++Scanned > 128 || I->isCall() || I->isInlineAsm() ||
+            I->isBundled() || I->modifiesRegister(Src.getReg(), &TRI)) {
+          Safe = false;
+          break;
+        }
+      }
+      if (!Safe)
+        break;
+    }
+    if (!Safe)
+      continue;
+    /* Pin the incoming register across the polling blocks. Its constrained
+       destination can then occupy the poll's address register after exit. */
+    for (auto *Block : Region) {
+      if (!Block->isLiveIn(Src.getReg()))
+        Block->addLiveIn(Src.getReg());
+      auto Begin = Block == &Entry ? std::next(Copy.getIterator())
+                                  : Block->begin();
+      auto End = Block == UseBlock ? First : Block->end();
+      for (auto I = Begin; I != End; ++I)
+        for (auto &MO : I->operands())
+          if (MO.isReg() && MO.isUse() && MO.getReg().isPhysical() &&
+              TRI.regsOverlap(MO.getReg(), Src.getReg()))
+            MO.setIsKill(false);
+    }
+    MRI.markUsesInDebugValueAsUndef(Dst.getReg());
+    Copy.getOperand(1).setIsKill(false);
+    UseBlock->splice(First, &Entry, Copy.getIterator());
+    Changed = true;
+  }
+  return Changed;
+}
+
 /// Give disconnected definitions independent intervals before allocation.
 /// Lane separation can expose components formerly joined by a constant byte.
 class Z80PrepareLiveRanges : public MachineFunctionPass {
@@ -1911,6 +2019,7 @@ bool Z80MachinePreRAOptimization::runOnMachineFunction(MachineFunction &MF) {
   Changed |= coalesceCursorUpdates(MF);
   Changed |= separateStableLanes(MF, Z80::sub_high);
   Changed |= separateStableLanes(MF, Z80::sub_low);
+  Changed |= sinkIncomingCopies(MF);
   return selectBankInstructions(MF) || Changed;
 }
 

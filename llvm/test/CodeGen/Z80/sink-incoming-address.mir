@@ -1,0 +1,124 @@
+# RUN: llc -run-pass=z80-machine-prera-opt -verify-machineinstrs %s -o - | FileCheck %s
+# RUN: %python %S/Inputs/sink-incoming-address.py --llc llc --mir %s --work %t
+# Incoming addresses retain their original register across a polling region.
+# A clobbered lane, an intervening call, or uses in several blocks keep the copy.
+--- |
+  target triple = "z80"
+  declare void @opaque()
+  define void @poll_address() { ret void }
+  define void @clobbered_lane() { ret void }
+  define void @intervening_call() { ret void }
+  define void @earlier_use() { ret void }
+...
+---
+name: poll_address
+tracksRegLiveness: true
+liveins:
+  - { reg: '$de' }
+# CHECK-LABEL: name: poll_address
+# CHECK: bb.0:
+# CHECK-NOT: COPY $de
+# CHECK: bb.2:
+# CHECK: %0:a16 = COPY $de
+body: |
+  bb.0:
+    successors: %bb.1(0x80000000)
+    liveins: $de
+    %0:a16 = COPY $de
+    %1:a16 = LD16ri 16384
+    JQ %bb.1
+  bb.1:
+    successors: %bb.1(0x7c000000), %bb.2(0x04000000)
+    BIT8pb %1, 7, implicit-def $f :: (volatile load (s8))
+    JQCC %bb.1, 0, implicit killed $f
+    JQ %bb.2
+  bb.2:
+    LD8pi %0, 17 :: (volatile store (s8))
+    %0:a16 = INC16r %0, implicit-def dead $f
+    LD8pi %0, 34 :: (volatile store (s8))
+    RET16 implicit-def $sps, implicit $sps
+...
+---
+name: clobbered_lane
+tracksRegLiveness: true
+liveins:
+  - { reg: '$de' }
+# CHECK-LABEL: name: clobbered_lane
+# CHECK: bb.0:
+# CHECK: %0:a16 = COPY $de
+# CHECK: bb.1:
+body: |
+  bb.0:
+    successors: %bb.1(0x80000000)
+    liveins: $de
+    %0:a16 = COPY $de
+    %1:a16 = LD16ri 16384
+    JQ %bb.1
+  bb.1:
+    successors: %bb.1(0x7c000000), %bb.2(0x04000000)
+    $e = LD8ri 42
+    BIT8pb %1, 7, implicit-def $f :: (volatile load (s8))
+    JQCC %bb.1, 0, implicit killed $f
+    JQ %bb.2
+  bb.2:
+    LD8pi %0, 17 :: (volatile store (s8))
+    %0:a16 = INC16r %0, implicit-def dead $f
+    LD8pi %0, 34 :: (volatile store (s8))
+    RET16 implicit-def $sps, implicit $sps
+...
+---
+name: intervening_call
+tracksRegLiveness: true
+liveins:
+  - { reg: '$de' }
+# CHECK-LABEL: name: intervening_call
+# CHECK: bb.0:
+# CHECK: %0:a16 = COPY $de
+# CHECK: bb.1:
+body: |
+  bb.0:
+    successors: %bb.1(0x80000000)
+    liveins: $de
+    %0:a16 = COPY $de
+    %1:a16 = LD16ri 16384
+    JQ %bb.1
+  bb.1:
+    successors: %bb.1(0x7c000000), %bb.2(0x04000000)
+    CALL16 @opaque, csr_z80_c, implicit $sps
+    BIT8pb %1, 7, implicit-def $f :: (volatile load (s8))
+    JQCC %bb.1, 0, implicit killed $f
+    JQ %bb.2
+  bb.2:
+    LD8pi %0, 17 :: (volatile store (s8))
+    %0:a16 = INC16r %0, implicit-def dead $f
+    LD8pi %0, 34 :: (volatile store (s8))
+    RET16 implicit-def $sps, implicit $sps
+...
+---
+name: earlier_use
+tracksRegLiveness: true
+liveins:
+  - { reg: '$de' }
+# CHECK-LABEL: name: earlier_use
+# CHECK: bb.0:
+# CHECK: %0:a16 = COPY $de
+# CHECK: bb.1:
+body: |
+  bb.0:
+    successors: %bb.1(0x80000000)
+    liveins: $de
+    %0:a16 = COPY $de
+    LD8pi %0, 9 :: (volatile store (s8))
+    %1:a16 = LD16ri 16384
+    JQ %bb.1
+  bb.1:
+    successors: %bb.1(0x7c000000), %bb.2(0x04000000)
+    BIT8pb %1, 7, implicit-def $f :: (volatile load (s8))
+    JQCC %bb.1, 0, implicit killed $f
+    JQ %bb.2
+  bb.2:
+    LD8pi %0, 17 :: (volatile store (s8))
+    %0:a16 = INC16r %0, implicit-def dead $f
+    LD8pi %0, 34 :: (volatile store (s8))
+    RET16 implicit-def $sps, implicit $sps
+...
