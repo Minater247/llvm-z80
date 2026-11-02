@@ -130,9 +130,11 @@ void Z80AsmPrinter::emitInstruction(const MachineInstr *MI) {
     Emit(getSubtarget().is24Bit() ? Z80::JP24CC : Z80::JP16CC,
          {MCOperand::createExpr(MCSymbolRefExpr::create(Done, OutContext)),
           MCOperand::createImm(Z80::COND_PO)});
-    // Overflow with carry is negative overflow; without carry it is positive.
-    Emit(Z80::LD8ri, {MCOperand::createReg(Z80::A), MCOperand::createImm(127)});
-    Emit(Z80::ADC8ai, {MCOperand::createImm(0)});
+    /* Carry distinguishes negative from positive overflow. Subtracting A
+       from itself with carry produces 0xff or 0, which XOR maps to the
+       signed byte limits without loading a separate constant register. */
+    Emit(Z80::SBC8ar, {MCOperand::createReg(Z80::A)});
+    Emit(Z80::XOR8ai, {MCOperand::createImm(127)});
     OutStreamer->emitLabel(Done);
     return;
   }

@@ -223,7 +223,8 @@ class Z80RegisterAllocator final : public MachineFunctionPass,
   DenseSet<Register> Deferred;
   // Retain equally cheap placements when spilling shortens an assigned range.
   DenseMap<Register, MCRegister> PreviousAssignments;
-  std::priority_queue<std::tuple<bool, double, Register>> Queue;
+  SmallDenseSet<Register, 8> LoopCaches;
+  std::priority_queue<std::tuple<unsigned, double, Register>> Queue;
   unsigned RemainingStates = 0;
   bool OptSize = false;
   // Transfers depend on target mode, not on the live interval or function.
@@ -334,6 +335,7 @@ public:
     Stage.clear();
     Deferred.clear();
     PreviousAssignments.clear();
+    LoopCaches.clear();
     Queue = {};
   }
   bool runOnMachineFunction(MachineFunction &MF) override;
@@ -345,7 +347,13 @@ public:
 // more expensive loop-carried values. Legal placements are checked once when
 // dequeuing; ties use virtual-register numbers for deterministic builds.
 void Z80RegisterAllocator::enqueueImpl(const LiveInterval *LI) {
-  Queue.emplace(!Deferred.contains(LI->reg()), LI->weight(), LI->reg());
+  /* Optional loop caches use the space left by ordinary ranges. Allocating
+     them first can replace one repeated reload with another and add the
+     spill needed to preserve the displaced value. */
+  unsigned Priority = LoopCaches.contains(LI->reg()) ? 0
+                      : Deferred.contains(LI->reg()) ? 1
+                                                    : 2;
+  Queue.emplace(Priority, LI->weight(), LI->reg());
 }
 
 // Price every legal placement in one walk over the interval's instructions.
@@ -797,6 +805,69 @@ bool Z80RegisterAllocator::split(const LiveInterval &LI,
   SA->analyze(&LI);
   if (SA->getUseSlots().size() <= 1)
     return false;
+  SmallVector<MachineLoop *, 4> LoopGroups;
+  if (!MainBank && S == 0 &&
+      Z80::R8RegClass.hasSubClassEq(MRI->getRegClass(LI.reg()))) {
+    SmallPtrSet<MachineLoop *, 8> Seen;
+    for (const auto &BI : SA->getUseBlocks()) {
+      auto *Loop = SA->Loops.getLoopFor(BI.MBB);
+      if (!Loop || !Seen.insert(Loop).second || !Loop->isInnermost() ||
+          Loop->getNumBlocks() > 16 || LoopGroups.size() == 4)
+        continue;
+      if (Seen.size() > 8)
+        break;
+      auto *Entry = Loop->getLoopPredecessor();
+      if (!Entry || !LI.liveAt(LIS->getMBBEndIdx(Entry).getPrevSlot()) ||
+          !LI.liveAt(LIS->getMBBStartIdx(Loop->getHeader())) ||
+          llvm::any_of(LoopGroups, [&](const auto *Other) {
+            return Other->getLoopPredecessor() == Entry ||
+                   Other->contains(Entry) ||
+                   Loop->contains(Other->getLoopPredecessor());
+          }) ||
+          llvm::any_of(MRI->def_instructions(LI.reg()), [&](const auto &MI) {
+            return Loop->contains(MI.getParent());
+          }))
+        continue;
+      auto *Value = LI.getVNInfoAt(LIS->getMBBStartIdx(Loop->getHeader()));
+      auto *Def = LIS->getInstructionFromIndex(Value->def);
+      /* Cheaply recreated bytes can release their register between uses.
+         Reserve loop-wide ranges for values that would otherwise reload
+         from a spill, rather than displacing those values with constants. */
+      if (Def && (ST->getInstrInfo()->isTriviallyReMaterializable(*Def) ||
+                  (Def->isCopy() && Def->getOperand(1).isUndef())))
+        continue;
+      auto Choices = domain(LI.reg());
+      unsigned Scanned = 0;
+      for (auto *MBB : Loop->blocks()) {
+        SlotIndex Begin = LIS->getMBBStartIdx(MBB);
+        SlotIndex End = LIS->getMBBEndIdx(MBB);
+        llvm::erase_if(Choices, [&](MCRegister P) {
+          return llvm::any_of(TRI->regunits(P), [&](MCRegUnit U) {
+            if (LIS->getRegUnit(U).overlaps(Begin, End))
+              return true;
+            auto At =
+                Matrix->getLiveUnions()[static_cast<unsigned>(U)].find(Begin);
+            return At.valid() && At.start() < End;
+          });
+        });
+        for (const auto &MI : *MBB) {
+          if (++Scanned > 256) {
+            Choices.clear();
+            break;
+          }
+          for (const auto &MO : MI.operands())
+            if (MO.isRegMask())
+              llvm::erase_if(Choices, [&](MCRegister P) {
+                return MO.clobbersPhysReg(P);
+              });
+        }
+        if (Choices.empty())
+          break;
+      }
+      if (!Choices.empty())
+        LoopGroups.push_back(Loop);
+    }
+  }
   // Keep groups of accesses in a register on each side of a call. Splitting
   // every index-constrained access separately would reload an expensive pair
   // for every field of a state object, rather than just once after the call.
@@ -841,14 +912,35 @@ bool Z80RegisterAllocator::split(const LiveInterval &LI,
   }
   LiveRangeEdit Edit(&LI, NewRegs, *MF, *LIS, VRM, this, &DeadRemats);
   SE->reset(Edit, SplitEditor::SM_Size);
-  if (AcrossCall && !MainBank) {
+  SmallDenseSet<unsigned, 4> LoopIntervals;
+  if (!LoopGroups.empty()) {
+    /* A read-only value can stay in a free register throughout an inner
+       loop, including calls that preserve it. Load it on the entering edge
+       instead of making each block reload the spilled complement. The
+       complement retains its original value for every loop exit. */
+    SmallPtrSet<MachineBasicBlock *, 16> LoopBlocks;
+    for (auto *Loop : LoopGroups) {
+      LoopIntervals.insert(SE->openIntv());
+      SE->enterIntvAtEnd(*Loop->getLoopPredecessor());
+      LoopBlocks.insert(Loop->getLoopPredecessor());
+      for (auto *MBB : Loop->blocks()) {
+        SE->useIntv(*MBB);
+        LoopBlocks.insert(MBB);
+      }
+    }
+    for (const auto &BI : SA->getUseBlocks())
+      if (!LoopBlocks.contains(BI.MBB) &&
+          SA->shouldSplitSingleBlock(BI, true))
+        SE->splitSingleBlock(BI);
+  } else if (AcrossCall && !MainBank) {
     for (const auto &[First, Last] : CallGroups) {
       SE->openIntv();
       SlotIndex Begin = SE->enterIntvBefore(First);
       SlotIndex End = SE->leaveIntvAfter(Last);
       SE->useIntv(Begin, End);
     }
-  } else if (!MainBank && S == 0 && SA->getUseBlocks().size() > 1) {
+  } else if (!MainBank && (S == 0 || LoopCaches.contains(LI.reg())) &&
+             SA->getUseBlocks().size() > 1) {
     for (const auto &BI : SA->getUseBlocks())
       if (SA->shouldSplitSingleBlock(BI, true))
         SE->splitSingleBlock(BI);
@@ -985,6 +1077,8 @@ bool Z80RegisterAllocator::split(const LiveInterval &LI,
       LI.reg(), Edit.regs(), *LIS);
   for (unsigned I = 0; I != Edit.size(); ++I) {
     Stage[Edit.get(I)] = Map[I] == 0 ? 2 : S + 1;
+    if (LoopIntervals.contains(Map[I]))
+      LoopCaches.insert(Edit.get(I));
     if (MainBank && Map[I] != 0)
       MRI->constrainRegClass(Edit.get(I), &Z80::R16RegClass);
   }

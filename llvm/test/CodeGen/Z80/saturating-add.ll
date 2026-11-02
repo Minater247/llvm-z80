@@ -10,8 +10,8 @@
 ; CHECK-LABEL: sat:
 ; CHECK: add a,
 ; CHECK-NEXT: jp po, [[DONE:.Lsat[0-9]+]]
-; CHECK-NEXT: ld a, 127
-; CHECK-NEXT: adc a, 0
+; CHECK-NEXT: sbc a, a
+; CHECK-NEXT: xor 127
 ; CHECK: [[DONE]]:
 ; CHECK: ret
 ; CHECK-LABEL: sat_positive:

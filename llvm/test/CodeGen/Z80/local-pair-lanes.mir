@@ -1,0 +1,120 @@
+# RUN: llc -run-pass=z80-machine-prera-opt,z80-prepare-live-ranges -verify-machineinstrs %s -o - | FileCheck %s
+# RUN: %python %S/Inputs/local-pair-lanes.py --llc llc --mir %s --work %t
+#
+# A page cursor retains its pair between local byte updates and releases its
+# constant lane across calls. Both byte lanes can be the changing component.
+--- |
+  target triple = "z80"
+  declare void @opaque()
+  define void @low_cursor() { ret void }
+  define void @high_cursor() { ret void }
+  define void @fixed_ports() { ret void }
+...
+---
+name: low_cursor
+tracksRegLiveness: true
+# CHECK-LABEL: name: low_cursor
+# CHECK: bb.1:
+# CHECK: [[PAIR:%[0-9]+]].sub_low:r16 = COPY
+# CHECK-NEXT: [[PAIR]].sub_high:r16 = LD8ri 49
+# CHECK-NEXT: LD8pa [[PAIR]], $a
+# CHECK-NEXT: [[PAIR]].sub_low:r16 = INC8r [[PAIR]].sub_low
+# CHECK: LD8pa [[PAIR]], $a
+# CHECK-NEXT: [[LOW:%[0-9]+]]:r8 = COPY [[PAIR]].sub_low
+# CHECK-NEXT: CALL16 @opaque
+# CHECK: [[LOW]]:r8 = INC8r [[LOW]]
+# CHECK: [[NEXT:%[0-9]+]].sub_low:r16 = COPY [[LOW]]
+# CHECK-NEXT: [[NEXT]].sub_high:r16 = LD8ri 49
+# CHECK-NEXT: LD8pa [[NEXT]], $a
+# CHECK-NEXT: [[NEXT]].sub_low:r16 = INC8r [[NEXT]].sub_low
+# CHECK: LD8pa [[NEXT]], $a
+body: |
+  bb.0:
+    successors: %bb.1(0x80000000)
+    liveins: $e
+    undef %0.sub_low:r16 = COPY $e
+    %0.sub_high:r16 = LD8ri 49
+    JQ %bb.1
+  bb.1:
+    $a = LD8ri 17
+    LD8pa %0, $a :: (volatile store (s8))
+    %0.sub_low:r16 = INC8r %0.sub_low, implicit-def dead $f
+    $a = LD8ri 34
+    LD8pa %0, $a :: (volatile store (s8))
+    CALL16 @opaque, csr_z80_c, implicit $sps
+    %0.sub_low:r16 = INC8r %0.sub_low, implicit-def dead $f
+    $a = LD8ri 51
+    LD8pa %0, $a :: (volatile store (s8))
+    %0.sub_low:r16 = INC8r %0.sub_low, implicit-def dead $f
+    $a = LD8ri 68
+    LD8pa %0, $a :: (volatile store (s8))
+    $de = COPY %0
+    RET16 implicit-def $sps, implicit $sps, implicit $de
+...
+---
+name: high_cursor
+tracksRegLiveness: true
+# CHECK-LABEL: name: high_cursor
+# CHECK: bb.1:
+# CHECK: [[PAIR:%[0-9]+]].sub_high:r16 = COPY
+# CHECK-NEXT: [[PAIR]].sub_low:r16 = LD8ri 49
+# CHECK-NEXT: $a = LD8ap [[PAIR]]
+# CHECK-NEXT: [[PAIR]].sub_high:r16 = DEC8r [[PAIR]].sub_high
+# CHECK-NEXT: $a = LD8ap [[PAIR]]
+# CHECK-NEXT: [[HIGH:%[0-9]+]]:r8 = COPY [[PAIR]].sub_high
+# CHECK-NEXT: CALL16 @opaque
+body: |
+  bb.0:
+    successors: %bb.1(0x80000000)
+    liveins: $e
+    undef %0.sub_high:r16 = COPY $e
+    %0.sub_low:r16 = LD8ri 49
+    JQ %bb.1
+  bb.1:
+    $a = LD8ap %0 :: (volatile load (s8))
+    %0.sub_high:r16 = DEC8r %0.sub_high, implicit-def dead $f
+    $a = LD8ap %0 :: (volatile load (s8))
+    CALL16 @opaque, csr_z80_c, implicit $sps
+    %0.sub_high:r16 = DEC8r %0.sub_high, implicit-def dead $f
+    $a = LD8ap %0 :: (volatile load (s8))
+    %0.sub_high:r16 = DEC8r %0.sub_high, implicit-def dead $f
+    $a = LD8ap %0 :: (volatile load (s8))
+    $de = COPY %0
+    RET16 implicit-def $sps, implicit $sps, implicit $de, implicit $a
+...
+---
+name: fixed_ports
+tracksRegLiveness: true
+# Independent fixed ports retain byte ranges between their stores; constructing
+# overlapping long pair ranges would increase pressure on the stored values.
+# CHECK-LABEL: name: fixed_ports
+# CHECK: bb.1:
+# CHECK: [[FIRST:%[0-9]+]].sub_low:r16 = COPY [[BYTE:%[0-9]+]]
+# CHECK-NEXT: [[FIRST]].sub_high:r16 = LD8ri 49
+# CHECK-NEXT: LD8pa [[FIRST]], $a
+# CHECK: [[SECOND:%[0-9]+]].sub_low:r16 = COPY
+# CHECK-NEXT: [[SECOND]].sub_high:r16 = LD8ri 49
+# CHECK-NEXT: LD8pa [[SECOND]], $a
+# CHECK: [[THIRD:%[0-9]+]].sub_low:r16 = COPY [[BYTE]]
+# CHECK-NEXT: [[THIRD]].sub_high:r16 = LD8ri 49
+# CHECK-NEXT: LD8pa [[THIRD]], $a
+body: |
+  bb.0:
+    successors: %bb.1(0x80000000)
+    liveins: $e, $d
+    undef %0.sub_low:r16 = COPY $e
+    %0.sub_high:r16 = LD8ri 49
+    undef %1.sub_low:r16 = COPY $d
+    %1.sub_high:r16 = LD8ri 49
+    JQ %bb.1
+  bb.1:
+    $a = LD8ri 17
+    LD8pa %0, $a :: (volatile store (s8))
+    $a = LD8ri 34
+    LD8pa %1, $a :: (volatile store (s8))
+    $a = LD8ri 51
+    LD8pa %0, $a :: (volatile store (s8))
+    $a = LD8ri 68
+    LD8pa %1, $a :: (volatile store (s8))
+    RET16 implicit-def $sps, implicit $sps
+...

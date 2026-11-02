@@ -172,12 +172,12 @@ unsigned Z80InstrInfo::getInstSizeInBytes(const MachineInstr &MI) const {
   // exact encoded size, including an index prefix on the main-bank operand.
   switch (MI.getOpcode()) {
   case Z80::SADDSAT8ar:
-    return 8 + unsigned(Subtarget.is24Bit()) +
+    return 7 + unsigned(Subtarget.is24Bit()) +
            unsigned(Z80::I8RegClass.contains(MI.getOperand(0).getReg()));
   case Z80::SADDSAT8ai:
-    return 9 + unsigned(Subtarget.is24Bit());
+    return 8 + unsigned(Subtarget.is24Bit());
   case Z80::SADDSAT8ap:
-    return 8 + unsigned(Subtarget.is24Bit()) +
+    return 7 + unsigned(Subtarget.is24Bit()) +
            2 * unsigned(isIndex(MI.getOperand(0), getRegisterInfo()));
   case Z80::BANK_ADD16:
     return Z80::bankAddCost(MI.getOperand(0).getReg(),

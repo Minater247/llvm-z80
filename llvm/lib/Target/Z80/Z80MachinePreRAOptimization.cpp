@@ -389,7 +389,99 @@ static bool separateStableLanes(MachineFunction &MF, unsigned StableSub) {
     DenseMap<MachineInstr *, Register> Pairs;
     SmallPtrSet<MachineInstr *, 4> PairDefs;
     MRI.markUsesInDebugValueAsUndef(R);
+    if (StableValue) {
+      /* Keep consecutive word accesses and byte updates in a local pair.
+         Splitting the lifetime across calls and blocks still releases its
+         constant lane, but rebuilding at every access would prevent an
+         address cursor from advancing in place. Limit each region's scan
+         and publish the changing byte at its end for subsequent regions. */
+      SmallVector<MachineBasicBlock *, 8> Blocks;
+      for (auto *MO : Operands)
+        Blocks.push_back(MO->getParent()->getParent());
+      llvm::sort(Blocks, [](const auto *L, const auto *R) {
+        return L->getNumber() < R->getNumber();
+      });
+      Blocks.erase(std::unique(Blocks.begin(), Blocks.end()), Blocks.end());
+      for (auto *MBB : Blocks) {
+        auto End = MBB->end();
+        for (auto It = MBB->begin(); It != End;) {
+          auto Begin = It;
+          auto Last = End;
+          unsigned WholeUses = 0, Scanned = 0;
+          bool Updated = false, UpdatedAtLast = false;
+          bool Loaded = false, Stored = false;
+          for (; It != End && Scanned != 64; ++It, ++Scanned) {
+            auto &MI = *It;
+            bool Boundary = MI.isCall() || MI.isInlineAsm() ||
+                            MI.isTerminator() || MI.isBundled();
+            bool WholeUse = false, VariableDef = false, VariableUse = false;
+            for (const auto &MO : MI.operands()) {
+              Boundary |= MO.isRegMask();
+              if (!MO.isReg() || MO.getReg() != R)
+                continue;
+              Boundary |= MO.isDef() &&
+                          (!MO.getSubReg() || MO.getSubReg() == StableSub);
+              WholeUse |= MO.isUse() && !MO.getSubReg();
+              VariableDef |= MO.isDef() && MO.getSubReg() == VariableSub;
+              VariableUse |= MO.isUse() && !MO.isUndef() &&
+                             MO.getSubReg() == VariableSub;
+            }
+            Boundary |= VariableDef && !VariableUse;
+            /* Arithmetic consumers benefit from independent byte lifetimes:
+               retaining their zero-extended operand would occupy a pair
+               across the other inputs and results. Group memory accesses,
+               where retaining the address directly replaces reconstruction. */
+            Boundary |= WholeUse && !MI.mayLoad() && !MI.mayStore();
+            if (Boundary) {
+              ++It;
+              break;
+            }
+            if (WholeUse) {
+              if (!WholeUses)
+                Begin = It;
+              ++WholeUses;
+              Last = It;
+              UpdatedAtLast = Updated;
+              Loaded |= MI.mayLoad();
+              Stored |= MI.mayStore();
+            }
+            Updated |= WholeUses && VariableDef;
+          }
+          /* Repeated stores to independent fixed addresses can interleave.
+             Retaining all of those pairs increases pressure without saving
+             cursor updates or a read/modify/write address reconstruction. */
+          if (WholeUses < 2 || (!UpdatedAtLast && !(Loaded && Stored)))
+            continue;
+          Register Pair = MRI.createVirtualRegister(RC);
+          BuildMI(*MBB, Begin, Begin->getDebugLoc(), TII.get(TargetOpcode::COPY))
+              .addReg(Pair, RegState::Define | RegState::Undef, VariableSub)
+              .addReg(Variable);
+          BuildMI(*MBB, Begin, Begin->getDebugLoc(), TII.get(Z80::LD8ri))
+              .addReg(Pair, RegState::Define, StableSub)
+              .addImm(*StableValue);
+          Pairs[&*Begin] = Pair;
+          auto After = std::next(Last);
+          for (auto Region = Begin; Region != After; ++Region)
+            for (auto &MO : Region->operands()) {
+              if (!MO.isReg() || MO.getReg() != R)
+                continue;
+              MO.setReg(Pair);
+              if (MO.isDef()) {
+                MO.setIsUndef(false);
+                MO.setIsDead(false);
+              } else {
+                MO.setIsKill(false);
+              }
+            }
+          BuildMI(*MBB, After, Last->getDebugLoc(), TII.get(TargetOpcode::COPY),
+                  Variable)
+              .addReg(Pair, 0, VariableSub);
+        }
+      }
+    }
     for (auto *MO : Operands) {
+      if (MO->getReg() != R)
+        continue;
       if (unsigned Sub = MO->getSubReg()) {
         MO->setReg(Sub == VariableSub ? Variable : Stable);
         MO->setSubReg(0);
