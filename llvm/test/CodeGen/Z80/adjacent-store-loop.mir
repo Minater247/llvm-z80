@@ -1,0 +1,58 @@
+# RUN: llc -run-pass=z80-machine-prera-opt -verify-machineinstrs %s -o - | FileCheck %s
+# RUN: llc -start-before=z80-machine-prera-opt -verify-machineinstrs %s -o %t.s
+# RUN: %python %S/Inputs/adjacent-store-loop.py %t.s
+# RUN: llc -start-before=z80-machine-prera-opt -mattr=+alternate-regs -verify-machineinstrs %s -o %t.bank.s
+# RUN: %python %S/Inputs/adjacent-store-loop.py %t.bank.s
+--- |
+  target triple = "z80"
+  define void @loop_stores() { ret void }
+  define void @live_accumulator() { ret void }
+...
+---
+name: loop_stores
+tracksRegLiveness: true
+# The only later pointer use is at the beginning of the next iteration.
+# CHECK-LABEL: name: loop_stores
+# CHECK: INC16r
+# CHECK: LD8pg
+# CHECK: DEC16r
+# CHECK: DEC8r
+body: |
+  bb.0:
+    successors: %bb.1
+    liveins: $a
+    %0:a16 = LD16ri 16384
+    %1:g8 = COPY $a
+  bb.1:
+    successors: %bb.1, %bb.2
+    %2:g8 = LD8gp %0 :: (volatile load (s8))
+    LD8pi %0, 7 :: (volatile store (s8))
+    $a = COPY %1
+    LD8ma 16385, implicit $a :: (volatile store (s8))
+    %1:g8 = DEC8r %1, implicit-def $f
+    JQCC %bb.1, 0, implicit killed $f
+  bb.2:
+    $a = COPY %2
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...
+---
+name: live_accumulator
+tracksRegLiveness: true
+# Reject the rewrite before changing its pointer if A remains live.
+# CHECK-LABEL: name: live_accumulator
+# CHECK-NOT: INC16r
+# CHECK: LD8ma 16385, implicit $a
+# CHECK-NOT: INC16r
+# CHECK: RET16
+body: |
+  bb.0:
+    liveins: $e
+    %0:a16 = LD16ri 16384
+    %1:g8 = COPY $e
+    LD8pi %0, 7 :: (volatile store (s8))
+    $a = COPY %1
+    LD8ma 16385, implicit $a :: (volatile store (s8))
+    $b = COPY $a
+    $de = COPY %0
+    RET16 implicit-def $sps, implicit $sps, implicit $b, implicit $de
+...

@@ -1024,6 +1024,42 @@ bool Z80InstructionSelector::selectInOut(MachineInstr &I,
          constrainSelectedInstRegOperands(I, TII, TRI, RBI);
 }
 
+/// Share a constant byte address across a short region of memory accesses.
+/// Three accesses amortize materializing a primary pair. Calls and assembly
+/// boundaries retain absolute addressing so the address need not survive them.
+static bool reuseConstantByteAddress(Register Ptr, MachineRegisterInfo &MRI) {
+  SmallPtrSet<MachineBasicBlock *, 2> Blocks;
+  unsigned Accesses = 0;
+  for (MachineInstr &Use : MRI.use_nodbg_instructions(Ptr)) {
+    if (!Use.hasOneMemOperand() || (*Use.memoperands_begin())->getSize() != 1 ||
+        ++Accesses > 32)
+      return false;
+    Blocks.insert(Use.getParent());
+    if (Blocks.size() > 2)
+      return false;
+  }
+  if (Accesses < 3)
+    return false;
+  if (Blocks.size() == 2) {
+    auto It = Blocks.begin();
+    MachineBasicBlock *First = *It++, *Second = *It;
+    auto Adjacent = [](MachineBasicBlock *A, MachineBasicBlock *B) {
+      return B->pred_size() == 1 && *B->pred_begin() == A &&
+             llvm::all_of(A->successors(), [&](MachineBasicBlock *Next) {
+               return Next == A || Next == B;
+             });
+    };
+    if (!Adjacent(First, Second) && !Adjacent(Second, First))
+      return false;
+  }
+  unsigned Budget = 96;
+  for (MachineBasicBlock *MBB : Blocks)
+    for (const MachineInstr &MI : *MBB)
+      if (!Budget-- || MI.isCall() || MI.isInlineAsm())
+        return false;
+  return true;
+}
+
 bool Z80InstructionSelector::selectLoadStore(MachineInstr &I,
                                              MachineRegisterInfo &MRI,
                                              MachineFunction &MF) const {
@@ -1151,9 +1187,10 @@ bool Z80InstructionSelector::selectLoadStore(MachineInstr &I,
             *PtrMI, PtrMI->getOperand(1).getReg(),
             Step->getSExtValue() + (Step->isNegative() ? 1 : -1), false, MRI));
     }
-  bool PreferRegPtrFor8 = (Ty.getSizeInBits() == 8) &&
-                         (!MRI.hasOneUse(PtrReg) || UnitStep) &&
-                         !IsConstantPtr;
+  bool PreferRegPtrFor8 =
+      (Ty.getSizeInBits() == 8) && (!MRI.hasOneUse(PtrReg) || UnitStep) &&
+      (!IsConstantPtr ||
+       (!STI.hasEZ80Ops() && reuseConstantByteAddress(PtrReg, MRI)));
   if (PreferRegPtrFor8 && !UnitStep && !STI.hasEZ80Ops() && PtrMI &&
       !MRI.getRegClassOrNull(PtrReg) &&
       PtrMI->getOpcode() == TargetOpcode::G_PTR_ADD)

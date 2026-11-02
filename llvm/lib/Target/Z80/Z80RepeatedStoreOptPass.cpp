@@ -106,40 +106,45 @@ bool Z80RepeatedStoreOptPass::runOnMachineFunction(MachineFunction &MF) {
       }
       Changed = true;
     }
-    for (auto I = MBB.begin(); I != MBB.end();) {
-      auto &First = *I++;
-      if (First.getOpcode() != Z80::LD8ma || First.isBundled())
-        continue;
-      SmallVector<MachineInstr *, 8> Stores{&First};
-      unsigned Distance = 0;
-      for (auto J = I; J != MBB.end() && ++Distance <= 32; ++J) {
-        if (J->isCall() || J->isInlineAsm() || J->isTerminator() ||
-            J->isBundled())
-          break;
-        if (J->getOpcode() == Z80::LD8ma &&
-            J->getOperand(0).isIdenticalTo(First.getOperand(0)))
-          Stores.push_back(&*J);
-      }
-      if (Stores.size() < 2)
-        continue;
+    /* Z80 chooses optional absolute-store address sharing after allocation,
+       where it can retain the function's existing register clobbers. Keep
+       eZ80's existing virtual-address selection and folding behavior. */
+    if (MF.getSubtarget<Z80Subtarget>().hasEZ80Ops()) {
+      for (auto I = MBB.begin(); I != MBB.end();) {
+        auto &First = *I++;
+        if (First.getOpcode() != Z80::LD8ma || First.isBundled())
+          continue;
+        SmallVector<MachineInstr *, 8> Stores{&First};
+        unsigned Distance = 0;
+        for (auto J = I; J != MBB.end() && ++Distance <= 32; ++J) {
+          if (J->isCall() || J->isInlineAsm() || J->isTerminator() ||
+              J->isBundled())
+            break;
+          if (J->getOpcode() == Z80::LD8ma &&
+              J->getOperand(0).isIdenticalTo(First.getOperand(0)))
+            Stores.push_back(&*J);
+        }
+        if (Stores.size() < 2)
+          continue;
 
-      // Two stores save 12 T-states, paying for the 10-T-state address load.
-      // Allocation chooses BC, DE or HL and can fold the constant back into
-      // an absolute store when all pairs are occupied. No memory access moves.
-      Register Address = MRI.createVirtualRegister(&Z80::G16RegClass);
-      BuildMI(MBB, First, First.getDebugLoc(), TII.get(Z80::LD16ri), Address)
-          .add(First.getOperand(0));
-      I = std::next(Stores.back()->getIterator());
-      for (MachineInstr *Store : Stores) {
-        auto New =
-            BuildMI(MBB, Store, Store->getDebugLoc(), TII.get(Z80::LD8pa))
-                .addReg(Address)
-                .addReg(Z80::A)
-                .cloneMemRefs(*Store);
-        New->setFlags(Store->getFlags());
-        Store->eraseFromParent();
+        // Allocation chooses BC, DE or HL and can fold the constant back into
+        // an absolute store when all pairs are occupied. No memory access
+        // moves.
+        Register Address = MRI.createVirtualRegister(&Z80::G16RegClass);
+        BuildMI(MBB, First, First.getDebugLoc(), TII.get(Z80::LD16ri), Address)
+            .add(First.getOperand(0));
+        I = std::next(Stores.back()->getIterator());
+        for (MachineInstr *Store : Stores) {
+          auto New =
+              BuildMI(MBB, Store, Store->getDebugLoc(), TII.get(Z80::LD8pa))
+                  .addReg(Address)
+                  .addReg(Z80::A)
+                  .cloneMemRefs(*Store);
+          New->setFlags(Store->getFlags());
+          Store->eraseFromParent();
+        }
+        Changed = true;
       }
-      Changed = true;
     }
   }
   return Changed;

@@ -17,6 +17,7 @@
 #include "Z80Subtarget.h"
 #include "llvm/CodeGen/LiveRegUnits.h"
 #include "llvm/CodeGen/MachineDominators.h"
+#include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
@@ -454,6 +455,100 @@ Z80MachineLateOptimization::getKnownFlags(const MachineInstr &MI,
   return {};
 }
 
+/// Share repeated absolute stores through an available, already-clobbered pair.
+/// Memory operations retain their order. Address materialization introduces no
+/// spills and preserves every byte register the function previously preserved.
+static bool shareAbsoluteStoreAddresses(MachineFunction &MF) {
+  const auto &ST = MF.getSubtarget<Z80Subtarget>();
+  if (!ST.is16Bit() || ST.hasEZ80Ops())
+    return false;
+  const auto &TRI = *ST.getRegisterInfo();
+  const auto &TII = *ST.getInstrInfo();
+  const auto &MRI = MF.getRegInfo();
+  const MCPhysReg Pairs[] = {Z80::BC, Z80::DE, Z80::HL};
+  auto Reserved = TRI.getReservedRegs(MF);
+  unsigned Clobbered = 0;
+  for (unsigned N = 0; N != 3; ++N)
+    if (!Reserved.test(Pairs[N]) &&
+        MRI.isPhysRegModified(TRI.getSubReg(Pairs[N], Z80::sub_low)) &&
+        MRI.isPhysRegModified(TRI.getSubReg(Pairs[N], Z80::sub_high)))
+      Clobbered |= 1u << N;
+  if (!Clobbered)
+    return false;
+
+  /* A locally cheap extra pair can force spills at every caller. Make this
+     optional address-sharing choice after allocation, when both the existing
+     clobbers and an actually free pair are known. */
+  bool Changed = false;
+  for (auto &MBB : MF) {
+    unsigned AbsoluteStores = 0;
+    for (const auto &MI : MBB)
+      if (MI.getOpcode() == Z80::LD8ma && ++AbsoluteStores == 2)
+        break;
+    if (AbsoluteStores < 2)
+      continue;
+    DenseMap<const MachineInstr *, unsigned> Available;
+    LiveRegUnits Live(TRI);
+    Live.addLiveOuts(MBB);
+    for (const auto &MI : llvm::reverse(MBB)) {
+      Live.stepBackward(MI);
+      if (MI.getOpcode() != Z80::LD8ma)
+        continue;
+      unsigned Mask = 0;
+      for (unsigned N = 0; N != 3; ++N)
+        if ((Clobbered & (1u << N)) && Live.available(Pairs[N]))
+          Mask |= 1u << N;
+      Available[&MI] = Mask;
+    }
+    for (auto I = MBB.begin(); I != MBB.end();) {
+      MachineInstr &First = *I++;
+      unsigned Choices = Available.lookup(&First);
+      if (First.getOpcode() != Z80::LD8ma || First.isBundled() || !Choices)
+        continue;
+      SmallVector<MachineInstr *, 8> Stores{&First};
+      unsigned Distance = 0;
+      for (auto J = I; J != MBB.end() && ++Distance <= 32; ++J) {
+        if (J->isCall() || J->isInlineAsm() || J->isTerminator() ||
+            J->isBundled())
+          break;
+        unsigned Remaining = Choices;
+        for (unsigned N = 0; N != 3; ++N)
+          if ((Remaining & (1u << N)) && (J->readsRegister(Pairs[N], &TRI) ||
+                                          J->modifiesRegister(Pairs[N], &TRI)))
+            Remaining &= ~(1u << N);
+        if (!Remaining)
+          break;
+        Choices = Remaining;
+        if (J->getOpcode() == Z80::LD8ma &&
+            J->getOperand(0).isIdenticalTo(First.getOperand(0)))
+          Stores.push_back(&*J);
+      }
+      if (Stores.size() < 2)
+        continue;
+      unsigned N = 0;
+      while (!(Choices & (1u << N)))
+        ++N;
+      MCRegister Address = Pairs[N];
+      BuildMI(MBB, First, First.getDebugLoc(), TII.get(Z80::LD16ri), Address)
+          .add(First.getOperand(0));
+      I = std::next(Stores.back()->getIterator());
+      for (MachineInstr *Store : Stores) {
+        BuildMI(MBB, Store, Store->getDebugLoc(), TII.get(Z80::LD8pa))
+            .addReg(Address, Store == Stores.back() ? RegState::Kill : 0)
+            .add(Store->getOperand(1))
+            .cloneMemRefs(*Store);
+        // The absolute form carries A implicitly; the register form names it.
+        auto New = std::prev(Store->getIterator());
+        New->getOperand(1).setImplicit(false);
+        New->setFlags(Store->getFlags());
+        Store->eraseFromParent();
+      }
+      Changed = true;
+    }
+  }
+  return Changed;
+}
+
 bool Z80MachineLateOptimization::runOnMachineFunction(MachineFunction &MF) {
   bool Changed = false;
   TRI = MF.getSubtarget().getRegisterInfo();
@@ -855,7 +950,7 @@ bool Z80MachineLateOptimization::runOnMachineFunction(MachineFunction &MF) {
       debug(*MIB);
     }
   }
-  return Changed;
+  return shareAbsoluteStoreAddresses(MF) || Changed;
 }
 
 char Z80MachineLateOptimization::ID = 0;

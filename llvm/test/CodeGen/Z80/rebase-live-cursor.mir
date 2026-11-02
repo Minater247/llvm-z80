@@ -215,7 +215,7 @@ tracksRegLiveness: true
 # CHECK-LABEL: name: live_carry
 # CHECK: [[BASE:%[0-9]+]]:i16 = COPY %0
 # CHECK: [[ADDRESS:%[0-9]+]]:a16 = COPY [[BASE]]
-# CHECK-NEXT: [[ADDRESS]]:a16 = ADD16rr [[ADDRESS]], %{{[0-9]+}}, implicit-def $f
+# CHECK: [[ADDRESS]]:a16 = ADD16rr [[ADDRESS]], %{{[0-9]+}}, implicit-def $f
 body: |
   bb.0:
     successors: %bb.1, %bb.2

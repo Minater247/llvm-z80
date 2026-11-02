@@ -1395,11 +1395,13 @@ bool Z80MachinePreRAOptimization::runOnMachineFunction(MachineFunction &MF) {
     Changed = true;
   }
 
-  // PHI elimination and coalescing can join several constants into one range.
-  // Materialize each constant after intervening calls when its first use is
-  // later: a call need not force all the incoming values of that range to spill.
+  // Materialize constants near their first local access. Shorter lifetimes
+  // reduce overlapping bytes and avoid preserving coalesced values over calls.
   for (auto &MBB : MF) {
-    if (llvm::none_of(MBB, [](const MachineInstr &MI) { return MI.isCall(); }))
+    if (llvm::none_of(MBB, [](const MachineInstr &MI) {
+          return MI.getOpcode() == Z80::LD8ri ||
+                 MI.getOpcode() == Z80::LD16ri || MI.getOpcode() == Z80::LD24ri;
+        }))
       continue;
     SmallVector<MachineInstr *, 64> Instructions;
     SmallVector<unsigned, 4> Calls;
@@ -1413,7 +1415,7 @@ bool Z80MachinePreRAOptimization::runOnMachineFunction(MachineFunction &MF) {
        especially across inline assembly with many register operands. */
     DenseMap<Register, unsigned> NextAccess;
     unsigned NextBarrier = Instructions.size();
-    SmallVector<std::pair<MachineInstr *, MachineInstr *>, 8> Moves;
+    SmallVector<std::tuple<MachineInstr *, MachineInstr *, bool>, 8> Moves;
     for (unsigned I = Instructions.size(); I-- != 0;) {
       auto &MI = *Instructions[I];
       if ((MI.getOpcode() == Z80::LD8ri || MI.getOpcode() == Z80::LD16ri ||
@@ -1424,11 +1426,16 @@ bool Z80MachinePreRAOptimization::runOnMachineFunction(MachineFunction &MF) {
         Register R = MI.getOperand(0).getReg();
         unsigned Limit = std::min(I + 65, NextBarrier);
         auto Next = NextAccess.find(R);
-        if (Next != NextAccess.end())
-          Limit = std::min(Limit, Next->second);
-        auto Call = llvm::lower_bound(Calls, Limit);
-        if (Call != Calls.begin() && *--Call > I)
-          Moves.emplace_back(&MI, Instructions[*Call]);
+        if (Next != NextAccess.end() && Next->second < Limit &&
+            Next->second > I + 1) {
+          Moves.emplace_back(&MI, Instructions[Next->second], false);
+        } else {
+          if (Next != NextAccess.end())
+            Limit = std::min(Limit, Next->second);
+          auto Call = llvm::lower_bound(Calls, Limit);
+          if (Call != Calls.begin() && *--Call > I)
+            Moves.emplace_back(&MI, Instructions[*Call], true);
+        }
       }
       if (MI.isTerminator() || MI.isBundled() || MI.isDebugInstr())
         NextBarrier = I;
@@ -1437,8 +1444,9 @@ bool Z80MachinePreRAOptimization::runOnMachineFunction(MachineFunction &MF) {
             (MO.isDef() || MO.readsReg()))
           NextAccess[MO.getReg()] = I;
     }
-    for (auto [MI, Call] : llvm::reverse(Moves)) {
-      MBB.splice(std::next(Call->getIterator()), &MBB, MI->getIterator());
+    for (auto [MI, Anchor, After] : llvm::reverse(Moves)) {
+      auto At = Anchor->getIterator();
+      MBB.splice(After ? std::next(At) : At, &MBB, MI->getIterator());
       Changed = true;
     }
   }
@@ -1773,8 +1781,10 @@ bool Z80MachinePreRAOptimization::runOnMachineFunction(MachineFunction &MF) {
       Register PtrBase = BaseInfo.PtrReg;
       std::optional<PtrInfo> SecondPtrInfo = SecondInfo.PtrDetail;
 
-      // Determine if the pointer value is needed later in the block.
-      bool PtrUsedLater = false;
+      /* A pointer used earlier in this block can be live around a backedge.
+         Preserve that original value as well as later local/successor uses. */
+      bool PtrUsedLater = LIS.hasInterval(PtrBase) &&
+                          LIS.isLiveOutOfMBB(LIS.getInterval(PtrBase), &MBB);
       for (auto ScanI = NextI; ScanI != E && !PtrUsedLater; ++ScanI) {
         if (ScanI->isDebugInstr())
           continue;
@@ -1799,16 +1809,6 @@ bool Z80MachinePreRAOptimization::runOnMachineFunction(MachineFunction &MF) {
       unsigned IncOpc = BaseInfo.PtrDetail->IncOpc;
       unsigned StepOpc = Delta > 0 ? IncOpc : getDecOpcode(IncOpc);
       unsigned RestoreOpc = Delta > 0 ? getDecOpcode(IncOpc) : IncOpc;
-
-      BaseStore.getOperand(0).setIsKill(false);
-
-      // Insert INC/DEC before the second store.
-      BuildMI(MBB, MachineBasicBlock::iterator(SecondStore), SecondStore.getDebugLoc(),
-              TII.get(StepOpc), PtrBase)
-          .addReg(PtrBase, RegState::Kill);
-
-      LLVM_DEBUG(dbgs() << "[z80-prera] Rewriting store pair: base=" << BaseAddr
-                        << " second=" << SecondAddr << " delta=" << Delta << "\n");
 
       if (CopyToA) {
         bool AUsedLater = false;
@@ -1836,6 +1836,17 @@ bool Z80MachinePreRAOptimization::runOnMachineFunction(MachineFunction &MF) {
           continue;
         }
       }
+
+      BaseStore.getOperand(0).setIsKill(false);
+
+      // Insert INC/DEC before the second store.
+      BuildMI(MBB, MachineBasicBlock::iterator(SecondStore),
+              SecondStore.getDebugLoc(), TII.get(StepOpc), PtrBase)
+          .addReg(PtrBase, RegState::Kill);
+
+      LLVM_DEBUG(dbgs() << "[z80-prera] Rewriting store pair: base=" << BaseAddr
+                        << " second=" << SecondAddr << " delta=" << Delta
+                        << "\n");
 
       MachineInstrBuilder NewStore;
       unsigned PtrFlags = PtrUsedLater ? 0 : RegState::Kill;

@@ -1,0 +1,45 @@
+# RUN: llc -run-pass=z80-machine-prera-opt -verify-machineinstrs %s -o - | FileCheck %s
+# RUN: llc -start-before=z80-machine-prera-opt -verify-machineinstrs %s -o %t.s
+# RUN: %python %S/Inputs/local-constant-lifetimes.py %t.s
+# RUN: llc -start-before=z80-machine-prera-opt -mattr=+alternate-regs -verify-machineinstrs %s -o %t.bank.s
+# RUN: %python %S/Inputs/local-constant-lifetimes.py %t.bank.s
+--- |
+  target triple = "z80"
+  define void @byte_sequence() { ret void }
+  define void @partial_definition() { ret void }
+...
+---
+name: byte_sequence
+tracksRegLiveness: true
+# Independent byte constants need not occupy registers simultaneously.
+# CHECK-LABEL: name: byte_sequence
+# CHECK: LD8ma 8193
+# CHECK-NEXT: [[NEXT:%[0-9]+]]:r8 = LD8ri 42
+# CHECK-NEXT: $a = COPY [[NEXT]]
+body: |
+  bb.0:
+    %0:r8 = LD8ri 39
+    %1:r8 = LD8ri 42
+    $a = COPY %0
+    LD8ma 8192, implicit $a :: (volatile store (s8))
+    LD8am 8194, implicit-def $a :: (volatile load (s8))
+    LD8ma 8193, implicit $a :: (volatile store (s8))
+    $a = COPY %1
+    LD8ma 8192, implicit $a :: (volatile store (s8))
+    RET16 implicit-def $sps, implicit $sps
+...
+---
+name: partial_definition
+tracksRegLiveness: true
+# The word must still be defined before the first partial overwrite.
+# CHECK-LABEL: name: partial_definition
+# CHECK: [[WORD:%[0-9]+]]:r16 = LD16ri 4660
+# CHECK: [[WORD]].sub_low:r16 = COPY
+body: |
+  bb.0:
+    %0:r16 = LD16ri 4660
+    %1:r8 = LD8ri 86
+    %0.sub_low:r16 = COPY %1
+    $hl = COPY %0
+    RET16 implicit-def $sps, implicit $sps, implicit $hl
+...

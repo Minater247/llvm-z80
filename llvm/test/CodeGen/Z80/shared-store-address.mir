@@ -1,22 +1,41 @@
-# RUN: llc -run-pass=z80-repeated-store-opt -verify-machineinstrs %s -o - | FileCheck %s
-# RUN: llc -run-pass=z80-repeated-store-opt,z80-regalloc,virtregrewriter -verify-machineinstrs %s -o - | FileCheck %s --check-prefix=RA
+# RUN: llc -run-pass=z80-machine-late-opt -verify-machineinstrs %s -o - | FileCheck %s
+# RUN: llc -start-before=z80-machine-late-opt -verify-machineinstrs %s -o %t.s
+# RUN: %python %S/Inputs/shared-store-address.py %t.s
 --- |
   target triple = "z80"
   define void @shared() { ret void }
+  define void @preserved_pairs() { ret void }
   define void @pressure() { ret void }
+  define void @partial_pair() { ret void }
 ...
 ---
 name: shared
 tracksRegLiveness: true
+# DE is already clobbered, and its final value is defined after both stores.
 # CHECK-LABEL: name: shared
-# CHECK: %0:g16 = LD16ri 16384
-# CHECK-NEXT: LD8pa %0, $a :: (volatile store (s8))
+# CHECK: $de = LD16ri 16384
+# CHECK-NEXT: LD8pa $de, $a :: (volatile store (s8))
 # CHECK-NEXT: $a = LD8ri 12
-# CHECK-NEXT: LD8pa %0, $a :: (volatile store (s8))
-# RA-LABEL: name: shared
-# RA: $[[PAIR:de|bc]] = LD16ri 16384
-# RA-NEXT: LD8pa $[[PAIR]], $a
-# RA: LD8pa {{(killed )?}}$[[PAIR]], $a
+# CHECK-NEXT: LD8pa killed $de, $a :: (volatile store (s8))
+# CHECK: $de = LD16ri 12345
+body: |
+  bb.0:
+    liveins: $a, $hl
+    LD8ma 16384, implicit $a :: (volatile store (s8))
+    $a = LD8ri 12
+    LD8ma 16384, implicit $a :: (volatile store (s8))
+    $de = LD16ri 12345
+    RET16 implicit-def $sps, implicit $sps, implicit $hl, implicit $de
+...
+---
+name: preserved_pairs
+tracksRegLiveness: true
+# A free pair must not expand the function's clobber set.
+# CHECK-LABEL: name: preserved_pairs
+# CHECK-NOT: LD16ri
+# CHECK: LD8ma 16384, implicit $a :: (volatile store (s8))
+# CHECK-NEXT: $a = LD8ri 12
+# CHECK-NEXT: LD8ma 16384, implicit $a :: (volatile store (s8))
 body: |
   bb.0:
     liveins: $a, $hl
@@ -28,16 +47,37 @@ body: |
 ---
 name: pressure
 tracksRegLiveness: true
-# RA-LABEL: name: pressure
-# RA: stack: []
-# RA: LD8ma 16384, implicit $a :: (volatile store (s8))
-# RA-NEXT: $a = LD8ri 12
-# RA-NEXT: LD8ma 16384, implicit $a :: (volatile store (s8))
+# All three pairs are clobbered but live through the stores.
+# CHECK-LABEL: name: pressure
+# CHECK: LD8ma 16384, implicit $a :: (volatile store (s8))
+# CHECK-NEXT: $a = LD8ri 12
+# CHECK-NEXT: LD8ma 16384, implicit $a :: (volatile store (s8))
 body: |
   bb.0:
-    liveins: $a, $hl, $bc, $de
+    liveins: $a
+    $hl = LD16ri 12345
+    $bc = LD16ri 23456
+    $de = LD16ri 34567
     LD8ma 16384, implicit $a :: (volatile store (s8))
     $a = LD8ri 12
     LD8ma 16384, implicit $a :: (volatile store (s8))
     RET16 implicit-def $sps, implicit $sps, implicit $hl, implicit $bc, implicit $de
+...
+---
+name: partial_pair
+tracksRegLiveness: true
+# Clobbering D does not make E available to an address materialization.
+# CHECK-LABEL: name: partial_pair
+# CHECK-NOT: LD16ri
+# CHECK: LD8ma 16384, implicit $a :: (volatile store (s8))
+# CHECK-NEXT: $a = LD8ri 12
+# CHECK-NEXT: LD8ma 16384, implicit $a :: (volatile store (s8))
+body: |
+  bb.0:
+    liveins: $a, $e, $hl
+    LD8ma 16384, implicit $a :: (volatile store (s8))
+    $a = LD8ri 12
+    LD8ma 16384, implicit $a :: (volatile store (s8))
+    $d = LD8ri 123
+    RET16 implicit-def $sps, implicit $sps, implicit $hl, implicit $de
 ...
