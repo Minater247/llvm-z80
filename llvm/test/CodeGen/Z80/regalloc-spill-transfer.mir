@@ -1,0 +1,129 @@
+# RUN: llc -start-before=z80-regalloc -regalloc=z80 -verify-machineinstrs %s -o - | FileCheck %s
+# RUN: llc -start-before=z80-regalloc -regalloc=z80 -mattr=+alternate-regs -verify-machineinstrs %s -o /dev/null
+#
+# A copy-affinity preference must account for a later spill transfer. Placing
+# the source in the reload's register preserves it across other definitions
+# and removes the round trip through the stack. Fixed-register interference,
+# partial clobbers and ordered accesses still constrain that placement.
+--- |
+  target triple = "z80"
+  define void @reuse_pair() { ret void }
+  define void @reuse_byte() { ret void }
+  define void @clobbered_pair() { ret void }
+  define void @unavailable_pair() { ret void }
+  define void @ordered_pair() { ret void }
+...
+---
+name: reuse_pair
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 2, alignment: 1 }
+# CHECK-LABEL: reuse_pair:
+# CHECK: ld l, e
+# CHECK-NEXT: ld h, d
+# CHECK-NEXT: ld de, 17
+# CHECK-NEXT: ld bc, 16
+# CHECK-NEXT: add hl, bc
+body: |
+  bb.0:
+    liveins: $de
+    %0:r16 = COPY $de
+    LD88or %stack.0, 0, %0
+    $de = LD16ri 17
+    $bc = LD16ri 16
+    %1:a16 = LD88ro %stack.0, 0
+    %1:a16 = ADD16rr %1, $bc, implicit-def dead $f
+    $hl = COPY %1
+    RET16 implicit-def $sps, implicit $sps, implicit $hl
+...
+---
+name: reuse_byte
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 1, alignment: 1 }
+# CHECK-LABEL: reuse_byte:
+# CHECK: ld a, e
+# CHECK-NEXT: ld e, 17
+# CHECK-NEXT: add a, 16
+body: |
+  bb.0:
+    liveins: $e
+    %0:r8 = COPY $e
+    LD8or %stack.0, 0, %0
+    $e = LD8ri 17
+    %1:r8 = LD8ro %stack.0, 0
+    $a = COPY %1
+    ADD8ai 16, implicit-def $a, implicit-def dead $f, implicit $a
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...
+---
+name: clobbered_pair
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 2, alignment: 1 }
+# CHECK-LABEL: clobbered_pair:
+# CHECK: ld (iy - 2), e
+# CHECK-NEXT: ld (iy - 1), d
+# CHECK: ld bc, 16
+# CHECK-NEXT: ld l, (iy - 2)
+# CHECK-NEXT: ld h, (iy - 1)
+body: |
+  bb.0:
+    liveins: $de
+    %0:r16 = COPY $de
+    LD88or %stack.0, 0, %0
+    $de = LD16ri 17
+    $h = LD8ri 42
+    $bc = LD16ri 16
+    %1:a16 = LD88ro %stack.0, 0
+    %1:a16 = ADD16rr %1, $bc, implicit-def dead $f
+    $hl = COPY %1
+    RET16 implicit-def $sps, implicit $sps, implicit $hl
+...
+---
+name: unavailable_pair
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 2, alignment: 1 }
+# CHECK-LABEL: unavailable_pair:
+# CHECK: ld (iy - 2), e
+# CHECK-NEXT: ld (iy - 1), d
+# CHECK: ld a, (hl)
+# CHECK-NEXT: ld l, (iy - 2)
+# CHECK-NEXT: ld h, (iy - 1)
+body: |
+  bb.0:
+    liveins: $de, $hl
+    %0:r16 = COPY $de
+    LD88or %stack.0, 0, %0
+    $de = LD16ri 17
+    $bc = LD16ri 16
+    $a = LD8ap $hl :: (load (s8))
+    %1:a16 = LD88ro %stack.0, 0
+    %1:a16 = ADD16rr %1, $bc, implicit-def dead $f
+    $hl = COPY %1
+    RET16 implicit-def $sps, implicit $sps, implicit $hl
+...
+---
+name: ordered_pair
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 2, alignment: 1 }
+# CHECK-LABEL: ordered_pair:
+# CHECK: ld (iy - 2), e
+# CHECK-NEXT: ld (iy - 1), d
+# CHECK: ld bc, 16
+# CHECK-NEXT: ld l, (iy - 2)
+# CHECK-NEXT: ld h, (iy - 1)
+body: |
+  bb.0:
+    liveins: $de
+    %0:r16 = COPY $de
+    LD88or %stack.0, 0, %0
+    $de = LD16ri 17
+    $bc = LD16ri 16
+    %1:a16 = LD88ro %stack.0, 0 :: (volatile load (s16) from %stack.0)
+    %1:a16 = ADD16rr %1, $bc, implicit-def dead $f
+    $hl = COPY %1
+    RET16 implicit-def $sps, implicit $sps, implicit $hl
+...

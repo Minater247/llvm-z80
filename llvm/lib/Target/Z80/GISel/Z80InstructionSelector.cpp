@@ -671,7 +671,7 @@ bool Z80InstructionSelector::selectConsecutiveAdd(
       MRI.getType(I.getOperand(0).getReg()) != LLT::scalar(16))
     return false;
   auto Offset = getIConstantVRegVal(I.getOperand(2).getReg(), MRI);
-  if (!Offset || !Offset->isSignedIntN(8) || Offset->isZero() ||
+  if (!Offset || !Offset->isSignedIntN(16) || Offset->isZero() ||
       Offset->isOne() || Offset->isAllOnes())
     return false;
   bool Inc = !Offset->isNegative();
@@ -1145,7 +1145,7 @@ bool Z80InstructionSelector::selectLoadStore(MachineInstr &I,
       // Keep the address explicit when selection can reuse the preceding
       // cursor with one increment, preserving primary and alternate choices.
       if (!STI.hasEZ80Ops() && !UnitStep && !Step->isZero() &&
-          Step->isSignedIntN(8))
+          Step->isSignedIntN(16))
         UnitStep = bool(previousCursor(
             *PtrMI, PtrMI->getOperand(1).getReg(),
             Step->getSExtValue() + (Step->isNegative() ? 1 : -1), false, MRI));
@@ -1525,7 +1525,7 @@ bool Z80InstructionSelector::selectFrameIndexOrGep(MachineInstr &I,
   if (I.getOpcode() == TargetOpcode::G_PTR_ADD) {
     auto OffConst = getIConstantVRegVal(I.getOperand(2).getReg(), MRI);
     if (!HasLEA && PtrSize >= 16 && OffConst &&
-        OffConst->isSignedIntN(8) && !OffConst->isZero() &&
+        OffConst->isSignedIntN(16) && !OffConst->isZero() &&
         !OffConst->isOne() && !OffConst->isAllOnes()) {
       bool Inc = !OffConst->isNegative();
       if (Register Previous = previousCursor(I, I.getOperand(1).getReg(),
@@ -2569,11 +2569,19 @@ bool Z80InstructionSelector::selectShift(MachineInstr &I,
   Register DstReg = I.getOperand(0).getReg();
   Register SrcReg = I.getOperand(1).getReg();
   auto Amt = getIConstantVRegValWithLookThrough(I.getOperand(2).getReg(), MRI);
-  if (!Amt)
-    return false;
   LLT Ty = MRI.getType(DstReg);
   if (!Ty.isScalar())
     return false;
+  if (!Amt) {
+    if (Ty != LLT::scalar(8))
+      return false;
+    unsigned ShiftOpc = Opc == TargetOpcode::G_SHL    ? Z80::SHL8v
+                        : Opc == TargetOpcode::G_LSHR ? Z80::LSHR8v
+                                                      : Z80::ASHR8v;
+    I.setDesc(TII.get(ShiftOpc));
+    I.addImplicitDefUseOperands(*I.getMF());
+    return constrainSelectedInstRegOperands(I, TII, TRI, RBI);
+  }
 
   if (Ty == LLT::scalar(16) &&
       (Opc == TargetOpcode::G_LSHR || Opc == TargetOpcode::G_ASHR) &&

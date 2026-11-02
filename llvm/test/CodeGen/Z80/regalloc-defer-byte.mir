@@ -1,0 +1,178 @@
+# RUN: llc -start-before=z80-regalloc -regalloc=z80 -mattr=+alternate-regs -verify-machineinstrs %s -o - | FileCheck %s
+#
+# The loop byte competes with an outer value for call-preserved B or D. Later
+# constraints force the outer value to spill. Defer the blocked byte once so
+# it can use the released register instead of being spilled prematurely.
+# Undef operands retain the interference and allocation order independently
+# of the arithmetic producing the values.
+# CHECK-LABEL: blocked_byte:
+# CHECK: ld{{[ \t]+}}b, (iy)
+# CHECK-NOT: ld{{[ \t]+}}(ix - {{[0-9]+}}), b
+# CHECK: .size{{.*}}blocked_byte
+--- |
+  target triple = "z80"
+  declare void @external()
+  define void @blocked_byte() optsize minsize { ret void }
+...
+---
+name: blocked_byte
+tracksRegLiveness: true
+frameInfo:
+  adjustsStack: true
+  hasCalls: true
+registers:
+  - { id: 0, class: a16 }
+  - { id: 1, class: g8 }
+  - { id: 2, class: a16 }
+  - { id: 3, class: b16 }
+  - { id: 4, class: a16 }
+  - { id: 5, class: g8 }
+  - { id: 6, class: g8 }
+  - { id: 7, class: g8 }
+  - { id: 8, class: g8 }
+  - { id: 9, class: r8 }
+  - { id: 10, class: o16 }
+body: |
+  bb.0:
+    successors: %bb.2(0x30000000), %bb.76(0x50000000)
+    liveins: $de
+
+    %9:r8 = IMPLICIT_DEF
+    %10:o16 = IMPLICIT_DEF
+    JQCC %bb.2, 1, implicit killed undef $f
+    JQ %bb.76
+
+  bb.2:
+    successors: %bb.9(0x80000000)
+
+    ADJCALLSTACKDOWN16 0, 0, 0, implicit-def $sps, implicit $sps
+    ADJCALLSTACKUP16 0, 0, implicit-def $sps, implicit $sps
+    %5:g8 = COPY undef %9
+    JQ %bb.9
+
+  bb.9:
+    successors: %bb.33
+
+    BIT8gb %5, 0, implicit-def $f
+    JQCC %bb.33, 1, implicit killed undef $f
+    JQ %bb.33
+
+  bb.33:
+    successors: %bb.37
+
+    %4:a16 = IMPLICIT_DEF
+    %0:a16 = COPY undef %4
+    ADJCALLSTACKDOWN16 0, 0, 0, implicit-def $sps, implicit $sps
+    ADJCALLSTACKUP16 0, 0, implicit-def $sps, implicit $sps
+    ADJCALLSTACKDOWN16 0, 0, 0, implicit-def $sps, implicit $sps
+    ADJCALLSTACKUP16 0, 0, implicit-def $sps, implicit $sps
+    CP8ai 1, implicit-def $f, implicit killed undef $a
+    JQCC %bb.37, 1, implicit killed undef $f
+    JQ %bb.37
+
+  bb.37:
+    successors: %bb.38(0x80000000)
+
+    %6:g8 = IMPLICIT_DEF
+    %7:g8 = IMPLICIT_DEF
+
+  bb.38:
+    successors: %bb.42(0x04000000), %bb.43(0x7c000000)
+
+    JQCC %bb.43, 0, implicit killed undef $f
+    JQ %bb.42
+
+  bb.42:
+    successors: %bb.58
+
+    JQCC %bb.58, 0, implicit killed undef $f
+    JQ %bb.58
+
+  bb.43:
+    successors: %bb.44(0x30000000), %bb.46(0x50000000)
+
+    $a = COPY undef %9
+    JQCC %bb.46, 0, implicit killed undef $f
+    JQ %bb.44
+
+  bb.44:
+    successors: %bb.46(0x80000000)
+
+    ADJCALLSTACKDOWN16 0, 0, 0, implicit-def $sps, implicit $sps
+    CALL16 @external, CustomRegMask($b,$d,$iy), implicit $sps
+    ADJCALLSTACKUP16 0, 0, implicit-def $sps, implicit $sps
+    JQ %bb.46
+
+  bb.46:
+    successors: %bb.50(0x55555555), %bb.49(0x2aaaaaab)
+
+    BIT8gb %7, 0, implicit-def $f
+    JQCC %bb.50, 0, implicit killed undef $f
+    JQ %bb.49
+
+  bb.49:
+    successors: %bb.50(0x80000000)
+
+    %6:g8 = LD8gp %0 :: (load (s8))
+
+  bb.50:
+    successors: %bb.52
+
+    BIT8gb %7, 0, implicit-def $f
+    JQCC %bb.52, 0, implicit killed undef $f
+    JQ %bb.52
+
+  bb.52:
+    successors: %bb.54
+
+    $a = COPY %5
+    %8:g8 = COPY %6
+    JQCC %bb.54, 1, implicit killed undef $f
+    JQ %bb.54
+
+  bb.54:
+    successors: %bb.56
+
+    $a = COPY %5
+    JQCC %bb.56, 0, implicit killed undef $f
+    JQ %bb.56
+
+  bb.56:
+    successors: %bb.38(0x80000000)
+
+    %7:g8 = IMPLICIT_DEF
+    JQ %bb.38
+
+  bb.58:
+    successors: %bb.62
+
+    $a = COPY undef %9
+    JQCC %bb.62, 1, implicit killed undef $f
+    JQ %bb.62
+
+  bb.62:
+    successors: %bb.65(0x30000000), %bb.68(0x50000000)
+
+    %2:a16 = COPY %0
+    JQCC %bb.65, 1, implicit killed undef $f
+    JQ %bb.68
+
+  bb.65:
+    successors: %bb.68(0x80000000)
+
+    ADJCALLSTACKDOWN16 0, 0, 0, implicit-def $sps, implicit $sps
+    ADJCALLSTACKUP16 0, 0, implicit-def $sps, implicit $sps
+    %4:a16 = ADD16rr undef %4, %10, implicit-def dead $f
+    %3:b16 = COPY %0
+    LD8pa %2, killed undef $a :: (volatile store (s8), align 4)
+    %0:a16 = ADD16rr %0, undef %10, implicit-def dead $f
+    JQ %bb.68
+
+  bb.68:
+    successors: %bb.9(0x80000000)
+
+    JQ %bb.9
+
+  bb.76:
+    RET16 implicit-def $sps, implicit $sps
+...

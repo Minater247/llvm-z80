@@ -20,6 +20,7 @@ body: |
     liveins: $hl, $hl_alt, $de_alt, $bc_alt
     KILL killed $hl_alt, killed $de_alt, killed $bc_alt
     LD88or %stack.0, 0, $hl
+    $hl = LD16ri 0
     $de = LD88ro %stack.0, 0
     RET16 implicit-def $sps, implicit $sps, implicit $de
 ...
@@ -36,6 +37,7 @@ body: |
   bb.0:
     liveins: $hl
     LD88or %stack.0, 0, $hl
+    $hl = LD16ri 0
     $de = LD88ro %stack.0, 0
     $hl_alt = BANK_LD16ri 123
     $de_alt = BANK_LD16ri 456
@@ -59,6 +61,7 @@ body: |
     $de_alt = BANK_LD16ri 456
     $bc_alt = BANK_LD16ri 789
     LD88or %stack.0, 0, $hl
+    $hl = LD16ri 0
     $de = LD88ro %stack.0, 0
     JP16 %bb.1
   bb.1:
@@ -79,6 +82,7 @@ body: |
   bb.0:
     liveins: $hl
     LD88or %stack.0, 0, $hl
+    $hl = LD16ri 0
     dead $hl_alt = BANK_LD16ri 123
     dead $de_alt = BANK_LD16ri 456
     dead $bc_alt = BANK_LD16ri 789

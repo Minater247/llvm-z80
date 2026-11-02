@@ -1,0 +1,80 @@
+# RUN: llc -mattr=+alternate-regs -run-pass=z80-alternate-regalloc -verify-machineinstrs %s -o - | FileCheck %s
+#
+# Bank allocation prices the remaining memory traffic after forwarding values
+# that are still in primary registers. Eliminated reloads also make their
+# otherwise unobserved private stores unnecessary.
+--- |
+  target triple = "z80"
+  define void @retained_pair() { ret void }
+  define void @repeated_byte() { ret void }
+  define void @ordered_byte() { ret void }
+  define void @address_taken() { ret void }
+...
+---
+name: retained_pair
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 2, alignment: 1 }
+# CHECK-LABEL: name: retained_pair
+# CHECK: bb.0:
+# CHECK-NOT: ALT_
+# CHECK-NOT: LD88
+# CHECK: $de = COPY $hl
+# CHECK-NEXT: RET16
+body: |
+  bb.0:
+    liveins: $hl
+    LD88or %stack.0, 0, $hl
+    $de = LD88ro %stack.0, 0
+    RET16 implicit-def $sps, implicit $sps, implicit $de
+...
+---
+name: repeated_byte
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 1, alignment: 1 }
+# CHECK-LABEL: name: repeated_byte
+# CHECK: $a_alt = ALT_SAVE8 $b
+# CHECK: $c = ALT_LOAD8 $a_alt
+# CHECK-NEXT: $d = COPY $c
+body: |
+  bb.0:
+    liveins: $b
+    LD8or %stack.0, 0, $b
+    $b = LD8ri 0
+    $c = LD8ro %stack.0, 0
+    $d = LD8ro %stack.0, 0
+    RET16 implicit-def $sps, implicit $sps, implicit $c, implicit $d
+...
+---
+name: ordered_byte
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 1, alignment: 1 }
+# CHECK-LABEL: name: ordered_byte
+# CHECK: LD8or %stack.0
+# CHECK-NEXT: $c = LD8ro %stack.0
+# CHECK-NEXT: RET16
+body: |
+  bb.0:
+    liveins: $b
+    LD8or %stack.0, 0, $b :: (store (s8) into %stack.0)
+    $c = LD8ro %stack.0, 0 :: (volatile load (s8) from %stack.0)
+    RET16 implicit-def $sps, implicit $sps, implicit $c
+...
+---
+name: address_taken
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 2, alignment: 1 }
+# CHECK-LABEL: name: address_taken
+# CHECK: LD88or %stack.0
+# CHECK-NEXT: $de = LEA16ro %stack.0
+# CHECK-NEXT: RET16
+body: |
+  bb.0:
+    liveins: $hl
+    LD88or %stack.0, 0, $hl
+    $de = LEA16ro %stack.0, 0
+    RET16 implicit-def $sps, implicit $sps, implicit $de
+...

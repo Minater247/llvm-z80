@@ -2,11 +2,13 @@
 #include "MCTargetDesc/Z80MCTargetDesc.h"
 #include "Z80.h"
 #include "Z80InstrInfo.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/CodeGen/LiveRegUnits.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
+#include "llvm/CodeGen/SlotIndexes.h"
 
 #define DEBUG_TYPE "z80-post-rewrite"
 
@@ -106,20 +108,11 @@ bool Z80PostRewritePass::matchOptimizeLoadAddCopy(MachineBasicBlock &MBB,
   return true;
 }
 
-Z80PostRewritePass::Z80PostRewritePass() : MachineFunctionPass(ID) {}
-
-bool Z80PostRewritePass::runOnMachineFunction(MachineFunction &MF) {
+bool llvm::reuseZ80SpillLoads(MachineFunction &MF, SlotIndexes *Indexes) {
   bool changed = false;
-
   const auto &TII = *MF.getSubtarget().getInstrInfo();
   const auto &TRI = *MF.getSubtarget().getRegisterInfo();
   const auto &MFI = MF.getFrameInfo();
-  for (auto &MBB : MF)
-    for (auto &MI : llvm::make_early_inc_range(MBB))
-      if (MI.getOpcode() == Z80::ADD16rr || MI.getOpcode() == Z80::BANK_ADD16 ||
-          MI.getOpcode() == Z80::BANK_LD16ro ||
-          MI.getOpcode() == Z80::BANK_LD16or)
-        changed |= TII.expandPostRAPseudo(MI);
   // Splitting may reload a private spill while the value remains in a
   // register after an earlier load or store. Reuse it over a bounded local
   // window, copying it if necessary. This also avoids the scratch saves
@@ -164,10 +157,16 @@ bool Z80PostRewritePass::runOnMachineFunction(MachineFunction &MF) {
             Prev.getOperand(0).setIsDead(false);
           for (auto J = Scan; J != MI.getIterator(); ++J)
             J->clearRegisterKills(Source, &TRI);
-          if (Source != Dst)
-            BuildMI(MBB, MI, MI.getDebugLoc(), TII.get(TargetOpcode::COPY))
-                .add(MI.getOperand(0))
-                .addReg(Source);
+          if (Source != Dst) {
+            auto Copy =
+                BuildMI(MBB, MI, MI.getDebugLoc(), TII.get(TargetOpcode::COPY))
+                    .add(MI.getOperand(0))
+                    .addReg(Source);
+            if (Indexes)
+              Indexes->replaceMachineInstrInMaps(MI, *Copy);
+          } else if (Indexes) {
+            Indexes->removeMachineInstrFromMaps(MI);
+          }
           MI.eraseFromParent();
           changed = true;
           break;
@@ -204,6 +203,8 @@ bool Z80PostRewritePass::runOnMachineFunction(MachineFunction &MF) {
         int PrevFI;
         if (spillAccessWidth(Prev.getOpcode()) == Width &&
             TII.isStoreToStackSlot(Prev, PrevFI) && PrevFI == FI) {
+          if (Indexes)
+            Indexes->removeMachineInstrFromMaps(Prev);
           Prev.eraseFromParent();
           changed = true;
           break;
@@ -217,6 +218,55 @@ bool Z80PostRewritePass::runOnMachineFunction(MachineFunction &MF) {
       }
     }
   }
+  // A private spill with only stores has no remaining consumers. Include all
+  // other frame operands in the read set, so address-taking and partial or
+  // unrecognized accesses keep the object alive.
+  SmallDenseSet<int, 16> ReadSlots;
+  SmallVector<MachineInstr *, 16> Stores;
+  for (auto &MBB : MF)
+    for (auto &MI : MBB) {
+      if (MI.isDebugInstr())
+        continue;
+      int FI;
+      Register Stored = TII.isStoreToStackSlot(MI, FI);
+      if (Stored && FI >= 0 && MFI.isSpillSlotObjectIndex(FI) &&
+          !MI.isBundled() && !MI.hasUnmodeledSideEffects() &&
+          (MI.memoperands_empty() || !MI.hasOrderedMemoryRef())) {
+        Stores.push_back(&MI);
+        continue;
+      }
+      for (const auto &MO : MI.operands())
+        if (MO.isFI())
+          ReadSlots.insert(MO.getIndex());
+    }
+  for (auto *MI : Stores) {
+    int FI;
+    TII.isStoreToStackSlot(*MI, FI);
+    if (ReadSlots.contains(FI))
+      continue;
+    if (Indexes)
+      Indexes->removeMachineInstrFromMaps(*MI);
+    MI->eraseFromParent();
+    changed = true;
+  }
+  return changed;
+}
+
+Z80PostRewritePass::Z80PostRewritePass() : MachineFunctionPass(ID) {}
+
+bool Z80PostRewritePass::runOnMachineFunction(MachineFunction &MF) {
+  bool changed = false;
+
+  const auto &TII = *MF.getSubtarget().getInstrInfo();
+  const auto &TRI = *MF.getSubtarget().getRegisterInfo();
+  const auto &MFI = MF.getFrameInfo();
+  for (auto &MBB : MF)
+    for (auto &MI : llvm::make_early_inc_range(MBB))
+      if (MI.getOpcode() == Z80::ADD16rr || MI.getOpcode() == Z80::BANK_ADD16 ||
+          MI.getOpcode() == Z80::BANK_LD16ro ||
+          MI.getOpcode() == Z80::BANK_LD16or)
+        changed |= TII.expandPostRAPseudo(MI);
+  changed |= reuseZ80SpillLoads(MF);
   // Splitting can also reload a private byte spill into two registers at a
   // loop edge. A byte copy is cheaper than the second stack load.
   for (auto &MBB : MF) {

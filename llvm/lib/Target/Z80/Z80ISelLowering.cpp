@@ -160,6 +160,10 @@ Z80TargetLowering::EmitInstrWithCustomInserter(MachineInstr &MI,
                                                MachineBasicBlock *BB) const {
   switch (MI.getOpcode()) {
   default: llvm_unreachable("Unexpected instr type to insert");
+  case Z80::SHL8v:
+  case Z80::LSHR8v:
+  case Z80::ASHR8v:
+    return EmitLoweredVariableShift(MI, BB);
   case Z80::SetCC:
   case Z80::Select8:
   case Z80::Select16:
@@ -199,6 +203,53 @@ void Z80TargetLowering::AdjustAdjCallStack(MachineInstr &MI) const {
   MachineInstrBuilder(*MI.getMF(), MI)
       .addReg(Reg, RegState::ImplicitDefine | RegState::Dead);
   LLVM_DEBUG(MI.dump());
+}
+
+// Shift a byte by a runtime count, preserving the input for a zero count.
+// Counts from zero through seven have the corresponding LLVM shift semantics.
+MachineBasicBlock *Z80TargetLowering::EmitLoweredVariableShift(
+    MachineInstr &MI, MachineBasicBlock *BB) const {
+  MachineFunction &MF = *BB->getParent();
+  MachineRegisterInfo &MRI = MF.getRegInfo();
+  const auto &TII = *Subtarget.getInstrInfo();
+  DebugLoc DL = MI.getDebugLoc();
+  unsigned Opc = MI.getOpcode() == Z80::SHL8v    ? Z80::SLA8g
+                 : MI.getOpcode() == Z80::LSHR8v ? Z80::SRL8g
+                                                : Z80::SRA8g;
+  auto Reg = [&]() { return MRI.createVirtualRegister(&Z80::G8RegClass); };
+  Register InitialCount = Reg(), Count = Reg(), NextCount = Reg();
+  Register Value = Reg(), NextValue = Reg();
+  auto *Step = MF.CreateMachineBasicBlock(BB->getBasicBlock());
+  auto *Check = MF.CreateMachineBasicBlock(BB->getBasicBlock());
+  auto *Done = MF.CreateMachineBasicBlock(BB->getBasicBlock());
+  auto Insert = std::next(BB->getIterator());
+  MF.insert(Insert, Step);
+  MF.insert(Insert, Check);
+  MF.insert(Insert, Done);
+  Done->splice(Done->begin(), BB, std::next(MI.getIterator()), BB->end());
+  Done->transferSuccessorsAndUpdatePHIs(BB);
+  BB->addSuccessor(Check);
+  Step->addSuccessor(Check);
+  Check->addSuccessor(Step);
+  Check->addSuccessor(Done);
+
+  /* Bias the count by one so the shared decrement tests the initial zero
+   * case and each subsequent iteration without an accumulator comparison. */
+  BuildMI(BB, DL, TII.get(Z80::INC8r), InitialCount)
+      .addReg(MI.getOperand(2).getReg());
+  BuildMI(BB, DL, TII.get(Z80::JQ)).addMBB(Check);
+  BuildMI(Step, DL, TII.get(Opc), NextValue).addReg(Value);
+  BuildMI(Check, DL, TII.get(TargetOpcode::PHI), Value)
+      .addReg(MI.getOperand(1).getReg()).addMBB(BB)
+      .addReg(NextValue).addMBB(Step);
+  BuildMI(Check, DL, TII.get(TargetOpcode::PHI), Count)
+      .addReg(InitialCount).addMBB(BB).addReg(NextCount).addMBB(Step);
+  BuildMI(Check, DL, TII.get(Z80::DEC8r), NextCount).addReg(Count);
+  BuildMI(Check, DL, TII.get(Z80::JQCC)).addMBB(Step).addImm(Z80::COND_NZ);
+  BuildMI(*Done, Done->begin(), DL, TII.get(TargetOpcode::COPY),
+          MI.getOperand(0).getReg()).addReg(Value);
+  MI.eraseFromParent();
+  return Done;
 }
 
 MachineBasicBlock *

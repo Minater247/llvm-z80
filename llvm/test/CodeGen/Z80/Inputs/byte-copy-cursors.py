@@ -31,13 +31,16 @@ rng = random.Random(6208)
 checks = 0
 for name, step in [('forward', 1), ('backward', -1), ('ordered', 1),
                    ('integer_forward', 1), ('integer_backward', -1),
-                   ('integer_ordered', 1)]:
+                   ('integer_ordered', 1), ('large_forward', 1),
+                   ('large_backward', -1), ('large_ordered', 1),
+                   ('large_integer', 1)]:
     for source in [0, 1, 0x21fe, 0x21ff, 0x2200, 0xfffe, 0xffff]:
         for displacement in [-3, -1, 0, 1, 3, 0x4000]:
             destination = (source + displacement) & 65535
             cpu = TraceCPU(rng)
-            cpu.put('de', source)
-            cpu.put('bc', destination)
+            offset = 4096*step if name.startswith('large_') else 0
+            cpu.put('de', (source-offset)&65535)
+            cpu.put('bc', (destination-offset)&65535)
             expected = bytearray(cpu.mem)
             trace = []
             destinations = set()

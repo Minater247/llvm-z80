@@ -17,6 +17,7 @@
 #include "Z80Subtarget.h"
 #include "llvm/ADT/DenseSet.h"
 #include <optional>
+#include <tuple>
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallPtrSet.h"
@@ -549,10 +550,121 @@ bool Z80MachinePreRAOptimization::runOnMachineFunction(MachineFunction &MF) {
   MachineRegisterInfo &MRI = MF.getRegInfo();
   SmallSet<Register, 16> FoldAsLoadDefCandidates;
 
+  auto &LIS = getAnalysis<LiveIntervalsWrapperPass>().getLIS();
+  /* Delay a pair's initial byte construction until its first common use.
+   * Reaching-value checks preserve captures, including individual lanes of
+   * other pairs. Collect edits while live intervals still describe the input. */
+  SmallVector<std::tuple<MachineInstr *, MachineInstr *, MachineInstr *,
+                         MachineInstr *>, 8>
+      PairConstructions;
+  std::optional<MachineDominatorTree> Dominators;
+  for (unsigned N = 0, End = MRI.getNumVirtRegs(); N != End; ++N) {
+    Register R = Register::index2VirtReg(N);
+    if (!LIS.hasInterval(R) || MRI.reg_nodbg_empty(R) ||
+        !Z80::R16RegClass.hasSubClassEq(MRI.getRegClass(R)))
+      continue;
+    SmallVector<MachineInstr *, 2> Parts;
+    MachineInstr *FirstUpdate = nullptr;
+    bool Eligible = true;
+    for (auto &MO : MRI.def_operands(R)) {
+      if (!MO.getSubReg()) {
+        auto *MI = MO.getParent();
+        if (!FirstUpdate ||
+            LIS.getInstructionIndex(*MI) < LIS.getInstructionIndex(*FirstUpdate))
+          FirstUpdate = MI;
+        continue;
+      }
+      auto *MI = MO.getParent();
+      if (Parts.size() == 2 || MI->isBundled() ||
+          (MO.getSubReg() != Z80::sub_low &&
+           MO.getSubReg() != Z80::sub_high) ||
+          (!MI->isCopy() && MI->getOpcode() != Z80::LD8ri) ||
+          MI->getNumOperands() != 2) {
+        Eligible = false;
+        break;
+      }
+      Parts.push_back(MI);
+    }
+    if (!Eligible || Parts.size() != 2 ||
+        Parts[0]->getOperand(0).getSubReg() ==
+            Parts[1]->getOperand(0).getSubReg() ||
+        Parts[0]->getParent() != Parts[1]->getParent())
+      continue;
+    if (LIS.getInstructionIndex(*Parts[1]) < LIS.getInstructionIndex(*Parts[0]))
+      std::swap(Parts[0], Parts[1]);
+    if (!Parts[0]->getOperand(0).isUndef() ||
+        Parts[1]->getOperand(0).isUndef())
+      continue;
+    MachineInstr *First = nullptr;
+    for (auto &MI : MRI.use_nodbg_instructions(R))
+      if (!First || LIS.getInstructionIndex(MI) < LIS.getInstructionIndex(*First))
+        First = &MI;
+    if (!First || First->isBundled() ||
+        First->getParent() == Parts[0]->getParent())
+      continue;
+    if (!Dominators)
+      Dominators.emplace(MF);
+    if (!Dominators->dominates(Parts[1], First) ||
+        llvm::any_of(MRI.use_nodbg_instructions(R), [&](MachineInstr &MI) {
+          return !Dominators->dominates(First, &MI);
+        }))
+      continue;
+    auto AtUse = LIS.getInstructionIndex(*First).getBaseIndex();
+    auto AtDef = LIS.getInstructionIndex(*Parts[1]).getRegSlot();
+    const auto &LI = LIS.getInterval(R);
+    if (!LI.getVNInfoAt(AtUse) || LI.getVNInfoAt(AtUse) != LI.getVNInfoAt(AtDef))
+      continue;
+    /* Rebuild the pair where it is first consumed when every source byte
+     * already remains live there. Comparing reaching values also excludes
+     * loop paths that would execute the moved construction after an update. */
+    for (auto *MI : Parts) {
+      if (!MI->isCopy())
+        continue;
+      const auto &Src = MI->getOperand(1);
+      Register S = Src.getReg();
+      if (!S.isVirtual() || S == R || Src.isUndef() ||
+          !LIS.hasInterval(S)) {
+        Eligible = false;
+        break;
+      }
+      const auto &Source = LIS.getInterval(S);
+      auto SameValue = [&](const LiveRange &Range) {
+        return Range.getVNInfoAt(AtUse) &&
+               Range.getVNInfoAt(AtUse) ==
+                   Range.getVNInfoAt(LIS.getInstructionIndex(*MI).getBaseIndex());
+      };
+      bool Available = SameValue(Source);
+      if (Src.getSubReg() && Source.hasSubRanges()) {
+        auto Needed = TRI.getSubRegIndexLaneMask(Src.getSubReg());
+        Available = true;
+        for (const auto &SR : Source.subranges())
+          if ((SR.LaneMask & Needed).any()) {
+            Available &= SameValue(SR);
+            Needed &= ~SR.LaneMask;
+          }
+        Available &= Needed.none();
+      }
+      if (!Available) {
+        Eligible = false;
+        break;
+      }
+    }
+    if (FirstUpdate) {
+      auto BeforeUpdate = LIS.getInstructionIndex(*FirstUpdate).getBaseIndex();
+      if (FirstUpdate->isBundled() || !FirstUpdate->readsVirtualRegister(R) ||
+          LI.getVNInfoAt(BeforeUpdate) != LI.getVNInfoAt(AtDef) ||
+          llvm::any_of(MRI.def_operands(R), [&](const MachineOperand &MO) {
+            return !MO.getSubReg() &&
+                   !Dominators->dominates(FirstUpdate, MO.getParent());
+          }))
+        FirstUpdate = nullptr;
+    }
+    if (Eligible)
+      PairConstructions.emplace_back(Parts[0], Parts[1], First, FirstUpdate);
+  }
   // Whole-pair updates in a terminating part of a live range need not tie
   // together byte lanes that vary independently in the preceding loop.
   // Give each such block its own pair; the incoming copy preserves its value.
-  auto &LIS = getAnalysis<LiveIntervalsWrapperPass>().getLIS();
   SmallVector<std::pair<Register, MachineBasicBlock *>, 8> LocalPairs;
   if (MF.getSubtarget<Z80Subtarget>().is16Bit())
     for (unsigned N = 0; N != MRI.getNumVirtRegs(); ++N) {
@@ -600,6 +712,29 @@ bool Z80MachinePreRAOptimization::runOnMachineFunction(MachineFunction &MF) {
     if (LiveIn)
       BuildMI(*MBB, MBB->begin(), DebugLoc(), TII.get(TargetOpcode::COPY), Local)
           .addReg(R);
+    MRI.markUsesInDebugValueAsUndef(R);
+    Changed = true;
+  }
+  for (auto [FirstPart, SecondPart, Use, Update] : PairConstructions) {
+    for (auto *MI : {FirstPart, SecondPart})
+      Use->getParent()->splice(Use->getIterator(), MI->getParent(),
+                               MI->getIterator());
+    Register R = FirstPart->getOperand(0).getReg();
+    if (Update) {
+      /* Coalescing can join the byte construction with later whole-pair
+       * arithmetic. Separate that suffix so constant lanes of the initial
+       * value can be reconstructed across calls without constraining the
+       * updated word's carries or subsequent uses. */
+      Register Updated = MRI.createVirtualRegister(MRI.getRegClass(R));
+      SmallVector<MachineOperand *, 16> Suffix;
+      for (auto &MO : MRI.reg_nodbg_operands(R))
+        if (Dominators->dominates(Update, MO.getParent()))
+          Suffix.push_back(&MO);
+      for (auto *MO : Suffix)
+        MO->setReg(Updated);
+      BuildMI(*Update->getParent(), Update, Update->getDebugLoc(),
+              TII.get(TargetOpcode::COPY), Updated).addReg(R);
+    }
     MRI.markUsesInDebugValueAsUndef(R);
     Changed = true;
   }

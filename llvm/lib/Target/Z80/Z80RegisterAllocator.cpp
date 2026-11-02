@@ -35,6 +35,7 @@
 #include "llvm/CodeGen/LiveStacks.h"
 #include "llvm/CodeGen/MachineBlockFrequencyInfo.h"
 #include "llvm/CodeGen/MachineDominators.h"
+#include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineLoopInfo.h"
@@ -150,8 +151,10 @@ unsigned extraAccessCost(const MachineInstr &MI, unsigned Operand, MCRegister P,
     if (P == Z80::BC)
       return Bytes ? 6 : 37;
   }
-  bool LoadPair = Opc == Z80::LD88ro || Opc == Z80::LD88rp;
-  bool StorePair = Opc == Z80::LD88or || Opc == Z80::LD88pr;
+  bool LoadPair = Opc == Z80::LD88ro || Opc == Z80::LD88rp ||
+                  Opc == Z80::BANK_LD16ro;
+  bool StorePair = Opc == Z80::LD88or || Opc == Z80::LD88pr ||
+                   Opc == Z80::BANK_LD16or;
   unsigned Last = MI.getNumExplicitOperands() - 1;
   if ((LoadPair && Operand == 0) || (StorePair && Operand == Last)) {
     if (Z80::I16RegClass.contains(P))
@@ -216,7 +219,7 @@ class Z80RegisterAllocator final : public MachineFunctionPass,
   std::unique_ptr<SplitEditor> SE;
   // A range can be split by block, then by instruction, then must spill.
   DenseMap<Register, unsigned> Stage;
-  // Each blocked single-choice range gets one deferred allocation attempt.
+  // Each blocked range with a legal placement gets one deferred attempt.
   DenseSet<Register> Deferred;
   // Retain equally cheap placements when spilling shortens an assigned range.
   DenseMap<Register, MCRegister> PreviousAssignments;
@@ -305,6 +308,8 @@ class Z80RegisterAllocator final : public MachineFunctionPass,
   bool split(const LiveInterval &LI, SmallVectorImpl<Register> &NewRegs,
              bool MainBank = false);
   void refine();
+  void refineSpillAccesses();
+  void refineSpillTransfers();
   void coalesceSplits();
   MCRegister selectOrSplit(const LiveInterval &LI,
                            SmallVectorImpl<Register> &NewRegs) override;
@@ -1050,13 +1055,12 @@ Z80RegisterAllocator::selectOrSplit(const LiveInterval &LI,
     return MCRegister();
   if (Free)
     return Free;
-  /* With only one legal placement, splitting competes with the range already
-     occupying that register. Its tiny, often unspillable fragments can force
-     both values into primary pairs before other ranges have been considered,
-     leaving one complement on the stack. Give those ranges their allocation
-     attempt first. The deferred range still tries placement and repair again,
-     and the set bounds deferral to once per original range. */
-  if (Candidates.size() == 1 && LI.isSpillable() && Stage.lookup(LI.reg()) == 0 &&
+  /* Let the remaining original ranges expose their constraints before
+     splitting or spilling an occupied range. A blocker may itself need to
+     split, freeing a placement that would otherwise be lost to an early spill.
+     Ranges with no legal whole-interval placement need splitting immediately;
+     waiting cannot remove their fixed-register or call-mask conflicts. */
+  if (!Candidates.empty() && LI.isSpillable() && Stage.lookup(LI.reg()) == 0 &&
       Deferred.insert(LI.reg()).second) {
     NewRegs.push_back(LI.reg());
     return MCRegister();
@@ -1311,6 +1315,142 @@ void Z80RegisterAllocator::refine() {
       search(std::move(Region), 16384);
 }
 
+// Reconsider index placements using the spill accesses left by allocation.
+// Retain all other assignments and move each affected range at most once.
+void Z80RegisterAllocator::refineSpillAccesses() {
+  if (!ST->is16Bit() || ST->hasEZ80Ops())
+    return;
+  const auto &TII = *ST->getInstrInfo();
+  SmallDenseSet<Register, 16> Seen;
+  for (auto &MBB : *MF)
+    for (auto &MI : MBB) {
+      int FI;
+      Register R = TII.isLoadFromStackSlot(MI, FI);
+      if (!R)
+        R = TII.isStoreToStackSlot(MI, FI);
+      if (!R.isVirtual() || !VRM->hasPhys(R) ||
+          !Z80::I16RegClass.contains(VRM->getPhys(R)) || !Seen.insert(R).second)
+        continue;
+      MCRegister Old = VRM->getPhys(R);
+      SmallVector<std::pair<double, MCRegister>, 12> Costs = {{0.0, Old}};
+      for (MCRegister P : domain(R))
+        if (!isIndex(P) && !Z80::ALT16RegClass.contains(P))
+          Costs.emplace_back(0.0, P);
+      if (Costs.size() == 1)
+        continue;
+      /* Spilling another range can replace this range's defining copy with
+       * a stack reload. Its old index affinity then understates the scratch
+       * saves needed by the new instruction, even though liveness is valid. */
+      accessCosts(R, Costs);
+      double Best = Costs.front().first;
+      MCRegister Chosen = Old;
+      auto &LI = LIS->getInterval(R);
+      Matrix->unassign(LI);
+      for (auto [Cost, P] : drop_begin(Costs))
+        if (Cost < Best &&
+            Matrix->checkInterference(LI, P) == LiveRegMatrix::IK_Free) {
+          Best = Cost;
+          Chosen = P;
+        }
+      Matrix->assign(LI, Chosen);
+      NumReassigned += Chosen != Old;
+    }
+}
+
+// Choose spill-source placements that let a following reload reuse its value.
+// Preserve legal assignments and charge changes against their saved transfers.
+void Z80RegisterAllocator::refineSpillTransfers() {
+  if (!ST->is16Bit() || ST->hasEZ80Ops())
+    return;
+  const auto &TII = *ST->getInstrInfo();
+  const auto &MFI = MF->getFrameInfo();
+  DenseSet<Register> Changed;
+  auto Defines = [&](const MachineInstr &MI, MCRegister P) {
+    return llvm::any_of(MI.defs(), [&](const MachineOperand &MO) {
+      if (!MO.isReg())
+        return false;
+      Register R = MO.getReg();
+      if (R.isVirtual())
+        R = VRM->hasPhys(R) ? Register(VRM->getPhys(R)) : Register();
+      return R && TRI->regsOverlap(R, P);
+    });
+  };
+  for (auto &MBB : *MF)
+    for (auto &Load : MBB) {
+      bool Pair = Load.getOpcode() == Z80::LD88ro;
+      if (!Pair && Load.getOpcode() != Z80::LD8ro &&
+          Load.getOpcode() != Z80::LD8go)
+        continue;
+      int FI;
+      Register Dst = TII.isLoadFromStackSlot(Load, FI);
+      if (!Dst.isVirtual() || !VRM->hasPhys(Dst) || FI < 0 ||
+          !MFI.isSpillSlotObjectIndex(FI) || Load.isBundled() ||
+          (!Load.memoperands_empty() && Load.hasOrderedMemoryRef()))
+        continue;
+      MCRegister P = VRM->getPhys(Dst);
+      auto Scan = Load.getIterator();
+      for (unsigned N = 0; Scan != MBB.begin() && N != 16; ++N) {
+        auto &MI = *--Scan;
+        if (MI.isCall() || MI.isInlineAsm() || MI.isTerminator() ||
+            MI.isBundled() || MI.hasUnmodeledSideEffects() ||
+            (!MI.memoperands_empty() && MI.hasOrderedMemoryRef()))
+          break;
+        int OtherFI;
+        Register Src = TII.isStoreToStackSlot(MI, OtherFI);
+        if (Src && OtherFI == FI) {
+          if (!Src.isVirtual() || !VRM->hasPhys(Src) ||
+              Changed.contains(Src) || MI.getOperand(2).isUndef() ||
+              (Pair ? MI.getOpcode() != Z80::LD88or
+                    : MI.getOpcode() != Z80::LD8or &&
+                          MI.getOpcode() != Z80::LD8og) ||
+              !MRI->getRegClass(Src)->contains(P))
+            break;
+          MCRegister Old = VRM->getPhys(Src);
+          if (Old == P ||
+              llvm::any_of(make_range(std::next(Scan), Load.getIterator()),
+                           [&](const MachineInstr &Between) {
+                             return llvm::any_of(Between.defs(),
+                                 [&](const MachineOperand &MO) {
+                                   return MO.isReg() && MO.getReg() == Src;
+                                 });
+                           }))
+            break;
+          SmallVector<std::pair<double, MCRegister>, 12> Costs =
+              {{0.0, Old}, {0.0, P}};
+          accessCosts(Src, Costs);
+          unsigned Reload = OptSize ? (Pair ? 6 : 3) : (Pair ? 38 : 19);
+          Reload += extraAccessCost(Load, 0, P, OptSize);
+          if (isIndex(P))
+            Reload += OptSize ? 1 : 4;
+          /* A surviving old placement already forwards through a copy. Only
+           * charge the stack reload when an intervening definition destroys
+           * that value. */
+          if (llvm::none_of(make_range(std::next(Scan), Load.getIterator()),
+                            [&](const MachineInstr &Between) {
+                              return Defines(Between, Old);
+                            }))
+            Reload = std::min(Reload, transferCost(P, Old, false));
+          if (Costs[1].first >= Costs[0].first + frequency(Load) * Reload)
+            break;
+          auto &LI = LIS->getInterval(Src);
+          Matrix->unassign(LI);
+          bool Free = Matrix->checkInterference(LI, P) == LiveRegMatrix::IK_Free;
+          Matrix->assign(LI, Free ? P : Old);
+          if (Free) {
+            Changed.insert(Src);
+            ++NumReassigned;
+          }
+          break;
+        }
+        if (MI.mayStore() &&
+            (!Src || OtherFI < 0 || !MFI.isSpillSlotObjectIndex(OtherFI)))
+          break;
+        if (Defines(MI, P))
+          break;
+      }
+    }
+}
+
 void Z80RegisterAllocator::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.setPreservesCFG();
   AU.addRequired<AAResultsWrapperPass>();
@@ -1371,6 +1511,8 @@ bool Z80RegisterAllocator::runOnMachineFunction(MachineFunction &Func) {
   coalesceSplits();
   if (RemainingStates)
     refine();
+  refineSpillAccesses();
+  refineSpillTransfers();
   releaseMemory();
   return true;
 }

@@ -9,7 +9,7 @@
 # CHECK: $de = ALT_LOAD16 $hl_alt
 # CHECK-LABEL: name: dead_store
 # CHECK: $hl_alt = ALT_SAVE16 $hl
-# CHECK: $de_alt = ALT_SAVE16 $bc
+# CHECK-NOT: ALT_SAVE16 $bc
 # CHECK: $de = ALT_LOAD16 $hl_alt
 # CHECK-LABEL: name: call_live
 # CHECK-NOT: ALT_
@@ -61,9 +61,11 @@ body: |
   bb.0:
     liveins: $hl, $bc
     LD88or %stack.0, 0, $hl :: (store (s16) into %stack.0)
+    $hl = LD16ri 0
     $de = LD88ro %stack.0, 0 :: (load (s16) from %stack.0)
     KILL $de
     LD88or %stack.1, 0, $bc :: (store (s16) into %stack.1)
+    $bc = LD16ri 0
     $de = LD88ro %stack.1, 0 :: (load (s16) from %stack.1)
     KILL $de
     RET16 implicit-def $sps, implicit $sps
@@ -78,7 +80,9 @@ body: |
   bb.0:
     liveins: $hl, $bc
     LD88or %stack.0, 0, $hl :: (store (s16) into %stack.0)
+    $hl = LD16ri 0
     LD88or %stack.1, 0, $bc :: (store (s16) into %stack.1)
+    $bc = LD16ri 0
     $de = LD88ro %stack.0, 0 :: (load (s16) from %stack.0)
     KILL $de
     RET16 implicit-def $sps, implicit $sps
@@ -92,6 +96,7 @@ body: |
   bb.0:
     liveins: $hl
     LD88or %stack.0, 0, $hl :: (store (s16) into %stack.0)
+    $hl = LD16ri 0
     CALL16 @callee, csr_z80_c, implicit-def $sps, implicit $sps
     $de = LD88ro %stack.0, 0 :: (load (s16) from %stack.0)
     KILL $de
@@ -106,6 +111,7 @@ body: |
   bb.0:
     CALL16 @callee, csr_z80_c, implicit-def $sps, implicit $sps, implicit-def $hl
     LD88or %stack.0, 0, $hl :: (store (s16) into %stack.0)
+    $hl = LD16ri 0
     $de = LD88ro %stack.0, 0 :: (load (s16) from %stack.0)
     KILL $de
     RET16 implicit-def $sps, implicit $sps
@@ -119,6 +125,7 @@ body: |
   bb.0:
     liveins: $hl
     LD88or %stack.0, 0, $hl :: (store (s16) into %stack.0)
+    $hl = LD16ri 0
     JP16 %bb.1
   bb.1:
     $de = LD88ro %stack.0, 0 :: (load (s16) from %stack.0)
@@ -135,6 +142,7 @@ body: |
   bb.0:
     liveins: $b
     LD8or %stack.0, 0, $b :: (store (s8) into %stack.0)
+    $b = LD8ri 0
     $c = LD8ro %stack.0, 0 :: (load (s8) from %stack.0)
     KILL $c
     RET16 implicit-def $sps, implicit $sps
@@ -148,6 +156,7 @@ body: |
   bb.0:
     liveins: $hl
     LD88or %stack.0, 0, $hl :: (store (s16) into %stack.0)
+    $hl = LD16ri 0
     JP16 %bb.1
   bb.1:
     $de = LD88ro %stack.0, 0 :: (load (s16) from %stack.0)
@@ -166,9 +175,13 @@ body: |
   bb.0:
     liveins: $hl
     LD88or %stack.0, 0, $hl :: (store (s16) into %stack.0)
+    $hl = LD16ri 0
     LD88or %stack.1, 0, $hl :: (store (s16) into %stack.1)
+    $hl = LD16ri 0
     LD88or %stack.2, 0, $hl :: (store (s16) into %stack.2)
+    $hl = LD16ri 0
     LD88or %stack.3, 0, $hl :: (store (s16) into %stack.3)
+    $hl = LD16ri 0
     $de = LD88ro %stack.0, 0 :: (load (s16) from %stack.0)
     KILL $de
     $de = LD88ro %stack.1, 0 :: (load (s16) from %stack.1)

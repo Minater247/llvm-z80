@@ -847,6 +847,8 @@ Z80LegalizerInfo::legalizeShift(LegalizerHelper &Helper, MachineInstr &MI,
   // valid refinement. This also handles masks such as 1u << channel.
   if (Ty == LLT::scalar(8) &&
       !getIConstantVRegValWithLookThrough(MI.getOperand(2).getReg(), MRI)) {
+    if (MI.getMF()->getFunction().hasMinSize())
+      return LegalizerHelper::AlreadyLegal;
     Register Value = MI.getOperand(1).getReg();
     Register Amount = MI.getOperand(2).getReg();
     LLT AmtTy = MRI.getType(Amount);

@@ -20,6 +20,8 @@ namespace llvm {
 class FunctionPass;
 class InstructionSelector;
 class PassRegistry;
+class MachineFunction;
+class SlotIndexes;
 class Z80RegisterBankInfo;
 class Z80Subtarget;
 class Z80TargetMachine;
@@ -38,6 +40,11 @@ FunctionPass *createZ80PrepareLiveRangesPass();
 FunctionPass *createZ80MachineLateOptimizationPass();
 FunctionPass *createZ80BranchSelectorPass();
 FunctionPass *createZ80PostRewritePass();
+/// Reuse register values for local private-spill reloads and remove overwritten
+/// stores after physical register assignment. Preserve instruction indexes
+/// when supplied; surviving stack live
+/// intervals remain conservative after their accesses are removed.
+bool reuseZ80SpillLoads(MachineFunction &MF, SlotIndexes *Indexes = nullptr);
 FunctionPass *createZ80DanglingRegPass();
 FunctionPass *createZ80IncrementalLoadingPass();
 FunctionPass *createZ80EarlyIncrementalLoadingPass();

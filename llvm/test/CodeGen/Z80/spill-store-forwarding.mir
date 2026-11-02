@@ -21,10 +21,9 @@ stack:
   - { id: 0, type: spill-slot, size: 2, alignment: 1 }
   - { id: 1, type: spill-slot, size: 2, alignment: 1 }
 # CHECK-LABEL: name: distinct_spills
-# CHECK: LD88or %stack.1, 0, $de
-# CHECK-NEXT: $bc = COPY $hl
+# CHECK-NOT: LD88or
+# CHECK: $bc = COPY $hl
 # CHECK-NEXT: $h = LD8ri 7
-# CHECK-NEXT: LD88or %stack.0, 0, $hl
 # CHECK-NEXT: RET16
 body: |
   bb.0:
@@ -42,8 +41,8 @@ tracksRegLiveness: true
 stack:
   - { id: 0, type: spill-slot, size: 2, alignment: 1 }
 # CHECK-LABEL: name: forward_pair_copy
-# CHECK: LD88or %stack.0, 0, $hl
-# CHECK-NEXT: $a = COPY $b
+# CHECK-NOT: LD88or
+# CHECK: $a = COPY $b
 # CHECK-NEXT: $de = COPY $hl
 # CHECK-NEXT: RET16
 body: |
@@ -80,8 +79,8 @@ stack:
 # CHECK-LABEL: name: forward_word
 # CHECK: bb.0:
 # CHECK: liveins:
-# CHECK: LD88or %stack.0, 0, $hl
-# CHECK-NEXT: $a = COPY $b
+# CHECK-NOT: LD88or
+# CHECK: $a = COPY $b
 # CHECK-NEXT: RET16
 body: |
   bb.0:
@@ -100,7 +99,6 @@ stack:
 # CHECK: bb.0:
 # CHECK: liveins:
 # CHECK: $h = COPY $b
-# CHECK-NEXT: LD88or %stack.0, 0, $hl
 # CHECK-NEXT: RET16
 body: |
   bb.0:
@@ -159,9 +157,8 @@ stack:
 # CHECK-LABEL: name: observed_store
 # CHECK: bb.0:
 # CHECK: liveins:
-# CHECK: LD88or %stack.0, 0, $hl
-# CHECK-NEXT: $a = LD8ap $de
-# CHECK-NEXT: LD88or %stack.0, 0, $hl
+# CHECK-NOT: LD88or
+# CHECK: $a = LD8ap $de
 # CHECK-NEXT: RET16
 body: |
   bb.0:

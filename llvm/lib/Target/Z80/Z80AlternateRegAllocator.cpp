@@ -41,6 +41,7 @@ struct Access {
   unsigned Slot;
   MCRegister Reg;
   bool Load;
+  MachineInstr *CopiedStep = nullptr;
 };
 struct Slot {
   unsigned Width = 0;
@@ -145,11 +146,16 @@ bool Z80AlternateRegAllocator::runOnMachineFunction(MachineFunction &MF) {
   unsigned N = MFI.getObjectIndexEnd();
   if (!N || N > 256)
     return false;
+  auto *Indexes = getAnalysisIfAvailable<SlotIndexesWrapperPass>();
+  /* Choose bank storage from the accesses that survive register forwarding.
+     Promoting a redundant reload first would hide its private-slot identity. */
+  bool Reused = reuseZ80SpillLoads(MF, Indexes ? &Indexes->getSI() : nullptr);
   auto &MBFI = getAnalysis<MachineBlockFrequencyInfoWrapperPass>().getMBFI();
   const auto &TII = *ST.getInstrInfo();
   SmallVector<Slot, 16> Slots(N);
   SmallVector<Access, 32> Accesses;
   DenseMap<const MachineInstr *, unsigned> AccessIndex;
+  bool HasCopiedStep = false;
   bool Bytes = MF.getFunction().hasOptSize() || ST.hasEZ80Ops();
   for (unsigned I = 0; I != N; ++I) {
     Slots[I].Valid = MFI.isSpillSlotObjectIndex(I) &&
@@ -175,7 +181,7 @@ bool Z80AlternateRegAllocator::runOnMachineFunction(MachineFunction &MF) {
                        [](const MachineOperand &MO) { return MO.isMetadata(); });
       if ((MI.isInlineAsm() && !MemoryBarrier) || MI.getOpcode() == Z80::EXAF ||
           MI.getOpcode() == Z80::EXX16 || MI.getOpcode() == Z80::EXX24)
-        return false;
+        return Reused;
       int FI = -1;
       unsigned Count = 0;
       for (const auto &MO : MI.operands())
@@ -237,6 +243,26 @@ bool Z80AlternateRegAllocator::runOnMachineFunction(MachineFunction &MF) {
       }
       AccessIndex[&MI] = Accesses.size();
       Accesses.push_back({&MI, unsigned(FI), R, Load});
+      if (!Load && S.Width == 2 && MI.getIterator() != MBB.begin()) {
+        auto Step = std::prev(MI.getIterator());
+        if ((Step->getOpcode() == Z80::INC16r ||
+             Step->getOpcode() == Z80::DEC16r) &&
+            Step->getOperand(0).getReg() == R &&
+            Step->getOperand(1).getReg() == R && !Step->isBundled() &&
+            Step != MBB.begin()) {
+          auto Copy = std::prev(Step);
+          if (Copy->isCopy() && !Copy->isBundled() &&
+              Copy->getOperand(0).getReg() == R &&
+              !Copy->getOperand(0).getSubReg() &&
+              !Copy->getOperand(1).getSubReg() &&
+              !Copy->getOperand(1).isUndef() &&
+              Copy->getOperand(1).getReg() != R &&
+              Z80::R16RegClass.contains(Copy->getOperand(1).getReg())) {
+            Accesses.back().CopiedStep = &*Step;
+            HasCopiedStep = true;
+          }
+        }
+      }
       double Weight = MF.getFunction().hasOptSize()
                           ? 1.0
                           : MBFI.getBlockFreqRelativeToEntryBlock(&MBB);
@@ -323,7 +349,7 @@ bool Z80AlternateRegAllocator::runOnMachineFunction(MachineFunction &MF) {
     }
   }
   if (Changed)
-    return false;
+    return Reused;
 
   SmallVector<BitVector, 16> Conflicts(N, BitVector(N));
   const auto &TRI = *ST.getRegisterInfo();
@@ -343,7 +369,7 @@ bool Z80AlternateRegAllocator::runOnMachineFunction(MachineFunction &MF) {
        a dead bank write still destroys a spill stored there. Call masks enter
        the same conflict calculation; unknown calls clobber every bank. */
     LiveRegUnits FixedLive(TRI);
-    bool TrackRegisters = HasFixedBanks || !CursorRegions.empty();
+    bool TrackRegisters = HasFixedBanks || !CursorRegions.empty() || HasCopiedStep;
     if (TrackRegisters)
       FixedLive.addLiveOuts(MBB);
     for (const auto &MI : reverse(MBB)) {
@@ -379,14 +405,19 @@ bool Z80AlternateRegAllocator::runOnMachineFunction(MachineFunction &MF) {
         if (Cost < Transfers)
           Slots[R.Slot].Saving += R.Weight * (Transfers - Cost);
       }
+      auto AccessIt = AccessIndex.find(&MI);
+      if (AccessIt != AccessIndex.end()) {
+        auto &A = Accesses[AccessIt->second];
+        if (A.CopiedStep && !FixedLive.available(A.Reg))
+          A.CopiedStep = nullptr;
+      }
       if (TrackRegisters)
         FixedLive.stepBackward(MI);
       for (int I : Live.set_bits())
         Slots[I].UnavailableBanks |= FixedBanks;
-      auto It = AccessIndex.find(&MI);
-      if (It == AccessIndex.end())
+      if (AccessIt == AccessIndex.end())
         continue;
-      const auto &A = Accesses[It->second];
+      const auto &A = Accesses[AccessIt->second];
       Slots[A.Slot].UnavailableBanks |= FixedBanks;
       // Include dead definitions: a store still overwrites the physical bank.
       Conflicts[A.Slot] |= Live;
@@ -436,12 +467,37 @@ bool Z80AlternateRegAllocator::runOnMachineFunction(MachineFunction &MF) {
       }
     }
   }
-  bool Any = false;
-  auto *Indexes = getAnalysisIfAvailable<SlotIndexesWrapperPass>();
+  bool Any = Reused;
   for (const auto &A : Accesses) {
     auto &S = Slots[A.Slot];
     if (!S.Assigned)
       continue;
+    /* A copied cursor that dies at its spill can advance in its assigned
+       bank. Preserve the original primary cursor and avoid copying it through
+       a second primary pair solely to save the incremented value. */
+    if (A.CopiedStep) {
+      auto *Step = A.CopiedStep;
+      auto *Copy = &*std::prev(Step->getIterator());
+      auto Save = BuildMI(*Step->getParent(), *Step, Step->getDebugLoc(),
+                          TII.get(Z80::ALT_SAVE16), S.Assigned)
+                      .add(Copy->getOperand(1));
+      auto Advance =
+          BuildMI(*A.MI->getParent(), *A.MI, A.MI->getDebugLoc(),
+                  TII.get(Step->getOpcode() == Z80::INC16r ? Z80::BANK_INC16
+                                                         : Z80::BANK_DEC16),
+                  S.Assigned)
+              .addReg(S.Assigned);
+      if (Indexes) {
+        Indexes->getSI().replaceMachineInstrInMaps(*Step, *Save);
+        Indexes->getSI().replaceMachineInstrInMaps(*A.MI, *Advance);
+        Indexes->getSI().removeMachineInstrFromMaps(*Copy);
+      }
+      Copy->eraseFromParent();
+      Step->eraseFromParent();
+      A.MI->eraseFromParent();
+      Any = true;
+      continue;
+    }
     unsigned Opc = S.Width == 1 ? (A.Load ? Z80::ALT_LOAD8 : Z80::ALT_SAVE8)
                    : S.Width == 2
                        ? (A.Load ? Z80::ALT_LOAD16 : Z80::ALT_SAVE16)

@@ -109,6 +109,8 @@ private:
                                      SDNode *Node) const override;
 
   void AdjustAdjCallStack(MachineInstr &MI) const;
+  MachineBasicBlock *EmitLoweredVariableShift(MachineInstr &MI,
+                                             MachineBasicBlock *BB) const;
   MachineBasicBlock *EmitLoweredSelect(MachineInstr &MI,
                                        MachineBasicBlock *BB) const;
   MachineBasicBlock *EmitLoweredSExt(MachineInstr &MI,

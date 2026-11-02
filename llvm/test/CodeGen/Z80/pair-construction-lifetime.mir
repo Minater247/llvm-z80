@@ -1,0 +1,178 @@
+# RUN: llc -run-pass=z80-machine-prera-opt,z80-prepare-live-ranges -verify-machineinstrs %s -o - | FileCheck %s
+# RUN: %python %S/Inputs/pair-construction-lifetime.py --llc llc --mir %s --work %t
+#
+# Construct pairs near their first use when the source bytes already survive
+# there. Later word updates have an independent range, allowing constant lanes
+# of the initial value to be rebuilt across calls. A dead or replaced source,
+# and a value updated on a loop backedge, must preserve the original capture.
+--- |
+  target triple = "z80"
+  declare void @opaque()
+  define void @late_pair() { ret void }
+  define void @dead_source() { ret void }
+  define void @changed_source() { ret void }
+  define void @loop_value() { ret void }
+  define void @subregister_source() { ret void }
+...
+# CHECK-LABEL: name: late_pair
+# CHECK: bb.0:
+# CHECK-NOT: %1.sub_
+# CHECK: CALL16 @opaque
+# CHECK: bb.1:
+# CHECK: [[PAIR:%[0-9]+]].sub_low:r16 = COPY
+# CHECK-NEXT: [[PAIR]].sub_high:r16 = LD8ri 0
+# CHECK-NEXT: %{{[0-9]+}}:a16 = COPY [[PAIR]]
+# CHECK: CALL16 @opaque
+# CHECK: [[NEXT:%[0-9]+]].sub_low:r16 = COPY
+# CHECK-NEXT: [[NEXT]].sub_high:r16 = LD8ri 0
+# CHECK-NEXT: [[UPDATED:%[0-9]+]]:a16 = COPY [[NEXT]]
+# CHECK-NEXT: [[UPDATED]]:a16 = ADD16aa [[UPDATED]]
+---
+name: late_pair
+tracksRegLiveness: true
+body: |
+  bb.0:
+    successors: %bb.1(0x80000000)
+    liveins: $e
+    %0:r8 = COPY $e
+    undef %1.sub_high:a16 = LD8ri 0
+    %1.sub_low:a16 = COPY %0
+    CALL16 @opaque, csr_z80_c, implicit $sps
+    JQ %bb.1
+  bb.1:
+    %2:a16 = COPY %1
+    $a = LD8ap %2 :: (load (s8))
+    CALL16 @opaque, csr_z80_c, implicit $sps
+    %1:a16 = ADD16aa %1, implicit-def dead $f
+    $de = COPY %1
+    $a = COPY %0
+    RET16 implicit-def $sps, implicit $sps, implicit $de, implicit $a
+...
+# CHECK-LABEL: name: dead_source
+# CHECK: bb.0:
+# CHECK: [[CAPTURE:%[0-9]+]].sub_high:a16 = LD8ri 0
+# CHECK-NEXT: [[CAPTURE]].sub_low:a16 = COPY %{{[0-9]+}}
+# CHECK-NEXT: CALL16 @opaque
+# CHECK: bb.1:
+# CHECK: %{{[0-9]+}}:a16 = COPY [[CAPTURE]]
+---
+name: dead_source
+tracksRegLiveness: true
+body: |
+  bb.0:
+    successors: %bb.1(0x80000000)
+    liveins: $e
+    %0:r8 = COPY $e
+    undef %1.sub_high:a16 = LD8ri 0
+    %1.sub_low:a16 = COPY %0
+    CALL16 @opaque, csr_z80_c, implicit $sps
+    JQ %bb.1
+  bb.1:
+    %2:a16 = COPY %1
+    $a = LD8ap %2 :: (load (s8))
+    CALL16 @opaque, csr_z80_c, implicit $sps
+    %1:a16 = ADD16aa %1, implicit-def dead $f
+    $de = COPY %1
+    RET16 implicit-def $sps, implicit $sps, implicit $de
+...
+# CHECK-LABEL: name: changed_source
+# CHECK: bb.0:
+# CHECK: [[CAPTURE:%[0-9]+]].sub_high:a16 = LD8ri 0
+# CHECK-NEXT: [[CAPTURE]].sub_low:a16 = COPY %{{[0-9]+}}
+# CHECK-NEXT: CALL16 @opaque
+# CHECK: bb.1:
+# CHECK: %{{[0-9]+}}:a16 = COPY [[CAPTURE]]
+---
+name: changed_source
+tracksRegLiveness: true
+body: |
+  bb.0:
+    successors: %bb.1(0x80000000)
+    liveins: $e
+    %0:r8 = COPY $e
+    undef %1.sub_high:a16 = LD8ri 0
+    %1.sub_low:a16 = COPY %0
+    CALL16 @opaque, csr_z80_c, implicit $sps
+    JQ %bb.1
+  bb.1:
+    %0:r8 = LD8ri 7
+    %2:a16 = COPY %1
+    $a = LD8ap %2 :: (load (s8))
+    CALL16 @opaque, csr_z80_c, implicit $sps
+    %1:a16 = ADD16aa %1, implicit-def dead $f
+    $de = COPY %1
+    $a = COPY %0
+    RET16 implicit-def $sps, implicit $sps, implicit $de, implicit $a
+...
+# CHECK-LABEL: name: loop_value
+# CHECK: bb.0:
+# CHECK: [[CAPTURE:%[0-9]+]].sub_high:a16 = LD8ri 0
+# CHECK-NEXT: [[CAPTURE]].sub_low:a16 = COPY %{{[0-9]+}}
+# CHECK-NEXT: CALL16 @opaque
+# CHECK: bb.1:
+# CHECK: %{{[0-9]+}}:a16 = COPY [[CAPTURE]]
+---
+name: loop_value
+tracksRegLiveness: true
+body: |
+  bb.0:
+    successors: %bb.1(0x80000000)
+    liveins: $e
+    %0:r8 = COPY $e
+    %3:r8 = LD8ri 3
+    undef %1.sub_high:a16 = LD8ri 0
+    %1.sub_low:a16 = COPY %0
+    CALL16 @opaque, csr_z80_c, implicit $sps
+    JQ %bb.1
+  bb.1:
+    successors: %bb.1(0x70000000), %bb.2(0x10000000)
+    %2:a16 = COPY %1
+    $a = LD8ap %2 :: (load (s8))
+    CALL16 @opaque, csr_z80_c, implicit $sps
+    %1:a16 = ADD16aa %1, implicit-def dead $f
+    %3:r8 = DEC8r %3, implicit-def $f
+    JQCC %bb.1, 0, implicit $f
+    JQ %bb.2
+  bb.2:
+    $de = COPY %1
+    $a = COPY %0
+    RET16 implicit-def $sps, implicit $sps, implicit $de, implicit $a
+...
+# CHECK-LABEL: name: subregister_source
+# CHECK: bb.0:
+# CHECK-NOT: %1.sub_
+# CHECK: CALL16 @opaque
+# CHECK: bb.1:
+# CHECK: [[PAIR:%[0-9]+]].sub_low:r16 = COPY
+# CHECK-NEXT: [[PAIR]].sub_high:r16 = LD8ri 0
+# CHECK-NEXT: %{{[0-9]+}}:a16 = COPY [[PAIR]]
+# CHECK: CALL16 @opaque
+# CHECK: [[NEXT:%[0-9]+]].sub_low:r16 = COPY
+# CHECK-NEXT: [[NEXT]].sub_high:r16 = LD8ri 0
+# CHECK-NEXT: [[UPDATED:%[0-9]+]]:a16 = COPY [[NEXT]]
+# CHECK-NEXT: [[UPDATED]]:a16 = ADD16aa [[UPDATED]]
+---
+name: subregister_source
+tracksRegLiveness: true
+body: |
+  bb.0:
+    successors: %bb.1(0x80000000)
+    liveins: $e
+    %0:r8 = COPY $e
+    undef %4.sub_high:r16 = LD8ri 0
+    %4.sub_low:r16 = COPY %0
+    undef %1.sub_high:a16 = COPY %4.sub_high
+    %1.sub_low:a16 = COPY %0
+    CALL16 @opaque, csr_z80_c, implicit $sps
+    JQ %bb.1
+  bb.1:
+    %4.sub_low:r16 = LD8ri 9
+    %2:a16 = COPY %1
+    $a = LD8ap %2 :: (load (s8))
+    CALL16 @opaque, csr_z80_c, implicit $sps
+    %1:a16 = ADD16aa %1, implicit-def dead $f
+    $bc = COPY %4
+    $de = COPY %1
+    $a = COPY %0
+    RET16 implicit-def $sps, implicit $sps, implicit $de, implicit $a, implicit $bc
+...

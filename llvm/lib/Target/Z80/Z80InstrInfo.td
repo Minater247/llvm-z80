@@ -265,6 +265,11 @@ let hasPostISelHook = true in {
   }
 }
 let usesCustomInserter = true in {
+  let Defs = [F], hasSideEffects = 0 in {
+    def SHL8v : P<(outs G8:$dst), (ins G8:$src, G8:$count)>;
+    def LSHR8v : P<(outs G8:$dst), (ins G8:$src, G8:$count)>;
+    def ASHR8v : P<(outs G8:$dst), (ins G8:$src, G8:$count)>;
+  }
   let Uses = [F] in {
     def SetCC : P<(outs R8:$dst), (ins i8imm:$cc)>;
     def Select8  : P<(outs  R8:$dst), (ins  R8:$true,  R8:$false, i8imm:$cc),

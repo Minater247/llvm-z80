@@ -1,0 +1,72 @@
+# RUN: llc -mattr=+alternate-regs -run-pass=z80-alternate-regalloc -verify-machineinstrs %s -o - | FileCheck %s
+# RUN: llc -mattr=+alternate-regs -start-before=z80-alternate-regalloc -verify-machineinstrs %s -o /dev/null
+#
+# A temporary pair used only to advance and spill a cursor can execute its
+# increment in bank storage. The original index cursor remains available.
+--- |
+  target triple = "z80"
+  define void @advance() { ret void }
+  define void @retreat() { ret void }
+  define void @live_temporary() { ret void }
+...
+---
+name: advance
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 2, alignment: 1 }
+# CHECK-LABEL: name: advance
+# CHECK-NOT: $de = COPY
+# CHECK: $hl_alt = ALT_SAVE16 $iy
+# CHECK-NEXT: $hl_alt = BANK_INC16 $hl_alt
+# CHECK: $bc = ALT_LOAD16 $hl_alt
+body: |
+  bb.0:
+    liveins: $iy
+    $de = COPY $iy
+    $de = INC16r $de
+    LD88or %stack.0, 0, $de
+    $de = LD16ri 0
+    $bc = LD88ro %stack.0, 0
+    RET16 implicit-def $sps, implicit $sps, implicit $bc, implicit $iy
+...
+---
+name: retreat
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 2, alignment: 1 }
+# CHECK-LABEL: name: retreat
+# CHECK-NOT: $de = COPY
+# CHECK: $hl_alt = ALT_SAVE16 $iy
+# CHECK-NEXT: $hl_alt = BANK_DEC16 $hl_alt
+# CHECK: $bc = ALT_LOAD16 $hl_alt
+body: |
+  bb.0:
+    liveins: $iy
+    $de = COPY $iy
+    $de = DEC16r $de
+    LD88or %stack.0, 0, $de
+    $de = LD16ri 0
+    $bc = LD88ro %stack.0, 0
+    RET16 implicit-def $sps, implicit $sps, implicit $bc, implicit $iy
+...
+---
+name: live_temporary
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 2, alignment: 1 }
+# CHECK-LABEL: name: live_temporary
+# CHECK: $de = COPY $iy
+# CHECK-NEXT: $de = INC16r $de
+# CHECK-NEXT: $hl_alt = ALT_SAVE16 $de
+# CHECK-NOT: BANK_INC16
+body: |
+  bb.0:
+    liveins: $iy
+    $de = COPY $iy
+    $de = INC16r $de
+    LD88or %stack.0, 0, $de
+    $a = LD8ap $de :: (load (s8))
+    $de = LD16ri 0
+    $bc = LD88ro %stack.0, 0
+    RET16 implicit-def $sps, implicit $sps, implicit $bc, implicit $a
+...
