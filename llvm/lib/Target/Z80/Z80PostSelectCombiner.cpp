@@ -16,6 +16,7 @@
 #include "Z80Subtarget.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
+#include "llvm/IR/InlineAsm.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Target/TargetMachine.h"
@@ -76,6 +77,25 @@ bool Z80PostSelectCombiner::runOnMachineFunction(MachineFunction &MF) {
       }
 
       switch (unsigned Opc = MI.getOpcode()) {
+      case TargetOpcode::INLINEASM: {
+        StringRef Text = StringRef(MI.getOperand(0).getSymbolName()).trim();
+        unsigned Instruction = Text.equals_insensitive("di") ? Z80::DI
+                               : Text.equals_insensitive("ei") ? Z80::EI : 0;
+        if (!Instruction ||
+            (MI.getOperand(1).getImm() &
+             ~(InlineAsm::Extra_HasSideEffects | InlineAsm::Extra_MayLoad |
+               InlineAsm::Extra_MayStore)) ||
+            llvm::any_of(llvm::drop_begin(MI.operands(), 2),
+                         [](const auto &MO) { return !MO.isMetadata(); }))
+          break;
+        /* Interrupt control has no general-register effects. Expose the real
+           instruction so register allocation can retain bank values across
+           it, while the original empty assembly keeps its ordering contract. */
+        BuildMI(MBB, MI, MI.getDebugLoc(), TII.get(Instruction));
+        MI.getOperand(0).ChangeToES("");
+        Changed = true;
+        break;
+      }
       case TargetOpcode::COPY: {
         Register DstReg = MI.getOperand(0).getReg();
         if (DstReg != Z80::SPS && DstReg != Z80::SPL)
