@@ -13,18 +13,22 @@ rng = random.Random(2648)
 count = 0
 for low in range(256):
     for high in (0x20, 0x3f, 0x40, 0x7f):
-        for name in ('constructed', 'byte_user', 'updated_byte'):
+        for name in ('constructed', 'byte_user', 'updated_byte', 'observed_pair'):
             cpu = execution.CPU(rng)
             pointer = high * 256 + low
             cpu.put('de', pointer)
             address = high * 256 + ((low + 1) & 255) if name == 'updated_byte' else pointer
+            if name == 'observed_pair':
+                address = (pointer + 1) & 65535
             value = rng.randrange(256)
+            if name == 'observed_pair':
+                value = address >> 8
             cpu.mem[address] = value
             preserved = {r: cpu.get(r) for r in ('bc', 'de', 'ix')}
             sp = cpu.sp
             cpu.run(program, entry=name)
             assert cpu.get('a') == value, (name, pointer, cpu.get('a'), value)
-            assert cpu.reads.count(address) == 1
+            assert cpu.reads.count(address) == (0 if name == 'observed_pair' else 1)
             assert cpu.sp == sp + 2
             assert cpu.writes <= set(range(sp - 256, sp))
             if name == 'constructed':
@@ -33,5 +37,7 @@ for low in range(256):
                     assert cpu.get(r) == expected, (name, r)
             if name == 'byte_user':
                 assert cpu.get('c') == low
+            if name == 'observed_pair':
+                assert cpu.get('c') == ((low + 1) & 255)
             count += 1
 print(f'{count} constructed-pointer executions passed')

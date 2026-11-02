@@ -623,6 +623,14 @@ void Z80InstrInfo::copyPhysReg(MachineBasicBlock &MBB,
           .addReg(SrcReg, getKillRegState(KillSrc));
     return;
   }
+  bool DstAltByte = Z80::ALT8RegClass.contains(DstReg);
+  bool SrcAltByte = Z80::ALT8RegClass.contains(SrcReg);
+  if (DstAltByte != SrcAltByte) {
+    BuildMI(MBB, MI, DL, get(DstAltByte ? Z80::ALT_SAVE8 : Z80::ALT_LOAD8),
+            DstReg)
+        .addReg(SrcReg, getKillRegState(KillSrc));
+    return;
+  }
   (void)RenamableDest;
   (void)RenamableSrc;
   LLVM_DEBUG(dbgs() << RI.getName(DstReg) << " = " << RI.getName(SrcReg)
@@ -1694,7 +1702,9 @@ bool Z80InstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
         Is24Bit
             ? TRI.getMatchingSuperReg(Reg, Z80::sub_short, &Z80::R24RegClass)
             : Reg;
-    if (Index || Overlap) {
+    bool SaveScratch = (Index || Overlap) &&
+                       (Is24Bit || isLive(ScratchReg, MI));
+    if (SaveScratch) {
       auto Save = BuildMI(MBB, MI, DL,
                           get(Is24Bit ? Z80::PUSH24r : Z80::PUSH16r))
                       .addReg(ScratchReg, RegState::Undef);
@@ -1733,7 +1743,7 @@ bool Z80InstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
       assert(isInt<8>(OffsetMO.getImm()) && "LD88 can't have maximum offset.");
     }
     if (Index) {
-      if (Reg == Z80::HL)
+      if (SaveScratch && Reg == Z80::HL)
         // Restore scratch register and prepare to set original register below
         BuildMI(MBB, Next, DL, get(Is24Bit ? Z80::EX24sa : Z80::EX16sa),
                 ScratchReg).addReg(ScratchReg);
@@ -1742,7 +1752,7 @@ bool Z80InstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
         copyPhysReg(MBB, Next, DL, OrigReg, Reg);
     } else if (Overlap)
       copyPhysReg(MBB, Next, DL, OrigReg, Reg, true);
-    if (Index || Overlap)
+    if (SaveScratch)
       // Restore scratch register or set original register
       applySPAdjust(*BuildMI(
           MBB, Next, DL, get(Is24Bit ? Z80::POP24r : Z80::POP16r),
@@ -1816,7 +1826,13 @@ bool Z80InstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
     MCRegister OrigHighReg = TRI.getSubReg(Reg, Z80::sub_high);
     MCRegister HighReg = OrigHighReg;
     bool SavedScratchOnStack = false;
-    if (Index) {
+    bool SaveScratch = Index && (Is24Bit || isLive(ScratchReg, MI));
+    if (Index && !SaveScratch) {
+      /* The primary scratch pair is disposable here. Copying the index
+         value directly avoids saving and restoring a dead pair around each
+         spill; the same liveness rule applies to index reloads above. */
+      copyPhysReg(MBB, MI, DL, Reg, OrigReg);
+    } else if (Index) {
       MCRegister OrigSuperReg =
           TRI.getMatchingSuperReg(OrigReg, Z80::sub_short, &Z80::R24RegClass);
       // Save scratch register or prepare to set scratch register
@@ -1907,7 +1923,7 @@ bool Z80InstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
                get(Is24Bit ? Z80::INC24s : Z80::INC16s)));
     applySPAdjust(*BuildMI(MBB, Next, DL,
                get(Is24Bit ? Z80::INC24s : Z80::INC16s)));
-    } else if (Index)
+    } else if (SaveScratch)
       // Restore scratch register
       applySPAdjust(*BuildMI(
           MBB, Next, DL, get(Is24Bit ? Z80::POP24r : Z80::POP16r), ScratchReg));

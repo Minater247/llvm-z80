@@ -50,4 +50,7 @@ for _ in range(1024):
 for index in range(256):
     run('lookup', 0x40 + (index & 15), index, rng.randrange(256), True)
     run('lookup_reversed', 0x40 + (index & 15), index, rng.randrange(256), True)
+for index in range(0, 65536, 37):
+    run('constant_byte_base', 0, index, 65504+(index&31))
+    run('constant_carry_base', 0, index, 65505+(index&31))
 print(f'{checks} page-address executions passed')

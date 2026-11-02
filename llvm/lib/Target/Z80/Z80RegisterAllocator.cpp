@@ -81,6 +81,18 @@ unsigned copyCost(MCRegister Dst, MCRegister Src, bool KillSrc,
   if (Dst == Src)
     return 0;
   bool Bytes = OptSize || ST.hasEZ80Ops();
+  bool DstAltByte = Z80::ALT8RegClass.contains(Dst);
+  bool SrcAltByte = Z80::ALT8RegClass.contains(Src);
+  if (DstAltByte != SrcAltByte) {
+    MCRegister Main = DstAltByte ? Src : Dst;
+    MCRegister Alt = DstAltByte ? Dst : Src;
+    if (Alt != Z80::A_ALT) {
+      if (Main == Z80::A)
+        return Bytes ? 3 : 12;
+      unsigned Prefix = isIndex(Main);
+      return Bytes ? 6 + Prefix : 37 + 4 * Prefix;
+    }
+  }
   if (Z80::ALT16RegClass.contains(Dst) || Z80::ALT16RegClass.contains(Src)) {
     if (Z80::ALT16RegClass.contains(Dst, Src))
       return Bytes ? 4 : 16;
@@ -311,6 +323,7 @@ class Z80RegisterAllocator final : public MachineFunctionPass,
   void refine();
   void refineSpillAccesses();
   void refineSpillTransfers();
+  void reuseSpillValues();
   void coalesceSplits();
   MCRegister selectOrSplit(const LiveInterval &LI,
                            SmallVectorImpl<Register> &NewRegs) override;
@@ -1171,12 +1184,43 @@ Z80RegisterAllocator::selectOrSplit(const LiveInterval &LI,
     if (Def && (Def->getOpcode() == Z80::BANK_LD16ri ||
                 Def->getOpcode() == Z80::LD16ri)) {
       /* A split constant can survive calls in an alternate pair even when
-         every consumer needs a primary pair. Compare those transfers with
-         recreating the immediate at each copy; reserving a bank register is
-         useful only when it actually saves work. */
+         consumers need primary pairs. Compare copies and banked additions
+         with recreating the immediate at each use; reserving a bank register
+         is useful only when it actually saves work. */
       bool Bytes = OptSize || ST->hasEZ80Ops(), Eligible = true;
       double Keep = frequency(*Def) * (Bytes ? 5 : 18), Remat = 0;
       for (const auto &Use : MRI->use_nodbg_instructions(LI.reg())) {
+        if (Use.getOpcode() == Z80::BANK_ADD16 &&
+            Use.getOperand(2).getReg() == LI.reg() &&
+            Use.getOperand(0).getReg() != LI.reg()) {
+          Register Dst = Use.getOperand(0).getReg();
+          SmallVector<MCRegister, 12> Choices;
+          if (Dst.isPhysical())
+            Choices.push_back(Dst.asMCReg());
+          else if (VRM->hasPhys(Dst))
+            Choices.push_back(VRM->getPhys(Dst));
+          else
+            Choices = domain(Dst);
+          unsigned Stored = ~0u, Materialized = ~0u;
+          for (MCRegister D : Choices) {
+            Stored = std::min(Stored, Z80::bankAddCost(D, Free, Bytes));
+            for (MCRegister P : {Z80::BC, Z80::DE}) {
+              if (!MRI->getRegClass(LI.reg())->contains(P) ||
+                  TRI->regsOverlap(D, P))
+                continue;
+              Materialized =
+                  std::min(Materialized,
+                           (Bytes ? 3u : 10u) + Z80::bankAddCost(D, P, Bytes));
+            }
+          }
+          if (Stored == ~0u || Materialized == ~0u) {
+            Eligible = false;
+            break;
+          }
+          Keep += frequency(Use) * Stored;
+          Remat += frequency(Use) * Materialized;
+          continue;
+        }
         if (!Use.isCopy() || Use.getOperand(0).getSubReg() ||
             Use.getOperand(1).getSubReg()) {
           Eligible = false;
@@ -1404,6 +1448,124 @@ void Z80RegisterAllocator::coalesceSplits() {
     getAnalysis<LiveDebugVariablesWrapperLegacy>().getLDV().splitRegister(
         S, {D}, *LIS);
   }
+}
+
+/// Reuse a dominating spill value while its assigned pair survives every path.
+/// Forward loads from private spill slots only when every intervening path
+/// preserves both the stored value and its register assignment.
+void Z80RegisterAllocator::reuseSpillValues() {
+  const auto &TII = *ST->getInstrInfo();
+  const auto &MFI = MF->getFrameInfo();
+  auto &MDT = getAnalysis<MachineDominatorTreeWrapperPass>().getDomTree();
+  DenseMap<int, SmallVector<std::pair<MachineInstr *, Register>, 4>> Sources;
+  for (auto &MBB : *MF)
+    for (auto &MI : MBB) {
+      int FI;
+      Register Dst = TII.isLoadFromStackSlot(MI, FI);
+      bool Load = bool(Dst);
+      if (!Load)
+        Dst = TII.isStoreToStackSlot(MI, FI);
+      if (!Dst || FI < 0 || !MFI.isSpillSlotObjectIndex(FI) || MI.isBundled() ||
+          MI.hasOrderedMemoryRef())
+        continue;
+      if (Dst.isVirtual()) {
+        if (!VRM->hasPhys(Dst) ||
+            !Z80::R16RegClass.hasSubClassEq(MRI->getRegClass(Dst)))
+          continue;
+      } else if (!Load || !Z80::R16RegClass.contains(Dst))
+        continue;
+      MCRegister P = Dst.isVirtual() ? VRM->getPhys(Dst) : Dst.asMCReg();
+      auto &Candidates = Sources[FI];
+      if (!Load && llvm::any_of(MI.operands(), [](const MachineOperand &MO) {
+            return MO.isReg() && MO.isUse() && MO.isUndef();
+          }))
+        continue;
+      if (Load && (Dst.isPhysical() || MRI->hasOneDef(Dst)))
+        for (auto [Source, Src] : reverse(Candidates)) {
+          if (Src == Dst || !Src.isVirtual() || !VRM->hasPhys(Src) ||
+              VRM->getPhys(Src) != P || !MDT.dominates(Source, &MI))
+            continue;
+          auto &SL = LIS->getInterval(Src);
+          if (SL.hasSubRanges() || SL.empty())
+            continue;
+          SmallVector<std::pair<MachineBasicBlock *,
+                                MachineBasicBlock::iterator>, 8> Work;
+          SmallPtrSet<MachineBasicBlock *, 16> Seen;
+          Work.emplace_back(&MBB, MI.getIterator());
+          unsigned Budget = 128;
+          bool Safe = true;
+          while (Safe && !Work.empty()) {
+            auto [Block, End] = Work.pop_back_val();
+            bool ReachedSource = false;
+            while (End != Block->begin()) {
+              auto &Between = *--End;
+              if (&Between == Source) {
+                ReachedSource = true;
+                break;
+              }
+              if (!Budget-- || Between.isInlineAsm() || Between.isBundled() ||
+                  (Between.hasUnmodeledSideEffects() && !Between.isCall())) {
+                Safe = false;
+                break;
+              }
+              for (const auto &MO : Between.operands()) {
+                if ((MO.isFI() && MO.getIndex() == FI && Between.mayStore()) ||
+                    (MO.isRegMask() && MO.clobbersPhysReg(P))) {
+                  Safe = false;
+                  break;
+                }
+                if (!MO.isReg() || !MO.isDef())
+                  continue;
+                Register R = MO.getReg();
+                if (R.isVirtual())
+                  R = VRM->hasPhys(R) ? Register(VRM->getPhys(R)) : Register();
+                if (R && TRI->regsOverlap(R, P)) {
+                  Safe = false;
+                  break;
+                }
+              }
+              if (!Safe)
+                break;
+            }
+            if (Safe && !ReachedSource) {
+              if (Block->pred_empty()) {
+                Safe = false;
+                break;
+              }
+              for (auto *Pred : Block->predecessors())
+                if (Seen.insert(Pred).second)
+                  Work.emplace_back(Pred, Pred->end());
+            }
+          }
+          if (!Safe)
+            continue;
+          LiveInterval Trial(Src, SL.weight());
+          Trial.assign(SL, LIS->getVNInfoAllocator());
+          LIS->extendToIndices(Trial, {LIS->getInstructionIndex(MI).getRegSlot()});
+          Matrix->unassign(SL);
+          bool Free = Matrix->checkInterference(Trial, P) == LiveRegMatrix::IK_Free;
+          if (!Free) {
+            Matrix->assign(SL, P);
+            continue;
+          }
+          while (MI.getNumOperands() > 1)
+            MI.removeOperand(MI.getNumOperands() - 1);
+          MI.setDesc(TII.get(TargetOpcode::COPY));
+          MI.addOperand(*MF, MachineOperand::CreateReg(Src, false));
+          MI.dropMemRefs(*MF);
+          MRI->clearKillFlags(Src);
+          LIS->removeInterval(Src);
+          auto &Extended = LIS->createAndComputeVirtRegInterval(Src);
+          Matrix->invalidateVirtRegs();
+          Matrix->assign(Extended, P);
+          break;
+        }
+      if (Dst.isVirtual()) {
+        if (Candidates.size() == 4)
+          Candidates.erase(Candidates.begin());
+        Candidates.emplace_back(&MI, Dst);
+      }
+    }
 }
 
 void Z80RegisterAllocator::refine() {
@@ -1675,6 +1837,7 @@ bool Z80RegisterAllocator::runOnMachineFunction(MachineFunction &Func) {
     refine();
   refineSpillAccesses();
   refineSpillTransfers();
+  reuseSpillValues();
   releaseMemory();
   return true;
 }

@@ -63,7 +63,7 @@ static bool selectBankInstructions(MachineFunction &MF) {
     if (MRI.reg_nodbg_empty(R) ||
         !Z80::R16RegClass.hasSubClassEq(MRI.getRegClass(R)))
       continue;
-    bool Eligible = true, HasBankOperation = false;
+    bool Eligible = true, HasBankOperation = false, MemoryAddress = false;
     SmallVector<MachineOperand *, 2> ByteDefs;
     SmallVector<MachineOperand *, 2> ByteUses;
     bool WholeCopy = false;
@@ -106,6 +106,7 @@ static bool selectBankInstructions(MachineFunction &MF) {
           break;
         }
       }
+      MemoryAddress |= Opc == Z80::LD8ap || Opc == Z80::LD8pa;
       HasBankOperation |= Opc == Z80::ADD16rr || Opc == Z80::INC16r ||
                           Opc == Z80::DEC16r || Opc == Z80::LD8ap ||
                           Opc == Z80::LD8pa;
@@ -116,8 +117,11 @@ static bool selectBankInstructions(MachineFunction &MF) {
         break;
       }
     }
+    /* Arithmetic pairs can expose their bytes through direct bank transfers.
+       Memory cursors retain their existing byte constraints: interleaved
+       address and byte accesses need a joint region cost before widening. */
     if (!Eligible || (!HasBankOperation && !(WholeCopy && !ByteDefs.empty())) ||
-        (ByteDefs.empty() && !ByteUses.empty()))
+        (ByteDefs.empty() && !ByteUses.empty() && MemoryAddress))
       continue;
     if (!ByteDefs.empty()) {
       if (WholeDef || ByteDefs.size() != 2 ||
@@ -209,6 +213,35 @@ static bool selectBankInstructions(MachineFunction &MF) {
   }
   for (Register R : PrimaryInputs)
     Bankable.erase(R);
+
+  /* Adjacent observations of both lanes share one primary pair. Otherwise
+     an alternate assignment would preserve A and exchange banks separately
+     for each byte. Keep isolated byte observations direct so they do not
+     extend a primary pair's lifetime. */
+  for (auto &MBB : MF)
+    for (auto I = MBB.begin(), E = MBB.end(); I != E; ++I) {
+      if (!I->isCopy() || !I->getOperand(1).getSubReg())
+        continue;
+      Register R = I->getOperand(1).getReg();
+      if (!Bankable.contains(R))
+        continue;
+      auto Next = std::next(I);
+      while (Next != E && Next->isDebugInstr())
+        ++Next;
+      if (Next == E || !Next->isCopy() || Next->getOperand(1).getReg() != R ||
+          !Next->getOperand(1).getSubReg() ||
+          Next->getOperand(1).getSubReg() == I->getOperand(1).getSubReg())
+        continue;
+      Register Pair = MRI.createVirtualRegister(&Z80::R16RegClass);
+      BuildMI(MBB, I, I->getDebugLoc(), TII->get(TargetOpcode::COPY), Pair)
+          .addReg(R);
+      I->getOperand(1).setReg(Pair);
+      I->getOperand(1).setIsKill(false);
+      Next->getOperand(1).setReg(Pair);
+      Next->getOperand(1).setIsKill(false);
+      I = Next;
+      changed = true;
+    }
 
   for (Register R : Bankable)
     MRI.setRegClass(R, &Z80::B16RegClass);

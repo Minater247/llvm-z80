@@ -38,12 +38,12 @@ def constant_multiply : GICombineRule<
          [{ return matchConstantMultiply(*${mi}, MRI, STI, ${matchinfo}); }]),
   (apply [{ applyConstantMultiply(*${mi}, B, Observer, ${matchinfo}); }])>;
 
-def page_offset_matchdata : GIDefMatchData<"bool">;
+def page_offset_matchdata : GIDefMatchData<"PageOffset">;
 def page_offset : GICombineRule<
-  (defs root:$mi, page_offset_matchdata:$reverse),
+  (defs root:$mi, page_offset_matchdata:$matchinfo),
   (match (wip_match_opcode G_PTR_ADD):$mi,
-         [{ return matchPageOffset(*${mi}, MRI, VT, ${reverse}); }]),
-  (apply [{ applyPageOffset(*${mi}, B, Observer, ${reverse}); }])>;
+         [{ return matchPageOffset(*${mi}, MRI, VT, ${matchinfo}); }]),
+  (apply [{ applyPageOffset(*${mi}, B, Observer, ${matchinfo}); }])>;
 
 def Z80PreLegalizerCombiner
   : GICombiner<"Z80PreLegalizerCombinerImpl",

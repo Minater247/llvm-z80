@@ -758,6 +758,12 @@ Z80LegalizerInfo::legalizeShift(LegalizerHelper &Helper, MachineInstr &MI,
       return LegalizerHelper::AlreadyLegal;
 
     unsigned MaxLegalSize = Subtarget.is24Bit() ? 24 : 16;
+    /* Whole-byte left shifts discard source lanes. Expose the surviving
+       bytes before expanding the remaining bits so dead lanes require no
+       pair arithmetic or registers. */
+    if (Opc == G_SHL && Ty.isScalar() && Ty.getSizeInBits() <= MaxLegalSize &&
+        ShiftVal >= 8 && ShiftVal < Ty.getSizeInBits())
+      return Helper.narrowScalarShiftMultiway(MI, LLT::scalar(8));
     if ((Opc == G_SHL || (Opc == G_ASHR && Ty == LLT::scalar(8))) &&
         Ty.isScalar() && Ty.getSizeInBits() <= MaxLegalSize &&
         ShiftVal < Ty.getSizeInBits()) {
@@ -937,6 +943,47 @@ Z80LegalizerInfo::legalizeCompare(LegalizerHelper &Helper,
   unsigned OpSize = OpTy.getSizeInBits();
   assert(MRI.getType(DstReg) == LLT::scalar(1) && !OpTy.isVector() &&
          MRI.getType(RHSReg) == OpTy && "Unexpected type");
+
+  if (MI.getOpcode() == G_ICMP && OpSize == 32 &&
+      (Pred == CmpInst::ICMP_EQ || Pred == CmpInst::ICMP_NE) &&
+      getIConstantVRegVal(RHSReg, MRI)) {
+    /* Equality needs only the combined differing bits. Byte operations avoid
+       the wide comparison ABI and leave the original value available to its
+       later users. Constant and unused high lanes fold independently. */
+    LLT Byte = LLT::scalar(8);
+    auto Left = MIRBuilder.buildUnmerge(Byte, LHSReg);
+    APInt Constant = *getIConstantVRegVal(RHSReg, MRI);
+    Register Difference, Ones;
+    for (unsigned I = 0; I != 4; ++I) {
+      unsigned Lane = Constant.extractBitsAsZExtValue(8, 8 * I);
+      Register Part = Left.getReg(I);
+      if (Lane == 255) {
+        /* OR of complemented lanes is the complement of their AND. Keep
+           the accumulator chain together and complement it once. */
+        Ones = Ones ? MIRBuilder.buildAnd(Byte, Ones, Part).getReg(0) : Part;
+        continue;
+      }
+      if (Lane)
+        Part = MIRBuilder
+                   .buildXor(Byte, Part, MIRBuilder.buildConstant(Byte, Lane))
+                   .getReg(0);
+      Difference = Difference
+                       ? MIRBuilder.buildOr(Byte, Difference, Part).getReg(0)
+                       : Part;
+    }
+    if (Ones) {
+      auto Part =
+          MIRBuilder.buildXor(Byte, Ones, MIRBuilder.buildConstant(Byte, 255));
+      Difference = Difference
+                       ? MIRBuilder.buildOr(Byte, Difference, Part).getReg(0)
+                       : Part.getReg(0);
+    }
+    auto Zero = MIRBuilder.buildConstant(Byte, 0);
+    MIRBuilder.buildICmp(Pred, DstReg, Difference, Zero);
+    Helper.Observer.erasingInstr(MI);
+    MI.eraseFromParent();
+    return LegalizerHelper::Legalized;
+  }
 
   Type *Ty;
   RTLIB::Libcall Libcall;

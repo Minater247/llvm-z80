@@ -134,3 +134,20 @@ define ptr @constant_page(i16 %unused, i16 %index) {
   %r = getelementptr i8, ptr %base, i16 16384
   ret ptr %r
 }
+
+; The bounded offset reaches the last byte of this page without carrying.
+define ptr @constant_byte_base(i16 %unused, i16 %index) {
+; CHECK-LABEL: constant_byte_base:
+; CHECK-NOT: add{{[ \t]+}}hl,
+; CHECK: ret
+  %lo = and i16 %index, 31
+  %r = getelementptr i8, ptr inttoptr (i16 -32 to ptr), i16 %lo
+  ret ptr %r
+}
+
+; Moving the base by one admits a carry and must preserve full-word arithmetic.
+define ptr @constant_carry_base(i16 %unused, i16 %index) {
+  %lo = and i16 %index, 31
+  %r = getelementptr i8, ptr inttoptr (i16 -31 to ptr), i16 %lo
+  ret ptr %r
+}

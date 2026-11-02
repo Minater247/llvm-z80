@@ -21,6 +21,7 @@
 #include <optional>
 
 #include "llvm/ADT/Sequence.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/CodeGen/GlobalISel/GIMatchTableExecutorImpl.h"
 #include "llvm/CodeGen/GlobalISel/InstructionSelector.h"
 #include "llvm/CodeGen/GlobalISel/MIPatternMatch.h"
@@ -1281,6 +1282,14 @@ bool Z80InstructionSelector::selectLoadStore(MachineInstr &I,
     }
   }
 
+  /* A fused read-modify-write consumes one address. Its two original memory
+     operands must not make that address look shared and force a separate
+     pointer addition instead of an indexed displacement. A live result
+     still needs a second access to read the updated byte. */
+  if (!RMWOps.empty() && MRI.hasOneNonDBGUse(ValReg) &&
+      llvm::hasNItems(MRI.use_nodbg_operands(PtrReg), 2))
+    PreferRegPtrFor8 = false;
+
   bool RetainsAddress = IsLoad && !MRI.hasOneNonDBGUse(PtrReg);
   I.removeOperand(1);
   I.removeOperand(0);
@@ -1708,9 +1717,66 @@ bool Z80InstructionSelector::selectALU8(MachineInstr &I,
     return constrainSelectedInstRegOperands(I, TII, TRI, RBI);
   }
 
+  unsigned RotateOpc = 0, RotateCount = 0;
+  if (OpcReg == Z80::AND8ar && RHSConst) {
+    Register Source = LHSReg;
+    unsigned ShiftOpc = 0, Count = 0;
+    SmallPtrSet<const MachineInstr *, 8> Folded;
+    while (MRI.hasOneNonDBGUse(Source)) {
+      const auto *Shift = MRI.getVRegDef(Source);
+      unsigned Opc = Shift->getOpcode();
+      if ((Opc != TargetOpcode::G_SHL && Opc != TargetOpcode::G_LSHR) ||
+          (ShiftOpc && ShiftOpc != Opc))
+        break;
+      auto Amount = getIConstantVRegVal(Shift->getOperand(2).getReg(), MRI);
+      if (!Amount || Amount->isZero() || Amount->uge(8 - Count))
+        break;
+      Count += Amount->getZExtValue();
+      ShiftOpc = Opc;
+      Folded.insert(Shift);
+      Source = Shift->getOperand(1).getReg();
+    }
+    /* Other shifts can share this chain after selection. Keep that common
+       work instead of introducing independent accumulator rotations. */
+    bool Shared = false;
+    if (Count) {
+      unsigned Budget = 16;
+      for (const auto &Use : MRI.use_nodbg_instructions(Source)) {
+        if (Folded.contains(&Use))
+          continue;
+        if (!Budget-- || Use.getOpcode() == ShiftOpc ||
+            Use.getOpcode() ==
+                (ShiftOpc == TargetOpcode::G_SHL ? Z80::SLA8g : Z80::SRL8g)) {
+          Shared = true;
+          break;
+        }
+      }
+    }
+    unsigned Wrapped = ShiftOpc == TargetOpcode::G_SHL
+                           ? (1u << Count) - 1
+                           : (0xffu << (8 - Count)) & 0xff;
+    if (Count && !Shared && !(RHSConst->getZExtValue() & Wrapped)) {
+      /* The mask removes every wrapped bit, so accumulator rotates implement
+         the complete shift-and-mask expression. Shared shift results keep
+         their original definitions and remain available to other users. */
+      bool Left = ShiftOpc == TargetOpcode::G_SHL;
+      if (Count > 4) {
+        Count = 8 - Count;
+        Left = !Left;
+      }
+      RotateOpc = Left ? Z80::RLCA : Z80::RRCA;
+      RotateCount = Count;
+      LHSReg = Source;
+      I.getOperand(1).setReg(Source);
+    }
+  }
+
   MachineIRBuilder Builder(I);
   if (!selectCopy(*Builder.buildCopy(Z80::A, LHSReg), MRI))
     return false;
+
+  for (unsigned N = 0; N != RotateCount; ++N)
+    Builder.buildInstr(RotateOpc);
 
   bool UseImm = RHSConst.has_value() && OpcImm;
   if (UseImm)

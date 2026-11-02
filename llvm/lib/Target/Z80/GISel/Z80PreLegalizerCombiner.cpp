@@ -53,6 +53,11 @@ struct ConstantMultiply {
   bool Negate;
 };
 
+struct PageOffset {
+  bool Reverse = false;
+  uint8_t LowOffset = 0;
+};
+
 #define GET_GICOMBINER_TYPES
 #include "Z80GenPreLegalizeGICombiner.inc"
 #undef GET_GICOMBINER_TYPES
@@ -84,9 +89,10 @@ static void applyConstantMultiply(MachineInstr &MI, MachineIRBuilder &Builder,
                                   const ConstantMultiply &Match);
 
 static bool matchPageOffset(MachineInstr &MI, MachineRegisterInfo &MRI,
-                            GISelValueTracking *VT, bool &Reverse);
+                            GISelValueTracking *VT, PageOffset &Match);
 static void applyPageOffset(MachineInstr &MI, MachineIRBuilder &Builder,
-                            GISelChangeObserver &Observer, bool Reverse);
+                            GISelChangeObserver &Observer,
+                            const PageOffset &Match);
 
 static bool combineByteRemainder(MachineInstr &MI, MachineIRBuilder &Builder,
                                  GISelChangeObserver &Observer,
@@ -340,44 +346,63 @@ static void applyConstantMultiply(MachineInstr &MI, MachineIRBuilder &Builder,
   MI.eraseFromParent();
 }
 
-/// Recognize disjoint high and low bytes in a 16-bit pointer sum in either order.
-/// Constant low bytes retain the existing increment and immediate-address forms.
+/// Recognize disjoint high and low bytes in a 16-bit pointer sum in either
+/// order. Constant bases also use byte arithmetic when the offset cannot carry
+/// into the high byte. Constant offsets retain the existing immediate forms.
 static bool matchPageOffset(MachineInstr &MI, MachineRegisterInfo &MRI,
-                            GISelValueTracking *VT, bool &Reverse) {
+                            GISelValueTracking *VT, PageOffset &Match) {
   LLT Ty = MRI.getType(MI.getOperand(0).getReg());
   if (!VT || !Ty.isPointer() || Ty.getSizeInBits() != 16)
     return false;
+  Match = {};
   Register Base = MI.getOperand(1).getReg();
   Register Offset = MI.getOperand(2).getReg();
   auto OffsetBits = VT->getKnownBits(Offset);
-  if (OffsetBits.countMinLeadingZeros() >= 8 &&
-      !getIConstantVRegValWithLookThrough(Offset, MRI) &&
-      VT->getKnownBits(Base).countMinTrailingZeros() >= 8) {
-    Reverse = false;
+  bool ByteOffset = OffsetBits.countMinLeadingZeros() >= 8;
+  bool AlignedOffset = OffsetBits.countMinTrailingZeros() >= 8;
+  if (!ByteOffset && !AlignedOffset)
+    return false;
+  auto BaseBits = VT->getKnownBits(Base);
+  if (ByteOffset && !getIConstantVRegValWithLookThrough(Offset, MRI) &&
+      BaseBits.countMinTrailingZeros() >= 8) {
+    Match.Reverse = false;
     return true;
   }
-  if (OffsetBits.countMinTrailingZeros() >= 8 &&
-      !getIConstantVRegValWithLookThrough(Base, MRI) &&
-      VT->getKnownBits(Base).countMinLeadingZeros() >= 8) {
-    Reverse = true;
+  if (AlignedOffset && !getIConstantVRegValWithLookThrough(Base, MRI) &&
+      BaseBits.countMinLeadingZeros() >= 8) {
+    Match.Reverse = true;
     return true;
+  }
+  if (BaseBits.isConstant() && ByteOffset &&
+      !getIConstantVRegValWithLookThrough(Offset, MRI)) {
+    unsigned Low = BaseBits.getConstant().getZExtValue() & 255;
+    if (OffsetBits.getMaxValue().getZExtValue() + Low <= 255) {
+      Match.LowOffset = Low;
+      return true;
+    }
   }
   return false;
 }
 
 static void applyPageOffset(MachineInstr &MI, MachineIRBuilder &Builder,
-                            GISelChangeObserver &Observer, bool Reverse) {
+                            GISelChangeObserver &Observer,
+                            const PageOffset &Match) {
   Builder.setInstrAndDebugLoc(MI);
   LLT Byte = LLT::scalar(8), Word = LLT::scalar(16);
   auto Base = Builder.buildPtrToInt(Word, MI.getOperand(1).getReg());
-  Register HighWord = Reverse ? MI.getOperand(2).getReg() : Base.getReg(0);
-  Register LowWord = Reverse ? Base.getReg(0) : MI.getOperand(2).getReg();
+  Register HighWord =
+      Match.Reverse ? MI.getOperand(2).getReg() : Base.getReg(0);
+  Register LowWord = Match.Reverse ? Base.getReg(0) : MI.getOperand(2).getReg();
   auto Shift = Builder.buildConstant(Byte, 8);
   auto High = Builder.buildTrunc(Byte, Builder.buildLShr(Word, HighWord, Shift));
-  auto Low = Builder.buildTrunc(Byte, LowWord);
-  /* The aligned base and byte index occupy disjoint lanes, so address
-     formation needs copies instead of pair arithmetic and its carry flag. */
-  auto Address = Builder.buildMergeValues(Word, {Low.getReg(0), High.getReg(0)});
+  Register Low = Builder.buildTrunc(Byte, LowWord).getReg(0);
+  if (Match.LowOffset) {
+    auto Offset = Builder.buildConstant(Byte, Match.LowOffset);
+    Low = Builder.buildAdd(Byte, Low, Offset).getReg(0);
+  }
+  /* Proven absence of a carry lets the high byte stay unchanged. Only the
+     low byte needs arithmetic when the base has a nonzero page offset. */
+  auto Address = Builder.buildMergeValues(Word, {Low, High.getReg(0)});
   Builder.buildIntToPtr(MI.getOperand(0).getReg(), Address);
   Observer.erasingInstr(MI);
   MI.eraseFromParent();
@@ -504,6 +529,109 @@ Z80PreLegalizerCombiner::Z80PreLegalizerCombiner(bool IsOptNone)
   if (!RuleConfig.parseCommandLineOption())
     report_fatal_error("Invalid rule identifier");
   initializeZ80PreLegalizerCombinerPass(*PassRegistry::getPassRegistry());
+}
+
+/// Compute word arithmetic and loop values in bytes when all observations
+/// discard the upper byte. Full-width consumers keep their original values.
+static bool narrowByteOnlyValues(MachineFunction &MF) {
+  auto &MRI = MF.getRegInfo();
+  SmallVector<MachineInstr *, 32> Candidates, Worklist;
+  SmallPtrSet<MachineInstr *, 32> Narrow;
+  for (auto &MBB : MF)
+    for (auto &MI : MBB) {
+      switch (MI.getOpcode()) {
+      case TargetOpcode::G_ADD:
+      case TargetOpcode::G_SUB:
+      case TargetOpcode::G_AND:
+      case TargetOpcode::G_OR:
+      case TargetOpcode::G_XOR:
+      case TargetOpcode::G_PHI:
+        if (MRI.getType(MI.getOperand(0).getReg()) == LLT::scalar(16)) {
+          Candidates.push_back(&MI);
+          Narrow.insert(&MI);
+        }
+        break;
+      default:
+        break;
+      }
+    }
+  auto ObservesByte = [&](const MachineInstr &Use, Register R) {
+    if (Use.getOpcode() == TargetOpcode::G_TRUNC)
+      return MRI.getType(Use.getOperand(0).getReg()) == LLT::scalar(8);
+    if (Use.getOpcode() != TargetOpcode::G_AND)
+      return false;
+    Register Other = Use.getOperand(1).getReg() == R
+                         ? Use.getOperand(2).getReg()
+                         : Use.getOperand(1).getReg();
+    auto Mask = getIConstantVRegVal(Other, MRI);
+    return Mask && Mask->isIntN(8);
+  };
+  for (auto *MI : Candidates) {
+    Register R = MI->getOperand(0).getReg();
+    if (llvm::any_of(MRI.use_nodbg_instructions(R), [&](const auto &Use) {
+          return !Narrow.contains(&Use) && !ObservesByte(Use, R);
+        }))
+      Worklist.push_back(MI);
+  }
+  /* Propagate full-width demand backwards through the candidate graph.
+     Cyclic PHIs remain narrow only when every path to an observable use
+     discards the high byte. Each rejected instruction is visited once. */
+  while (!Worklist.empty()) {
+    auto *MI = Worklist.pop_back_val();
+    if (!Narrow.erase(MI))
+      continue;
+    for (const auto &MO : MI->uses()) {
+      if (!MO.isReg() || !MO.getReg().isVirtual() ||
+          ObservesByte(*MI, MO.getReg()))
+        continue;
+      auto *Def = MRI.getVRegDef(MO.getReg());
+      if (Narrow.contains(Def))
+        Worklist.push_back(Def);
+    }
+  }
+  if (Narrow.empty())
+    return false;
+  DenseMap<Register, Register> Bytes;
+  LLT Byte = LLT::scalar(8);
+  for (auto *MI : Candidates)
+    if (Narrow.contains(MI))
+      Bytes[MI->getOperand(0).getReg()] =
+          MRI.createGenericVirtualRegister(Byte);
+  MachineIRBuilder B(MF);
+  auto Low = [&](Register R) {
+    auto It = Bytes.find(R);
+    return It == Bytes.end() ? B.buildTrunc(Byte, R).getReg(0) : It->second;
+  };
+  for (auto *MI : Candidates) {
+    if (!Narrow.contains(MI))
+      continue;
+    Register Dst = MI->getOperand(0).getReg(), Result = Bytes.lookup(Dst);
+    B.setInstrAndDebugLoc(*MI);
+    if (MI->getOpcode() == TargetOpcode::G_PHI) {
+      SmallVector<std::pair<Register, MachineBasicBlock *>, 4> Incoming;
+      for (unsigned I = 1; I < MI->getNumOperands(); I += 2) {
+        auto *Pred = MI->getOperand(I + 1).getMBB();
+        B.setInsertPt(*Pred, Pred->getFirstTerminator());
+        Incoming.emplace_back(Low(MI->getOperand(I).getReg()), Pred);
+      }
+      B.setInstrAndDebugLoc(*MI);
+      auto Phi = B.buildInstr(TargetOpcode::G_PHI, {Result}, {});
+      for (auto [R, Pred] : Incoming)
+        Phi.addUse(R).addMBB(Pred);
+      B.setInsertPt(*MI->getParent(), MI->getParent()->getFirstNonPHI());
+    } else {
+      Register Left = Low(MI->getOperand(1).getReg());
+      Register Right = Low(MI->getOperand(2).getReg());
+      B.buildInstr(MI->getOpcode(), {Result}, {Left, Right});
+    }
+    /* Boundary users observe only the low byte. Reconstruct its word type
+       for those users; internal graph edges use the byte directly. Overflow
+       flags on the original word arithmetic do not apply to the byte. */
+    B.buildZExt(Dst, Result);
+    MRI.markUsesInDebugValueAsUndef(Dst);
+    MI->eraseFromParent();
+  }
+  return true;
 }
 
 /// Narrow counters whose overflow ends a single-block loop within 256 steps.
@@ -705,6 +833,11 @@ bool Z80PreLegalizerCombiner::runOnMachineFunction(MachineFunction &MF) {
                                    /*CSEInfo*/ nullptr, RuleConfig, ST, MDT,
                                    LI);
   Changed |= Impl.combineMachineInstrs();
+  /* Local folding first exposes existing byte address arithmetic. Narrow the
+     remaining value graph afterwards, preserving those canonical forms and
+     their placement relative to calls. */
+  if (EnableOpt)
+    Changed |= narrowByteOnlyValues(MF);
   return Changed;
 }
 

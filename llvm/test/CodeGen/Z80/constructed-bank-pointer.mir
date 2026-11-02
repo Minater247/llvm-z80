@@ -10,6 +10,7 @@
   define i8 @constructed() { ret i8 0 }
   define i8 @byte_user() { ret i8 0 }
   define i8 @updated_byte() { ret i8 0 }
+  define i8 @observed_pair() { ret i8 0 }
 ...
 ---
 name: constructed
@@ -67,4 +68,22 @@ body: |
     %0.sub_low:r16 = INC8r %0.sub_low, implicit-def dead $f
     $a = LD8ap %0 :: (load (s8))
     RET16 implicit-def $sps, implicit $sps, implicit $a
+...
+---
+name: observed_pair
+tracksRegLiveness: true
+# CHECK-LABEL: name: observed_pair
+# CHECK: %0:b16 = COPY $de
+# CHECK: %0:b16 = BANK_INC16 %0
+# CHECK: %[[VIEW:[0-9]+]]:r16 = COPY %0
+# CHECK-NEXT: $c = COPY %[[VIEW]].sub_low
+# CHECK-NEXT: $a = COPY %[[VIEW]].sub_high
+body: |
+  bb.0:
+    liveins: $de
+    %0:r16 = COPY $de
+    %0:r16 = INC16r %0
+    $c = COPY %0.sub_low
+    $a = COPY %0.sub_high
+    RET16 implicit-def $sps, implicit $sps, implicit $a, implicit $c
 ...

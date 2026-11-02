@@ -68,3 +68,52 @@ define i8 @ordinary_call() nounwind minsize {
 define i8 @unwind() nounwind minsize uwtable {
   ret i8 7
 }
+
+; Inline assembly with only memory effects needs no frame storage or base.
+; CHECK-LABEL: asm_memory:
+; CHECK-NOT: ix
+; CHECK: di
+; CHECK: call{{[ \t]+}}callee
+; CHECK: ei
+; CHECK-NOT: ix
+; CHECK: ret
+define void @asm_memory() nounwind minsize {
+  call void asm sideeffect "di", "~{memory}"()
+  call void @callee()
+  call void asm sideeffect "ei", "~{memory}"()
+  ret void
+}
+
+; Register operands remain ordinary allocation constraints for inline asm.
+; CHECK-LABEL: asm_register:
+; CHECK-NOT: ix
+; CHECK: inc{{[ \t]+}}a
+; CHECK-NOT: ix
+; CHECK: ret
+define i8 @asm_register() nounwind minsize {
+  %x = load volatile i8, ptr @input
+  %r = call i8 asm "inc a", "={a},0,~{f}"(i8 %x)
+  ret i8 %r
+}
+
+; An explicit stack-pointer dependency retains the existing frame.
+; CHECK-LABEL: asm_stack:
+; CHECK: {{push.*ix|call.*_frameset0}}
+; CHECK: nop
+; CHECK: pop{{[ \t]+}}ix
+; CHECK: ret
+define void @asm_stack() nounwind minsize {
+  call void asm sideeffect "nop", "~{sp}"()
+  ret void
+}
+
+; Assembly observing IX retains its established frame-pointer value.
+; CHECK-LABEL: asm_frame:
+; CHECK: {{push.*ix|call.*_frameset0}}
+; CHECK: nop
+; CHECK: pop{{[ \t]+}}ix
+; CHECK: ret
+define void @asm_frame() nounwind minsize {
+  call void asm sideeffect "nop", "~{ix}"()
+  ret void
+}

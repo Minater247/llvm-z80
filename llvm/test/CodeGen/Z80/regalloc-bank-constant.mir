@@ -10,6 +10,8 @@
   declare void @clobber()
   define void @constant_copy() optsize minsize { ret void }
   define void @updated_pointer() optsize minsize { ret void }
+  define void @constant_add() optsize minsize { ret void }
+  define void @bank_bytes() optsize minsize { ret void }
 ...
 ---
 name: constant_copy
@@ -39,4 +41,39 @@ body: |
     %1:o16 = COPY %0
     $a = LD8ap %1 :: (volatile load (s8))
     RET16 implicit-def $sps, implicit $sps, implicit $a
+...
+---
+name: constant_add
+tracksRegLiveness: true
+# CHECK-LABEL: constant_add:
+# CHECK: call clobber
+# CHECK: ld {{bc|de}}, 37
+# CHECK: ret
+body: |
+  bb.0:
+    %0:bo16 = BANK_LD16ri 37
+    CALL16 @clobber, CustomRegMask($ix, $de_alt, $d_alt, $e_alt, $bc_alt, $b_alt, $c_alt), implicit $sps
+    %1:r16 = LD16ri 4096
+    %1:r16 = BANK_ADD16 %1, %0, implicit-def dead $f
+    $a = LD8ap %1 :: (volatile load (s8))
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...
+---
+name: bank_bytes
+tracksRegLiveness: true
+# CHECK-LABEL: bank_bytes:
+# CHECK: exx
+# CHECK: inc {{bc|de|hl}}
+# CHECK: ld (8192), a
+# CHECK: exx
+# CHECK: ret
+body: |
+  bb.0:
+    liveins: $bc, $de, $hl, $ix, $iy, $de_alt
+    %0:b16 = COPY $de_alt
+    %0:b16 = BANK_INC16 %0
+    $a = COPY %0.sub_low
+    LD8ma 8192, implicit $a :: (volatile store (s8))
+    $a = COPY %0.sub_high
+    RET16 implicit-def $sps, implicit $sps, implicit $a, implicit $bc, implicit $de, implicit $hl, implicit $ix, implicit $iy
 ...

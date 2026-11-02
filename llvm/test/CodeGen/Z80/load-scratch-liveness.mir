@@ -63,7 +63,11 @@ body: |
 name: dead
 tracksRegLiveness: true
 # CHECK-LABEL: name: dead
-# CHECK: PUSH16r undef $hl, implicit-def $sps, implicit $sps{{$}}
+# CHECK-NOT: PUSH16r undef $hl
+# CHECK: $l = LD8go $ix, 0
+# CHECK: $h = LD8go $ix, 1
+# CHECK-NOT: EX16sa
+# CHECK: RET16
 body: |
   bb.0:
     liveins: $ix

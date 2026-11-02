@@ -1,7 +1,13 @@
+# RUN: llc -start-before=postrapseudos -verify-machineinstrs %s -o %t.s
+# RUN: %python %S/Inputs/spill-index-scratch.py %t.s
 # RUN: llc -run-pass=postrapseudos -verify-machineinstrs %s -o - | FileCheck %s
 --- |
   target triple = "z80"
-  define void @spill_index() { ret void }
+  define void @spill_index() optsize { ret void }
+  define void @spill_dead_scratch() optsize { ret void }
+  define void @load_dead_scratch() optsize { ret void }
+  define void @load_live_high() optsize { ret void }
+  define void @load_overlap() optsize { ret void }
 ...
 ---
 name: spill_index
@@ -13,7 +19,69 @@ tracksRegLiveness: true
 # CHECK: $hl = EX16sa undef $hl
 body: |
   bb.0:
+    liveins: $ix, $iy, $hl
+    LD88or $ix, -2, $iy :: (store (s16))
+    RET16 implicit-def $sps, implicit $sps, implicit $hl
+...
+---
+name: spill_dead_scratch
+tracksRegLiveness: true
+# CHECK-LABEL: name: spill_dead_scratch
+# CHECK: PUSH16r $iy
+# CHECK-NEXT: $hl = POP16r
+# CHECK-NOT: EX16sa
+# CHECK: LD8og $ix, -2, $l
+# CHECK: LD8og $ix, -1, $h
+# CHECK-NEXT: RET16
+body: |
+  bb.0:
     liveins: $ix, $iy
     LD88or $ix, -2, $iy :: (store (s16))
-    RET16 implicit-def $sps, implicit $sps
+    RET16 implicit-def $sps, implicit $sps, implicit $iy
+...
+---
+name: load_dead_scratch
+tracksRegLiveness: true
+# CHECK-LABEL: name: load_dead_scratch
+# CHECK-NOT: PUSH16r
+# CHECK: $l = LD8go $ix, -2
+# CHECK: $h = LD8go $ix, -1
+# CHECK: PUSH16r $hl
+# CHECK-NEXT: $iy = POP16r
+# CHECK-NEXT: RET16
+body: |
+  bb.0:
+    liveins: $ix
+    $iy = LD88ro $ix, -2 :: (load (s16))
+    RET16 implicit-def $sps, implicit $sps, implicit $iy
+...
+---
+name: load_live_high
+tracksRegLiveness: true
+# CHECK-LABEL: name: load_live_high
+# CHECK: PUSH16r undef $hl, {{.*}}implicit $h
+# CHECK: $l = LD8go $ix, -2
+# CHECK: $h = LD8go $ix, -1
+# CHECK: $hl = EX16sa $hl
+# CHECK: $iy = POP16r
+body: |
+  bb.0:
+    liveins: $ix, $h
+    $iy = LD88ro $ix, -2 :: (load (s16))
+    RET16 implicit-def $sps, implicit $sps, implicit $iy, implicit $h
+...
+---
+name: load_overlap
+tracksRegLiveness: true
+# CHECK-LABEL: name: load_overlap
+# CHECK-NOT: PUSH16r
+# CHECK: $e = LD8gp $hl
+# CHECK: $d = LD8gp killed $hl
+# CHECK-NOT: POP16r
+# CHECK: RET16
+body: |
+  bb.0:
+    liveins: $hl
+    $hl = LD88rp killed $hl :: (load (s16))
+    RET16 implicit-def $sps, implicit $sps, implicit $hl
 ...

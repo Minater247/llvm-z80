@@ -23,6 +23,32 @@ using namespace llvm;
 
 #define DEBUG_TYPE "z80-isel"
 
+bool Z80TargetLowering::isLegalAddressingMode(
+    const DataLayout &DL, const AddrMode &AM, Type *Ty, unsigned AS,
+    Instruction *I) const {
+  if (AM.ScalableOffset || AS > 1 ||
+      (AS == 1 && !Subtarget.hasEZ80Ops()))
+    return false;
+  bool HasRegister = AM.HasBaseReg || AM.Scale;
+  if (AM.Scale && (AM.Scale != 1 || AM.HasBaseReg))
+    return false;
+  if (!HasRegister) {
+    unsigned Bits = DL.getPointerSizeInBits(AS);
+    return isIntN(Bits, AM.BaseOffs) || isUIntN(Bits, AM.BaseOffs);
+  }
+  if (AM.BaseGV)
+    return false;
+  if (!AM.BaseOffs)
+    return true;
+  /* Indexed accesses encode a signed byte displacement. Pair accesses have
+     that encoding on eZ80; Z80 words need separate byte operations. Keeping
+     this limit visible prevents combines from dissolving a shared index
+     base into a new full-width addition for every record field. */
+  return isInt<8>(AM.BaseOffs) && Ty && Ty->isSized() && !Ty->isVectorTy() &&
+         (DL.getTypeStoreSize(Ty) == 1 ||
+          (Subtarget.hasEZ80Ops() && DL.getTypeStoreSize(Ty) <= 3));
+}
+
 Z80TargetLowering::Z80TargetLowering(const Z80TargetMachine &TM,
                                      const Z80Subtarget &STI)
     : TargetLowering(TM, STI), Subtarget(STI) {
@@ -515,6 +541,12 @@ Z80TargetLowering::getRegForInlineAsmConstraint(const TargetRegisterInfo *TRI,
 
   if (Z80::parseConstraintCode(Constraint) != Z80::COND_INVALID)
     return std::make_pair(Z80::F, &Z80::F8RegClass);
+
+  // SP has mode-specific identities sharing one assembly name. Resolve it
+  // explicitly so inline-asm clobbers retain the active stack dependency.
+  if (Constraint.equals_insensitive("{sp}"))
+    return Subtarget.is24Bit() ? std::make_pair(Z80::SPL, &Z80::Z24RegClass)
+                               : std::make_pair(Z80::SPS, &Z80::Z16RegClass);
 
   // Use the default implementation in TargetLowering to convert the register
   // constraint into a member of a register class.

@@ -1,4 +1,4 @@
-"""Check every constant right shift of a 24-bit value against integer arithmetic."""
+"""Check every constant shift of a 24-bit value against integer arithmetic."""
 import importlib.util
 from pathlib import Path
 import random
@@ -6,7 +6,7 @@ import sys
 
 if sys.argv[1] == '--emit':
     source = 'target triple = "ez80"\n'
-    for op in ('lshr', 'ashr'):
+    for op in ('shl', 'lshr', 'ashr'):
         for count in range(24):
             source += (f'define i24 @{op}{count}(i24 %x) {{\n'
                        f'  %r = {op} i24 %x, {count}\n  ret i24 %r\n}}\n')
@@ -29,7 +29,7 @@ values = [0, 1, 127, 128, 255, 256, 65535, 65536, 0x7fffff, 0x800000, 0xffffff]
 values += [rng.randrange(1 << 24) for _ in range(1024)]
 checks = 0
 for value in values:
-    for op in ('lshr', 'ashr'):
+    for op in ('shl', 'lshr', 'ashr'):
         signed = value - (1 << 24) if op == 'ashr' and value & (1 << 23) else value
         for count in range(24):
             cpu = adl.CPU(rng)
@@ -39,9 +39,9 @@ for value in values:
             cpu.writes.clear()
             name = f'{op}{count}'
             cpu.run(program, name)
-            expected = (signed >> count) & adl.MASK
+            expected = (value << count if op == 'shl' else signed >> count) & adl.MASK
             assert cpu.get('hl') == expected, (name, value, cpu.get('hl'), expected)
             assert cpu.sp == sp + 3 and cpu.get('ix') == ix
             assert cpu.writes <= set(range(sp - 128, sp))
             checks += 1
-print(f'{checks} ADL right-shift executions passed')
+print(f'{checks} ADL shift executions passed')

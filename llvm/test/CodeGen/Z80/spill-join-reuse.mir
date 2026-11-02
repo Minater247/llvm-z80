@@ -1,0 +1,222 @@
+# RUN: llc -start-before=z80-regalloc -stop-after=z80-regalloc -verify-machineinstrs %s -o - | FileCheck %s
+# RUN: llc -start-before=z80-regalloc -verify-machineinstrs %s -o %t.s
+# RUN: %python %S/Inputs/spill-join-reuse.py %t.s
+# RUN: llc -start-before=z80-regalloc -mattr=+alternate-regs -verify-machineinstrs %s -o %t.bank.s
+# RUN: %python %S/Inputs/spill-join-reuse.py %t.bank.s
+--- |
+  target triple = "z80"
+  declare void @opaque()
+  define void @joins() optsize { ret void }
+  define void @clobbered_pair() optsize { ret void }
+  define void @clobbered_half() optsize { ret void }
+  define void @changed_slot() optsize { ret void }
+  define void @preserved_call() optsize { ret void }
+  define void @clobbered_call() optsize { ret void }
+  define void @physical_reload() optsize { ret void }
+  define void @loop_update() optsize { ret void }
+...
+---
+name: joins
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 2, alignment: 1 }
+# CHECK-LABEL: name: joins
+# CHECK: bb.2:
+# CHECK: %1:i16 = COPY %0
+# CHECK: bb.4:
+# CHECK: %2:i16 = COPY %1
+body: |
+  bb.0:
+    liveins: $iy, $a
+    %0:i16 = COPY $iy
+    %0:i16 = INC16r %0
+    LD88or %stack.0, 0, %0 :: (store (s16) into %stack.0)
+    OR8aa implicit-def $f, implicit $a
+    JQCC %bb.2, 1, implicit $f
+  bb.1:
+    $a = LD8ri 9
+  bb.2:
+    %1:i16 = LD88ro %stack.0, 0 :: (load (s16) from %stack.0)
+    $a = LD8ro %1, 0 :: (load (s8))
+    OR8aa implicit-def $f, implicit $a
+    JQCC %bb.4, 1, implicit $f
+  bb.3:
+    $a = LD8ri 9
+  bb.4:
+    %2:i16 = LD88ro %stack.0, 0 :: (load (s16) from %stack.0)
+    $a = LD8ro %2, 0 :: (load (s8))
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...
+---
+name: clobbered_pair
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 2, alignment: 1 }
+# CHECK-LABEL: name: clobbered_pair
+# CHECK: bb.2:
+# CHECK: %1:i16 = LD88ro %stack.0
+body: |
+  bb.0:
+    liveins: $iy, $a
+    %0:i16 = COPY $iy
+    %0:i16 = INC16r %0
+    LD88or %stack.0, 0, %0 :: (store (s16) into %stack.0)
+    OR8aa implicit-def $f, implicit $a
+    JQCC %bb.2, 1, implicit $f
+  bb.1:
+    $iy = LD16ri 1234
+  bb.2:
+    %1:i16 = LD88ro %stack.0, 0 :: (load (s16) from %stack.0)
+    $a = LD8ro %1, 0 :: (load (s8))
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...
+---
+name: clobbered_half
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 2, alignment: 1 }
+# CHECK-LABEL: name: clobbered_half
+# CHECK: bb.2:
+# CHECK: %1:i16 = LD88ro %stack.0
+body: |
+  bb.0:
+    liveins: $iy, $a
+    %0:i16 = COPY $iy
+    %0:i16 = INC16r %0
+    LD88or %stack.0, 0, %0 :: (store (s16) into %stack.0)
+    OR8aa implicit-def $f, implicit $a
+    JQCC %bb.2, 1, implicit $f
+  bb.1:
+    $iyh = LD8ri 7
+  bb.2:
+    %1:i16 = LD88ro %stack.0, 0 :: (load (s16) from %stack.0)
+    $a = LD8ro %1, 0 :: (load (s8))
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...
+---
+name: changed_slot
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 2, alignment: 1 }
+# CHECK-LABEL: name: changed_slot
+# CHECK: bb.2:
+# CHECK: %1:i16 = LD88ro %stack.0
+body: |
+  bb.0:
+    liveins: $iy, $a
+    %0:i16 = COPY $iy
+    %0:i16 = INC16r %0
+    LD88or %stack.0, 0, %0 :: (store (s16) into %stack.0)
+    OR8aa implicit-def $f, implicit $a
+    JQCC %bb.2, 1, implicit $f
+  bb.1:
+    liveins: $a
+    LD8or %stack.0, 1, $a :: (store (s8) into %stack.0 + 1)
+  bb.2:
+    %1:i16 = LD88ro %stack.0, 0 :: (load (s16) from %stack.0)
+    $a = LD8ro %1, 0 :: (load (s8))
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...
+---
+name: preserved_call
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 2, alignment: 1 }
+# CHECK-LABEL: name: preserved_call
+# CHECK: bb.2:
+# CHECK: %1:i16 = COPY %0
+body: |
+  bb.0:
+    liveins: $iy, $a
+    %0:i16 = COPY $iy
+    %0:i16 = INC16r %0
+    LD88or %stack.0, 0, %0 :: (store (s16) into %stack.0)
+    OR8aa implicit-def $f, implicit $a
+    JQCC %bb.2, 1, implicit $f
+  bb.1:
+    CALL16 @opaque, CustomRegMask($iy, $iyh, $iyl), implicit $sps
+  bb.2:
+    %1:i16 = LD88ro %stack.0, 0 :: (load (s16) from %stack.0)
+    $a = LD8ro %1, 0 :: (load (s8))
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...
+---
+name: clobbered_call
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 2, alignment: 1 }
+# CHECK-LABEL: name: clobbered_call
+# CHECK: bb.2:
+# CHECK: %1:i16 = LD88ro %stack.0
+body: |
+  bb.0:
+    liveins: $iy, $a
+    %0:i16 = COPY $iy
+    %0:i16 = INC16r %0
+    LD88or %stack.0, 0, %0 :: (store (s16) into %stack.0)
+    OR8aa implicit-def $f, implicit $a
+    JQCC %bb.2, 1, implicit $f
+  bb.1:
+    CALL16 @opaque, CustomRegMask($ix), implicit $sps
+  bb.2:
+    %1:i16 = LD88ro %stack.0, 0 :: (load (s16) from %stack.0)
+    $a = LD8ro %1, 0 :: (load (s8))
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...
+---
+name: physical_reload
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 2, alignment: 1 }
+# CHECK-LABEL: name: physical_reload
+# CHECK: bb.2:
+# CHECK: $iy = COPY %0
+body: |
+  bb.0:
+    liveins: $iy, $a
+    %0:i16 = COPY $iy
+    %0:i16 = INC16r %0
+    LD88or %stack.0, 0, %0 :: (store (s16) into %stack.0)
+    OR8aa implicit-def $f, implicit $a
+    JQCC %bb.2, 1, implicit $f
+  bb.1:
+    $a = LD8ri 9
+  bb.2:
+    $iy = LD88ro %stack.0, 0 :: (load (s16) from %stack.0)
+    $a = LD8ro $iy, 0 :: (load (s8))
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...
+---
+name: loop_update
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 2, alignment: 1 }
+# CHECK-LABEL: name: loop_update
+# CHECK: bb.2:
+# CHECK: %1:i16 = COPY %0
+body: |
+  bb.0:
+    liveins: $iy, $a
+    %0:i16 = COPY $iy
+    %0:i16 = INC16r %0
+    LD88or %stack.0, 0, %0 :: (store (s16) into %stack.0)
+    OR8aa implicit-def $f, implicit $a
+    JQCC %bb.2, 1, implicit $f
+  bb.1:
+    $a = LD8ri 9
+  bb.2:
+    %1:i16 = LD88ro %stack.0, 0 :: (load (s16) from %stack.0)
+    $a = LD8ro %1, 0 :: (load (s8))
+    $a = LD8ri 3
+  bb.3:
+    liveins: $a
+    %2:i16 = LD88ro %stack.0, 0 :: (load (s16) from %stack.0)
+    %2:i16 = INC16r %2
+    LD88or %stack.0, 0, %2 :: (store (s16) into %stack.0)
+    $a = DEC8r $a, implicit-def $f
+    JQCC %bb.3, 0, implicit $f
+  bb.4:
+    %3:i16 = LD88ro %stack.0, 0 :: (load (s16) from %stack.0)
+    $a = LD8ro %3, 0 :: (load (s8))
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...

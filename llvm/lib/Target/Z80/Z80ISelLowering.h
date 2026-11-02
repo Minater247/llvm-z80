@@ -85,6 +85,9 @@ class Z80TargetLowering final : public TargetLowering {
 public:
   Z80TargetLowering(const Z80TargetMachine &TM, const Z80Subtarget &STI);
 
+  bool isLegalAddressingMode(const DataLayout &DL, const AddrMode &AM, Type *Ty,
+                            unsigned AS, Instruction *I = nullptr) const override;
+
 private:
   unsigned getNumRegistersForCallingConv(LLVMContext &Context,
                                         CallingConv::ID CC,

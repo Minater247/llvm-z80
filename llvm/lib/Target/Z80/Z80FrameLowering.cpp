@@ -230,6 +230,14 @@ void Z80FrameLowering::emitPrologue(MachineFunction &MF,
   MachineFrameInfo &MFI = MF.getFrameInfo();
   int StackSize = -int(MFI.getStackSize());
   MCRegister ScratchReg = Is24Bit ? Z80::UHL : Z80::IY;
+  auto LiveAtEntry = [&](MCRegister Reg) {
+    return llvm::any_of(MBB.liveins(), [&](const auto &LiveIn) {
+      return TRI->regsOverlap(Reg, LiveIn.PhysReg);
+    });
+  };
+  bool PreserveIndexArgument = !Is24Bit && LiveAtEntry(ScratchReg);
+  if (PreserveIndexArgument)
+    ScratchReg = Z80::HL;
 
   // skip callee-saved saves
   while (MBBI != MBB.end() && MBBI->getFlag(MachineInstr::FrameSetup))
@@ -256,7 +264,7 @@ void Z80FrameLowering::emitPrologue(MachineFunction &MF,
   int FPOffset = -1;
   if (hasFP(MF)) {
     Register FrameReg = TRI->getFrameRegister(MF);
-    if (MF.getFunction().hasOptSize()) {
+    if (MF.getFunction().hasOptSize() && !PreserveIndexArgument) {
       if (StackSize) {
         BuildMI(MBB, MBBI, DL, TII.get(Is24Bit ? Z80::LD24ri : Z80::LD16ri),
                 ScratchReg)
@@ -344,8 +352,28 @@ void Z80FrameLowering::emitPrologue(MachineFunction &MF,
               nullptr, TRI->getDwarfRegNum(FrameReg, true))));
   }
 
-  BuildStackAdjustment(MF, MBB, MBBI, DL, ScratchReg, StackSize, FPOffset,
+  auto Method = getOptimalStackAdjustmentMethod(
+      MF, StackSize, FPOffset, Z80::I16RegClass.contains(ScratchReg), false);
+  bool SaveScratch = PreserveIndexArgument && LiveAtEntry(ScratchReg) &&
+                     (Method == SAM_Large || Method == SAM_Medium);
+  if (SaveScratch) {
+    /* A live input pair can temporarily occupy the first two frame bytes.
+       Restore it before local instructions initialize or spill into them. */
+    assert(hasFP(MF) && StackSize <= -2);
+    BuildMI(MBB, MBBI, DL, TII.get(Z80::PUSH16r))
+        .addReg(ScratchReg)
+        .setMIFlag(MachineInstr::FrameSetup);
+  }
+  BuildStackAdjustment(MF, MBB, MBBI, DL, ScratchReg,
+                       StackSize + (SaveScratch ? 2 : 0), FPOffset,
                        MachineInstr::FrameSetup);
+  if (SaveScratch)
+    for (auto [Reg, Offset] : {std::pair{Z80::L, -2},
+                              std::pair{Z80::H, -1}})
+      BuildMI(MBB, MBBI, DL, TII.get(Z80::LD8ro), Reg)
+          .addReg(TRI->getFrameRegister(MF))
+          .addImm(Offset)
+          .setMIFlag(MachineInstr::FrameSetup);
 }
 
 void Z80FrameLowering::emitEpilogue(MachineFunction &MF,
@@ -588,11 +616,11 @@ static bool hasEmptyFrame(MachineFunction &MF, ArrayRef<CalleeSavedInfo> CSI) {
   const auto &TRI = *ST.getRegisterInfo();
   const auto &TII = *ST.getInstrInfo();
   if (!CSI.empty() || MFI.getNumObjects() || MFI.hasVarSizedObjects() ||
-      MFI.isFrameAddressTaken() || MFI.isReturnAddressTaken() ||
-      MFI.hasStackMap() || MFI.hasPatchPoint() || F.isVarArg() ||
-      F.hasOptNone() || F.hasFnAttribute(Attribute::Naked) ||
-      F.hasFnAttribute("interrupt") || F.hasFnAttribute("static_stack_needs_ix") ||
-      MF.needsFrameMoves() ||
+      MFI.hasOpaqueSPAdjustment() || MFI.isFrameAddressTaken() ||
+      MFI.isReturnAddressTaken() || MFI.hasStackMap() || MFI.hasPatchPoint() ||
+      F.isVarArg() || F.hasOptNone() || F.hasFnAttribute(Attribute::Naked) ||
+      F.hasFnAttribute("interrupt") ||
+      F.hasFnAttribute("static_stack_needs_ix") || MF.needsFrameMoves() ||
       MF.getTarget().Options.DisableFramePointerElim(MF))
     return false;
   MCRegister FrameReg = ST.is24Bit() ? Z80::UIX : Z80::IX;
@@ -600,7 +628,14 @@ static bool hasEmptyFrame(MachineFunction &MF, ArrayRef<CalleeSavedInfo> CSI) {
     for (const auto &MI : MBB) {
       if (MI.isDebugInstr())
         continue;
-      if (MI.isInlineAsm() || MI.isCFIInstruction() ||
+      /* Inline assembly describes its register dependencies through operands
+         and clobbers. A memory clobber alone needs no frame; explicit stack
+         accesses retain the normal frame representation. */
+      if (MI.isCFIInstruction() ||
+          (MI.isInlineAsm() &&
+           (MI.readsRegister(ST.getRegisterInfo()->getStackRegister(), &TRI) ||
+            MI.modifiesRegister(ST.getRegisterInfo()->getStackRegister(),
+                                &TRI))) ||
           MI.readsRegister(FrameReg, &TRI) ||
           MI.modifiesRegister(FrameReg, &TRI) ||
           (TII.isFrameInstr(MI) && TII.getFrameAdjustment(MI)))

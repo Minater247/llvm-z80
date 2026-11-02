@@ -20,7 +20,7 @@ ret
 program = execution.Program(assembly)
 rng = random.Random(17)
 for value in range(256):
-    for name, address in (('constant_copy', 4660), ('updated_pointer', 4661)):
+    for name, address in (('constant_copy', 4660), ('updated_pointer', 4661), ('constant_add', 4133)):
         cpu = execution.CPU(rng)
         cpu.mem[4660] = value ^ 255
         cpu.mem[address] = value
@@ -30,4 +30,17 @@ for value in range(256):
         assert cpu.reads.count(address) == 1
         assert cpu.sp == sp + 2 and cpu.get('ix') == ix
         assert cpu.writes <= set(range(sp - 256, sp))
-print('512 bank constant executions passed')
+for low in range(256):
+    for high in (0, 63, 255):
+        cpu = execution.CPU(rng)
+        cpu.alt['d'], cpu.alt['e'] = high, low
+        expected = (high*256+low+1)&65535
+        saved = {r: cpu.get(r) for r in ('bc','de','hl','ix','iy')}
+        sp = cpu.sp
+        cpu.run(program, entry='bank_bytes')
+        assert cpu.get('a') == expected >> 8
+        assert cpu.mem[8192] == expected & 255
+        assert all(cpu.get(r) == v for r,v in saved.items())
+        assert cpu.sp == sp+2
+        assert cpu.writes <= set(range(sp-256,sp))|{8192}
+print('1536 bank constant and byte-observation executions passed')

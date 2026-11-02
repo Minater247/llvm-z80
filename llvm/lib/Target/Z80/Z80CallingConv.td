@@ -46,6 +46,8 @@ def CC_Z80_Reg : CallingConv<[
 
 def CC_Z80_C : CallingConv<[
   CCIfByVal<CCPassByVal<1, 1>>,
+  CCIfCC<"CallingConv::Fast", CCIf<"ArgFlags.isPointer()",
+      CCIfType<[ i16 ], CCAssignToReg<[ IY, DE, BC, HL ]>>>>,
   CCIfType<[ i1, i8 ], CCAssignToReg<[ E, D, C, B, L, H ]>>,
   CCIfType<[ i16 ], CCAssignToReg<[ DE, BC, HL ]>>,
   CCIfType<[ i16 ], CCAssignToStack<2, 1>>,
