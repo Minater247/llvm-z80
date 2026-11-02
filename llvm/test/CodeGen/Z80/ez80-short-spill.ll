@@ -2,6 +2,8 @@
 ; RUN: llc -regalloc=greedy -verify-machineinstrs -stop-after=virtregrewriter %s -o - | FileCheck %s
 ; RUN: llc -verify-machineinstrs %s -o /dev/null
 ; RUN: llc -regalloc=greedy -verify-machineinstrs %s -o /dev/null
+; RUN: llc -mtriple=z80 -verify-machineinstrs -stop-after=virtregrewriter %s -o - | FileCheck %s
+; RUN: llc -mtriple=z80 -regalloc=greedy -verify-machineinstrs -stop-after=virtregrewriter %s -o - | FileCheck %s
 
 target triple = "ez80"
 
@@ -14,8 +16,8 @@ declare void @clobber()
 ; Each live pair keeps its two-byte spill width while addresses use ADL mode.
 ; CHECK-LABEL: name: reload_pairs
 ; CHECK: size: 2, alignment: 1
-; CHECK: LD88or %stack.{{[0-9]+}}, 0,
-; CHECK: LD88ro %stack.{{[0-9]+}}, 0
+; CHECK: LD88or %stack.{{[0-9]+}}, 0, {{.*}} :: (store (s16) into %stack.
+; CHECK: LD88ro %stack.{{[0-9]+}}, 0 :: (load (s16) from %stack.
 define void @reload_pairs(i16 %x, i16 %y, i16 %z) {
   %a = mul i16 %x, 3
   %b = mul i16 %y, 5

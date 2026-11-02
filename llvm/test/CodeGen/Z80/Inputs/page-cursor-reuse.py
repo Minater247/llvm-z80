@@ -80,4 +80,21 @@ for start in range(256):
         assert cpu.sp == 0xf002 and cpu.get('ix') == ix
         assert cpu.trace == trace, ('shared_byte', start, source, cpu.trace)
         checks += 1
+for name, value in [('fill_zero', 0), ('fill_value', 173)]:
+    for start in range(256):
+        cpu = TraceCPU(rng)
+        cpu.put('c', start)
+        expected = bytearray(cpu.mem)
+        destinations = [0x3100 | ((start + i) & 255) for i in range(8)]
+        for dst in destinations:
+            expected[dst] = value
+        ix, alternate = cpu.get('ix'), dict(cpu.alt)
+        cpu.run(program, entry=name)
+        assert cpu.mem[:0xef00] == expected[:0xef00], (name, start)
+        assert cpu.mem[0xf002:] == expected[0xf002:]
+        assert cpu.writes <= set(destinations) | set(range(0xef00, 0xf000))
+        assert cpu.trace == [('write', dst, 1) for dst in destinations]
+        assert cpu.sp == 0xf002 and cpu.get('ix') == ix
+        assert cpu.alt == alternate
+        checks += 1
 print(f'Checked {checks} page-cursor executions')

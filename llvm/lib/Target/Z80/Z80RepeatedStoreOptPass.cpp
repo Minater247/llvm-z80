@@ -1,4 +1,4 @@
-//===-- Z80RepeatedStoreOptPass.cpp - Share constant addresses --------------===//
+//===-- Z80RepeatedStoreOptPass.cpp - Share store constants ----------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -10,6 +10,8 @@
 #include "Z80.h"
 #include "Z80InstrInfo.h"
 #include "Z80Subtarget.h"
+#include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/CodeGen/LiveRegUnits.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
@@ -52,8 +54,58 @@ bool Z80RepeatedStoreOptPass::runOnMachineFunction(MachineFunction &MF) {
     return false;
   auto &MRI = MF.getRegInfo();
   const auto &TII = *MF.getSubtarget().getInstrInfo();
+  const auto &TRI = *MF.getSubtarget().getRegisterInfo();
   bool Changed = false;
   for (auto &MBB : MF) {
+    SmallPtrSet<const MachineInstr *, 8> NeedsImmediate;
+    if (llvm::count_if(MBB, [](const MachineInstr &MI) {
+          return MI.getOpcode() == Z80::LD8pi;
+        }) >= 3) {
+      /* A fixed live byte cannot be evicted by allocation. Retain immediate
+         stores where every legal value register is occupied; splitting such
+         a use would create a byte interval with no possible assignment. */
+      LiveRegUnits Live(TRI);
+      Live.addLiveOuts(MBB);
+      for (const auto &MI : llvm::reverse(MBB)) {
+        Live.stepBackward(MI);
+        if (MI.getOpcode() == Z80::LD8pi &&
+            llvm::none_of(Z80::G8RegClass, [&](MCRegister R) {
+              return Live.available(R);
+            }))
+          NeedsImmediate.insert(&MI);
+      }
+    }
+    /* Repeated immediate stores cost three extra T-states and one extra
+       byte each. Three uses repay a seven-T-state, two-byte materialization.
+       Keep the shared value local so a call or a distant store does not
+       extend its lifetime through unrelated register pressure. */
+    for (auto I = MBB.begin(); I != MBB.end(); ++I) {
+      auto &First = *I;
+      if (First.getOpcode() != Z80::LD8pi || First.isBundled() ||
+          NeedsImmediate.contains(&First))
+        continue;
+      SmallVector<MachineInstr *, 8> Stores{&First};
+      unsigned Distance = 0;
+      for (auto J = std::next(I); J != MBB.end() && ++Distance <= 64; ++J) {
+        if (J->isCall() || J->isInlineAsm() || J->isTerminator() ||
+            J->isBundled())
+          break;
+        if (J->getOpcode() == Z80::LD8pi &&
+            !NeedsImmediate.contains(&*J) &&
+            J->getOperand(1).isIdenticalTo(First.getOperand(1)))
+          Stores.push_back(&*J);
+      }
+      if (Stores.size() < 3)
+        continue;
+      Register Value = MRI.createVirtualRegister(&Z80::G8RegClass);
+      BuildMI(MBB, First, First.getDebugLoc(), TII.get(Z80::LD8ri), Value)
+          .add(First.getOperand(1));
+      for (auto *Store : Stores) {
+        Store->setDesc(TII.get(Z80::LD8pg));
+        Store->getOperand(1).ChangeToRegister(Value, false);
+      }
+      Changed = true;
+    }
     for (auto I = MBB.begin(); I != MBB.end();) {
       auto &First = *I++;
       if (First.getOpcode() != Z80::LD8ma || First.isBundled())

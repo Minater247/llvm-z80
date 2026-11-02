@@ -13,6 +13,11 @@
   define void @ordered_store() { ret void }
   define void @call_barrier() { ret void }
   define void @offset_store() { ret void }
+  define void @ir_store(ptr %dst) { ret void }
+  define void @ir_load_store(ptr %dst) { ret void }
+  define void @unknown_store() { ret void }
+  define void @volatile_ir_store(ptr %dst) { ret void }
+  define void @ir_store_clobber(ptr %dst) { ret void }
 ...
 ---
 name: distinct_spills
@@ -227,4 +232,108 @@ body: |
     $hl = LD88ro %stack.0, 0
     LD88or %stack.0, 0, $hl
     RET16 implicit-def $sps, implicit $sps
+...
+---
+name: ir_store
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 2, alignment: 1 }
+# Private spills do not alias ordinary LLVM IR pointers.
+# CHECK-LABEL: name: ir_store
+# CHECK: liveins:
+# CHECK-NOT: LD88or
+# CHECK: LD8pa $de, $a
+# CHECK-NEXT: $hl = INC16r $hl
+# CHECK-NEXT: RET16
+body: |
+  bb.0:
+    liveins: $hl, $de, $a
+    LD88or %stack.0, 0, $hl :: (store (s16) into %stack.0)
+    LD8pa $de, $a :: (store (s8) into %ir.dst)
+    $hl = LD88ro %stack.0, 0 :: (load (s16) from %stack.0)
+    $hl = INC16r $hl
+    RET16 implicit-def $sps, implicit $sps, implicit $hl
+...
+---
+name: ir_load_store
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 2, alignment: 1 }
+# A later spill overwrites its old value across disjoint reads and writes.
+# CHECK-LABEL: name: ir_load_store
+# CHECK: liveins:
+# CHECK-NOT: LD88or
+# CHECK: $a = LD8ap $de
+# CHECK-NEXT: LD8pa $de, $a
+# CHECK-NEXT: $hl = INC16r $hl
+# CHECK-NEXT: LD88or %stack.0, 0, $hl
+# CHECK-NEXT: CALL16 @opaque
+# CHECK: $de = LD88ro %stack.0, 0
+body: |
+  bb.0:
+    liveins: $hl, $de
+    LD88or %stack.0, 0, $hl :: (store (s16) into %stack.0)
+    $a = LD8ap $de :: (load (s8) from %ir.dst)
+    LD8pa $de, $a :: (store (s8) into %ir.dst)
+    $hl = INC16r $hl
+    LD88or %stack.0, 0, $hl :: (store (s16) into %stack.0)
+    CALL16 @opaque, csr_z80_c, implicit $sps
+    $de = LD88ro %stack.0, 0 :: (load (s16) from %stack.0)
+    RET16 implicit-def $sps, implicit $sps, implicit $de
+...
+---
+name: unknown_store
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 2, alignment: 1 }
+# Missing memory information remains a barrier.
+# CHECK-LABEL: name: unknown_store
+# CHECK: LD88or %stack.0, 0, $hl
+# CHECK-NEXT: LD8pa $de, $a
+# CHECK-NEXT: $hl = LD88ro %stack.0, 0
+body: |
+  bb.0:
+    liveins: $hl, $de, $a
+    LD88or %stack.0, 0, $hl :: (store (s16) into %stack.0)
+    LD8pa $de, $a
+    $hl = LD88ro %stack.0, 0 :: (load (s16) from %stack.0)
+    RET16 implicit-def $sps, implicit $sps, implicit $hl
+...
+---
+name: volatile_ir_store
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 2, alignment: 1 }
+# Ordered accesses still delimit the bounded forwarding region.
+# CHECK-LABEL: name: volatile_ir_store
+# CHECK: LD88or %stack.0, 0, $hl
+# CHECK-NEXT: LD8pa $de, $a
+# CHECK-NEXT: $hl = LD88ro %stack.0, 0
+body: |
+  bb.0:
+    liveins: $hl, $de, $a
+    LD88or %stack.0, 0, $hl :: (store (s16) into %stack.0)
+    LD8pa $de, $a :: (volatile store (s8) into %ir.dst)
+    $hl = LD88ro %stack.0, 0 :: (load (s16) from %stack.0)
+    RET16 implicit-def $sps, implicit $sps, implicit $hl
+...
+---
+name: ir_store_clobber
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 2, alignment: 1 }
+# A partial register clobber prevents reuse even when memory is disjoint.
+# CHECK-LABEL: name: ir_store_clobber
+# CHECK: LD88or %stack.0, 0, $hl
+# CHECK-NEXT: LD8pa $de, $a
+# CHECK-NEXT: $l = INC8r $l
+# CHECK-NEXT: $hl = LD88ro %stack.0, 0
+body: |
+  bb.0:
+    liveins: $hl, $de, $a
+    LD88or %stack.0, 0, $hl :: (store (s16) into %stack.0)
+    LD8pa $de, $a :: (store (s8) into %ir.dst)
+    $l = INC8r $l, implicit-def dead $f
+    $hl = LD88ro %stack.0, 0 :: (load (s16) from %stack.0)
+    RET16 implicit-def $sps, implicit $sps, implicit $hl
 ...

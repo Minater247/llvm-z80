@@ -253,6 +253,128 @@ static bool selectBankInstructions(MachineFunction &MF) {
   return changed;
 }
 
+/// Update local byte cursors in their address-pair lane. A byte copied into
+/// one pair and used only by subsequent increment/decrement copies shares that
+/// lane through the chain. Other pair definitions and escaping bytes retain
+/// their separate lifetimes.
+static bool coalesceCursorUpdates(MachineFunction &MF) {
+  if (!MF.getSubtarget<Z80Subtarget>().is16Bit())
+    return false;
+  auto &MRI = MF.getRegInfo();
+  bool Changed = false;
+  for (auto &MBB : MF) {
+    DenseMap<const MachineInstr *, unsigned> Positions;
+    for (auto &First : MBB) {
+      if (!First.isCopy() || First.isBundled() || First.getNumOperands() != 2)
+        continue;
+      const auto &Dst = First.getOperand(0);
+      const auto &Src = First.getOperand(1);
+      Register Pair = Dst.getReg(), Byte = Src.getReg();
+      unsigned Sub = Dst.getSubReg();
+      if (!Pair.isVirtual() || !Byte.isVirtual() || Src.getSubReg() ||
+          Src.isUndef() || (Sub != Z80::sub_low && Sub != Z80::sub_high) ||
+          !Z80::R16RegClass.hasSubClassEq(MRI.getRegClass(Pair)) ||
+          !Z80::R8RegClass.hasSubClassEq(MRI.getRegClass(Byte)))
+        continue;
+      // A construction and two updates are required to remove two copies.
+      if (!llvm::hasNItemsOrMore(MRI.def_operands(Byte), 3))
+        continue;
+      if (Positions.empty()) {
+        unsigned Position = 0;
+        for (const auto &MI : MBB)
+          Positions[&MI] = Position++;
+      }
+      unsigned Start = Positions[&First], Last = Start, Budget = 128;
+      bool Eligible = true;
+      const MachineInstr *FirstByte = &First;
+      for (const auto &MO : MRI.reg_nodbg_operands(Byte)) {
+        const auto *MI = MO.getParent();
+        if (!Budget-- || MI->getParent() != &MBB || MI->isBundled()) {
+          Eligible = false;
+          break;
+        }
+        unsigned At = Positions.lookup(MI);
+        Last = std::max(Last, At);
+        if (At < Positions.lookup(FirstByte))
+          FirstByte = MI;
+      }
+      if (!Eligible || FirstByte == &First ||
+          FirstByte->readsVirtualRegister(Byte) || Last - Start > 128)
+        continue;
+      SmallVector<MachineInstr *, 8> Updates, Copies;
+      for (auto It = std::next(First.getIterator());
+           It != MBB.end() && Positions.lookup(&*It) <= Last; ++It) {
+        auto &MI = *It;
+        if (MI.isDebugInstr())
+          continue;
+        if (MI.isCall() || MI.isInlineAsm() || MI.isTerminator() ||
+            MI.isBundled()) {
+          Eligible = false;
+          break;
+        }
+        bool UsesByte = false;
+        for (const auto &MO : MI.operands()) {
+          if (MO.isRegMask() ||
+              (MO.isReg() && MO.getReg() == Pair && MO.isDef() &&
+               (!MO.getSubReg() || MO.getSubReg() == Sub || MO.isUndef())))
+            Eligible = false;
+          UsesByte |= MO.isReg() && MO.getReg() == Byte;
+        }
+        if (!Eligible)
+          break;
+        if (!UsesByte)
+          continue;
+        if ((MI.getOpcode() != Z80::INC8r && MI.getOpcode() != Z80::DEC8r) ||
+            MI.getOperand(0).getReg() != Byte ||
+            MI.getOperand(1).getReg() != Byte ||
+            MI.getOperand(1).isUndef()) {
+          Eligible = false;
+          break;
+        }
+        auto Next = std::next(It);
+        while (Next != MBB.end() && Next->isDebugInstr())
+          ++Next;
+        if (Next == MBB.end() || !Next->isCopy() || Next->isBundled() ||
+            Next->getNumOperands() != 2 ||
+            Next->getOperand(0).getReg() != Pair ||
+            Next->getOperand(0).getSubReg() != Sub ||
+            Next->getOperand(0).isUndef() ||
+            Next->getOperand(1).getReg() != Byte ||
+            Next->getOperand(1).getSubReg() ||
+            Next->getOperand(1).isUndef()) {
+          Eligible = false;
+          break;
+        }
+        Updates.push_back(&MI);
+        Copies.push_back(&*Next);
+        It = Next;
+      }
+      if (!Eligible || Updates.size() < 2)
+        continue;
+      /* The pair holds the byte at entry and every update is immediately
+         copied back. Updating its lane in place preserves both the observed
+         addresses and arithmetic flags, while removing the overlapping byte
+         range that prevented ordinary copy coalescing. */
+      for (auto *MI : Updates)
+        for (unsigned Op : {0u, 1u}) {
+          auto &MO = MI->getOperand(Op);
+          MO.setReg(Pair);
+          MO.setSubReg(Sub);
+          if (MO.isDef()) {
+            MO.setIsUndef(false);
+            MO.setIsDead(false);
+          } else
+            MO.setIsKill(false);
+        }
+      for (auto *MI : Copies)
+        MI->eraseFromParent();
+      MRI.markUsesInDebugValueAsUndef(Byte);
+      Changed = true;
+    }
+  }
+  return Changed;
+}
+
 /// Allocate independently changing byte lanes between word uses. The selected
 /// stable lane can hold a constant or a value defined once across blocks;
 /// constants are rematerialized at their uses. Word definitions update both
@@ -1333,6 +1455,7 @@ bool Z80MachinePreRAOptimization::runOnMachineFunction(MachineFunction &MF) {
     }
   }
 
+  Changed |= coalesceCursorUpdates(MF);
   Changed |= separateStableLanes(MF, Z80::sub_high);
   Changed |= separateStableLanes(MF, Z80::sub_low);
   return selectBankInstructions(MF) || Changed;

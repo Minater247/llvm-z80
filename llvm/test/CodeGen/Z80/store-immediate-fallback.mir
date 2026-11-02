@@ -1,0 +1,76 @@
+# RUN: llc -run-pass=regallocbasic,virtregrewriter -verify-machineinstrs %s -o - | FileCheck %s
+#
+# Exercise immediate folding when a rematerialized byte has no free register.
+# Both constant definitions and both store addressing modes preserve MMOs.
+--- |
+  target triple = "z80"
+  define void @literal_byte() { ret void }
+  define void @zero_byte() { ret void }
+  define void @offset_byte() { ret void }
+...
+---
+name: literal_byte
+tracksRegLiveness: true
+# CHECK-LABEL: name: literal_byte
+# CHECK: stack: []
+# CHECK: bb.0:
+# CHECK: liveins:
+# CHECK-NOT: LD8ri
+# CHECK-NOT: LD8r0
+# CHECK: LD8pi $hl, 173 :: (volatile store (s8))
+# CHECK-NEXT: LD8pi $hl, 173 :: (volatile store (s8))
+# CHECK-NEXT: LD8pi $hl, 173 :: (volatile store (s8))
+# CHECK-NEXT: RET16
+body: |
+  bb.0:
+    liveins: $hl, $de, $bc, $a, $iy
+    %0:g8 = LD8ri 173
+    LD8pg $hl, %0 :: (volatile store (s8))
+    LD8pg $hl, %0 :: (volatile store (s8))
+    LD8pg $hl, %0 :: (volatile store (s8))
+    RET16 implicit-def $sps, implicit $sps, implicit $hl, implicit $de, implicit $bc, implicit $a, implicit $iy
+...
+---
+name: zero_byte
+tracksRegLiveness: true
+# CHECK-LABEL: name: zero_byte
+# CHECK: stack: []
+# CHECK: bb.0:
+# CHECK: liveins:
+# CHECK-NOT: LD8ri
+# CHECK-NOT: LD8r0
+# CHECK: LD8pi $hl, 0 :: (volatile store (s8))
+# CHECK-NEXT: LD8pi $hl, 0 :: (volatile store (s8))
+# CHECK-NEXT: LD8pi $hl, 0 :: (volatile store (s8))
+# CHECK-NEXT: RET16
+body: |
+  bb.0:
+    liveins: $hl, $de, $bc, $a, $iy
+    %0:g8 = LD8r0
+    LD8pg $hl, %0 :: (volatile store (s8))
+    LD8pg $hl, %0 :: (volatile store (s8))
+    LD8pg $hl, %0 :: (volatile store (s8))
+    RET16 implicit-def $sps, implicit $sps, implicit $hl, implicit $de, implicit $bc, implicit $a, implicit $iy
+...
+---
+name: offset_byte
+tracksRegLiveness: true
+# CHECK-LABEL: name: offset_byte
+# CHECK: stack: []
+# CHECK: bb.0:
+# CHECK: liveins:
+# CHECK-NOT: LD8ri
+# CHECK-NOT: LD8r0
+# CHECK: LD8oi $iy, 7, 83 :: (volatile store (s8))
+# CHECK-NEXT: LD8oi $iy, 7, 83 :: (volatile store (s8))
+# CHECK-NEXT: LD8oi $iy, 7, 83 :: (volatile store (s8))
+# CHECK-NEXT: RET16
+body: |
+  bb.0:
+    liveins: $hl, $de, $bc, $a, $iy
+    %0:g8 = LD8ri 83
+    LD8og $iy, 7, %0 :: (volatile store (s8))
+    LD8og $iy, 7, %0 :: (volatile store (s8))
+    LD8og $iy, 7, %0 :: (volatile store (s8))
+    RET16 implicit-def $sps, implicit $sps, implicit $hl, implicit $de, implicit $bc, implicit $a, implicit $iy
+...

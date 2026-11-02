@@ -1028,12 +1028,18 @@ void Z80InstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
   const DebugLoc &DL = MBB.findDebugLoc(MI);
   bool Is24Bit = Subtarget.is24Bit();
 
+  auto &MF = *MBB.getParent();
+  auto *MMO = MF.getMachineMemOperand(
+      MachinePointerInfo::getFixedStack(MF, FI), MachineMemOperand::MOStore,
+      TRI->getSpillSize(*TRC), MF.getFrameInfo().getObjectAlign(FI));
+
   if (TRC->contains(Z80::HL_ALT) || TRC->contains(Z80::DE_ALT) ||
       TRC->contains(Z80::BC_ALT)) {
     BuildMI(MBB, MI, DL, get(Z80::BANK_LD16or))
         .addFrameIndex(FI)
         .addImm(0)
-        .addReg(SrcReg, getKillRegState(IsKill));
+        .addReg(SrcReg, getKillRegState(IsKill))
+        .addMemOperand(MMO);
     return;
   }
 
@@ -1077,7 +1083,8 @@ void Z80InstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
     break;
   }
   BuildMI(MBB, MI, DL, get(Opc))
-      .addFrameIndex(FI).addImm(0).addReg(SrcReg, getKillRegState(IsKill));
+      .addFrameIndex(FI).addImm(0).addReg(SrcReg, getKillRegState(IsKill))
+      .addMemOperand(MMO);
 }
 
 void Z80InstrInfo::loadRegFromStackSlot(MachineBasicBlock &MBB,
@@ -1092,11 +1099,17 @@ void Z80InstrInfo::loadRegFromStackSlot(MachineBasicBlock &MBB,
   const DebugLoc &DL = MBB.findDebugLoc(MI);
   bool Is24Bit = Subtarget.is24Bit();
 
+  auto &MF = *MBB.getParent();
+  auto *MMO = MF.getMachineMemOperand(
+      MachinePointerInfo::getFixedStack(MF, FI), MachineMemOperand::MOLoad,
+      TRI->getSpillSize(*TRC), MF.getFrameInfo().getObjectAlign(FI));
+
   if (TRC->contains(Z80::HL_ALT) || TRC->contains(Z80::DE_ALT) ||
       TRC->contains(Z80::BC_ALT)) {
     BuildMI(MBB, MI, DL, get(Z80::BANK_LD16ro), DstReg)
         .addFrameIndex(FI)
-        .addImm(0);
+        .addImm(0)
+        .addMemOperand(MMO);
     return;
   }
 
@@ -1141,7 +1154,8 @@ void Z80InstrInfo::loadRegFromStackSlot(MachineBasicBlock &MBB,
         DstReg = SuperReg;
     break;
   }
-  BuildMI(MBB, MI, DL, get(Opc), DstReg).addFrameIndex(FI).addImm(0);
+  BuildMI(MBB, MI, DL, get(Opc), DstReg).addFrameIndex(FI).addImm(0)
+      .addMemOperand(MMO);
 }
 
 /// Return true and the FrameIndex if the specified
@@ -2542,6 +2556,35 @@ Z80InstrInfo::foldMemoryOperandImpl(MachineFunction &MF, MachineInstr &MI,
 
   if (Ops.size() != 1)
     return nullptr;
+
+  /* A shared store value can return to immediate form under pressure.
+     Retaining the immediate alternative lets the spiller release its byte
+     register without adding a rematerialization before every store. */
+  if (LoadMI.getOpcode() == Z80::LD8ri ||
+      LoadMI.getOpcode() == Z80::LD8r0) {
+    unsigned Opc = 0;
+    if (Ops[0] == 1 &&
+        (MI.getOpcode() == Z80::LD8pg || MI.getOpcode() == Z80::LD8pr))
+      Opc = Z80::LD8pi;
+    else if (Ops[0] == 2 &&
+             (MI.getOpcode() == Z80::LD8og || MI.getOpcode() == Z80::LD8or))
+      Opc = Z80::LD8oi;
+    if (!Opc)
+      return nullptr;
+    MachineInstrBuilder Folded(
+        MF, MF.CreateMachineInstr(get(Opc), MI.getDebugLoc(), true));
+    for (unsigned Op = 0; Op != MI.getNumOperands(); ++Op) {
+      if (Op != Ops[0])
+        Folded.add(MI.getOperand(Op));
+      else if (LoadMI.getOpcode() == Z80::LD8r0)
+        Folded.addImm(0);
+      else
+        Folded.add(LoadMI.getOperand(1));
+    }
+    Folded.setMIFlags(MI.getFlags());
+    MI.getParent()->insert(InsertPt, Folded);
+    return Folded;
+  }
 
   // Fold a rematerialized constant address into an accumulator access. This
   // lets allocation release a shared address when retaining it would spill.

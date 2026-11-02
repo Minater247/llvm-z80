@@ -205,3 +205,93 @@ define void @shared_byte(ptr %source, i8 %start) {
   store volatile i8 %v2, ptr %d2
   ret void
 }
+
+define void @fill_zero(ptr %unused, i8 %start) {
+; CHECK-LABEL: name: fill_zero
+  %b0 = add i8 %start, 0
+  %z0 = zext i8 %b0 to i16
+  %a0 = or i16 %z0, 12544
+  %d0 = inttoptr i16 %a0 to ptr
+  store volatile i8 0, ptr %d0
+  %b1 = add i8 %start, 1
+  %z1 = zext i8 %b1 to i16
+  %a1 = or i16 %z1, 12544
+  %d1 = inttoptr i16 %a1 to ptr
+  store volatile i8 0, ptr %d1
+  %b2 = add i8 %start, 2
+  %z2 = zext i8 %b2 to i16
+  %a2 = or i16 %z2, 12544
+  %d2 = inttoptr i16 %a2 to ptr
+  store volatile i8 0, ptr %d2
+  %b3 = add i8 %start, 3
+  %z3 = zext i8 %b3 to i16
+  %a3 = or i16 %z3, 12544
+  %d3 = inttoptr i16 %a3 to ptr
+  store volatile i8 0, ptr %d3
+  %b4 = add i8 %start, 4
+  %z4 = zext i8 %b4 to i16
+  %a4 = or i16 %z4, 12544
+  %d4 = inttoptr i16 %a4 to ptr
+  store volatile i8 0, ptr %d4
+  %b5 = add i8 %start, 5
+  %z5 = zext i8 %b5 to i16
+  %a5 = or i16 %z5, 12544
+  %d5 = inttoptr i16 %a5 to ptr
+  store volatile i8 0, ptr %d5
+  %b6 = add i8 %start, 6
+  %z6 = zext i8 %b6 to i16
+  %a6 = or i16 %z6, 12544
+  %d6 = inttoptr i16 %a6 to ptr
+  store volatile i8 0, ptr %d6
+  %b7 = add i8 %start, 7
+  %z7 = zext i8 %b7 to i16
+  %a7 = or i16 %z7, 12544
+  %d7 = inttoptr i16 %a7 to ptr
+  store volatile i8 0, ptr %d7
+  ret void
+}
+
+define void @fill_value(ptr %unused, i8 %start) {
+; CHECK-LABEL: name: fill_value
+  %b0 = add i8 %start, 0
+  %z0 = zext i8 %b0 to i16
+  %a0 = or i16 %z0, 12544
+  %d0 = inttoptr i16 %a0 to ptr
+  store volatile i8 173, ptr %d0
+  %b1 = add i8 %start, 1
+  %z1 = zext i8 %b1 to i16
+  %a1 = or i16 %z1, 12544
+  %d1 = inttoptr i16 %a1 to ptr
+  store volatile i8 173, ptr %d1
+  %b2 = add i8 %start, 2
+  %z2 = zext i8 %b2 to i16
+  %a2 = or i16 %z2, 12544
+  %d2 = inttoptr i16 %a2 to ptr
+  store volatile i8 173, ptr %d2
+  %b3 = add i8 %start, 3
+  %z3 = zext i8 %b3 to i16
+  %a3 = or i16 %z3, 12544
+  %d3 = inttoptr i16 %a3 to ptr
+  store volatile i8 173, ptr %d3
+  %b4 = add i8 %start, 4
+  %z4 = zext i8 %b4 to i16
+  %a4 = or i16 %z4, 12544
+  %d4 = inttoptr i16 %a4 to ptr
+  store volatile i8 173, ptr %d4
+  %b5 = add i8 %start, 5
+  %z5 = zext i8 %b5 to i16
+  %a5 = or i16 %z5, 12544
+  %d5 = inttoptr i16 %a5 to ptr
+  store volatile i8 173, ptr %d5
+  %b6 = add i8 %start, 6
+  %z6 = zext i8 %b6 to i16
+  %a6 = or i16 %z6, 12544
+  %d6 = inttoptr i16 %a6 to ptr
+  store volatile i8 173, ptr %d6
+  %b7 = add i8 %start, 7
+  %z7 = zext i8 %b7 to i16
+  %a7 = or i16 %z7, 12544
+  %d7 = inttoptr i16 %a7 to ptr
+  store volatile i8 173, ptr %d7
+  ret void
+}

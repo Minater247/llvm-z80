@@ -1,0 +1,166 @@
+# RUN: llc -run-pass=z80-machine-prera-opt,z80-prepare-live-ranges -verify-machineinstrs %s -o - | FileCheck %s
+# RUN: %python %S/Inputs/cursor-copy-chains.py --llc llc --mir %s --work %t
+#
+# Repeated byte updates can share a pair lane when each result is copied back
+# immediately. Escaping values, intervening observations and calls retain their
+# independent ranges.
+--- |
+  target triple = "z80"
+  declare void @opaque()
+  define void @low_copies() { ret void }
+  define void @high_copies() { ret void }
+  define void @escaping_byte() { ret void }
+  define void @observed_pair() { ret void }
+  define void @call_boundary() { ret void }
+...
+---
+name: low_copies
+tracksRegLiveness: true
+# CHECK-LABEL: name: low_copies
+# CHECK: %2.sub_low:r16 = COPY %1
+# CHECK-NEXT: $a = LD8ri 17
+# CHECK-NEXT: LD8pa %2, $a
+# CHECK-NEXT: %2.sub_low:r16 = INC8r %2.sub_low
+# CHECK-NEXT: LD8pa %2, $a
+# CHECK-NEXT: %2.sub_low:r16 = INC8r %2.sub_low
+# CHECK-NEXT: LD8pa %2, $a
+body: |
+  bb.0:
+    liveins: $e
+    undef %0.sub_low:r16 = COPY $e
+    %0.sub_high:r16 = LD8ri 49
+    %1:r8 = COPY %0.sub_low
+    %1:r8 = INC8r %1, implicit-def dead $f
+    %2:r16 = COPY %0
+    %2.sub_low:r16 = COPY %1
+    $a = LD8ri 17
+    LD8pa %2, $a :: (volatile store (s8))
+    %1:r8 = INC8r %1, implicit-def dead $f
+    %2.sub_low:r16 = COPY %1
+    LD8pa %2, $a :: (volatile store (s8))
+    %1:r8 = INC8r %1, implicit-def dead $f
+    %2.sub_low:r16 = COPY %1
+    LD8pa %2, $a :: (volatile store (s8))
+    $de = COPY %2
+    RET16 implicit-def $sps, implicit $sps, implicit $de
+...
+---
+name: high_copies
+tracksRegLiveness: true
+# CHECK-LABEL: name: high_copies
+# CHECK: %2.sub_high:r16 = COPY %1
+# CHECK-NEXT: $a = LD8ri 17
+# CHECK-NEXT: LD8pa %2, $a
+# CHECK-NEXT: %2.sub_high:r16 = DEC8r %2.sub_high
+# CHECK-NEXT: LD8pa %2, $a
+# CHECK-NEXT: %2.sub_high:r16 = DEC8r %2.sub_high
+# CHECK-NEXT: LD8pa %2, $a
+body: |
+  bb.0:
+    liveins: $e
+    undef %0.sub_high:r16 = COPY $e
+    %0.sub_low:r16 = LD8ri 49
+    %1:r8 = COPY %0.sub_high
+    %1:r8 = DEC8r %1, implicit-def dead $f
+    %2:r16 = COPY %0
+    %2.sub_high:r16 = COPY %1
+    $a = LD8ri 17
+    LD8pa %2, $a :: (volatile store (s8))
+    %1:r8 = DEC8r %1, implicit-def dead $f
+    %2.sub_high:r16 = COPY %1
+    LD8pa %2, $a :: (volatile store (s8))
+    %1:r8 = DEC8r %1, implicit-def dead $f
+    %2.sub_high:r16 = COPY %1
+    LD8pa %2, $a :: (volatile store (s8))
+    $de = COPY %2
+    RET16 implicit-def $sps, implicit $sps, implicit $de
+...
+---
+name: escaping_byte
+tracksRegLiveness: true
+# CHECK-LABEL: name: escaping_byte
+# CHECK: %1:r8 = INC8r %1
+# CHECK: %2.sub_low:r16 = COPY %1
+# CHECK: %1:r8 = INC8r %1
+# CHECK: %2.sub_low:r16 = COPY %1
+body: |
+  bb.0:
+    liveins: $e
+    undef %0.sub_low:r16 = COPY $e
+    %0.sub_high:r16 = LD8ri 49
+    %1:r8 = COPY %0.sub_low
+    %1:r8 = INC8r %1, implicit-def dead $f
+    %2:r16 = COPY %0
+    %2.sub_low:r16 = COPY %1
+    $a = LD8ri 17
+    LD8pa %2, $a :: (volatile store (s8))
+    %1:r8 = INC8r %1, implicit-def dead $f
+    %2.sub_low:r16 = COPY %1
+    LD8pa %2, $a :: (volatile store (s8))
+    %1:r8 = INC8r %1, implicit-def dead $f
+    %2.sub_low:r16 = COPY %1
+    LD8pa %2, $a :: (volatile store (s8))
+    $b = COPY %1
+    $de = COPY %2
+    RET16 implicit-def $sps, implicit $sps, implicit $de, implicit $b
+...
+---
+name: observed_pair
+tracksRegLiveness: true
+# CHECK-LABEL: name: observed_pair
+# CHECK: %1:r8 = INC8r %1
+# CHECK: %2.sub_low:r16 = COPY %1
+# CHECK: %1:r8 = INC8r %1
+# CHECK: %2.sub_low:r16 = COPY %1
+body: |
+  bb.0:
+    liveins: $e
+    undef %0.sub_low:r16 = COPY $e
+    %0.sub_high:r16 = LD8ri 49
+    %1:r8 = COPY %0.sub_low
+    %1:r8 = INC8r %1, implicit-def dead $f
+    %2:r16 = COPY %0
+    %2.sub_low:r16 = COPY %1
+    $a = LD8ri 17
+    LD8pa %2, $a :: (volatile store (s8))
+    %1:r8 = INC8r %1, implicit-def dead $f
+    $a = LD8ri 34
+    LD8pa %2, $a :: (volatile store (s8))
+    %2.sub_low:r16 = COPY %1
+    LD8pa %2, $a :: (volatile store (s8))
+    %1:r8 = INC8r %1, implicit-def dead $f
+    %2.sub_low:r16 = COPY %1
+    LD8pa %2, $a :: (volatile store (s8))
+    $de = COPY %2
+    RET16 implicit-def $sps, implicit $sps, implicit $de
+...
+---
+name: call_boundary
+tracksRegLiveness: true
+# CHECK-LABEL: name: call_boundary
+# CHECK: %1:r8 = INC8r %1
+# CHECK: %2.sub_low:r16 = COPY %1
+# CHECK: %1:r8 = INC8r %1
+# CHECK: %2.sub_low:r16 = COPY %1
+body: |
+  bb.0:
+    liveins: $e
+    undef %0.sub_low:r16 = COPY $e
+    %0.sub_high:r16 = LD8ri 49
+    %1:r8 = COPY %0.sub_low
+    %1:r8 = INC8r %1, implicit-def dead $f
+    %2:r16 = COPY %0
+    %2.sub_low:r16 = COPY %1
+    $a = LD8ri 17
+    LD8pa %2, $a :: (volatile store (s8))
+    CALL16 @opaque, csr_z80_c, implicit $sps
+    $a = LD8ri 17
+    %1:r8 = INC8r %1, implicit-def dead $f
+    %2.sub_low:r16 = COPY %1
+    LD8pa %2, $a :: (volatile store (s8))
+    %1:r8 = INC8r %1, implicit-def dead $f
+    %2.sub_low:r16 = COPY %1
+    LD8pa %2, $a :: (volatile store (s8))
+    $de = COPY %2
+    RET16 implicit-def $sps, implicit $sps, implicit $de
+...

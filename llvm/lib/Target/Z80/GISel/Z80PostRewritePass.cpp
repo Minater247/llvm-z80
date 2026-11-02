@@ -171,11 +171,14 @@ bool llvm::reuseZ80SpillLoads(MachineFunction &MF, SlotIndexes *Indexes) {
           changed = true;
           break;
         }
-        if (Prev.mayStore() &&
-            (!Stored || PrevFI == FI || PrevFI < 0 ||
-             !MFI.isSpillSlotObjectIndex(PrevFI) ||
-             (!Prev.memoperands_empty() && Prev.hasOrderedMemoryRef())))
-          break;
+        if (Prev.mayStore()) {
+          bool OtherSpill = Stored && PrevFI != FI && PrevFI >= 0 &&
+                            MFI.isSpillSlotObjectIndex(PrevFI);
+          if ((!Prev.memoperands_empty() && Prev.hasOrderedMemoryRef()) ||
+              (!OtherSpill &&
+               MI.mayAlias(static_cast<AAResults *>(nullptr), Prev, false)))
+            break;
+        }
         if (Prev.modifiesRegister(Dst, &TRI))
           break;
       }
@@ -183,8 +186,9 @@ bool llvm::reuseZ80SpillLoads(MachineFunction &MF, SlotIndexes *Indexes) {
   }
   // Forwarding can expose a spill overwritten before any memory access.
   // A private spill cannot be observed asynchronously; keep this deliberately
-  // local and stop at unknown memory operations, calls and control flow.
-  // Accesses to distinct private frame objects cannot alias this spill.
+  // local and stop at potentially aliasing accesses, calls and control flow.
+  // LLVM IR memory references cannot alias private spill objects; preserving
+  // that distinction lets cursor updates remain in registers across stores.
   for (auto &MBB : MF) {
     for (auto &MI : MBB) {
       int FI;
@@ -213,7 +217,8 @@ bool llvm::reuseZ80SpillLoads(MachineFunction &MF, SlotIndexes *Indexes) {
           if ((!TII.isLoadFromStackSlot(Prev, PrevFI) &&
                !TII.isStoreToStackSlot(Prev, PrevFI)) ||
               PrevFI == FI || PrevFI < 0 || !MFI.isSpillSlotObjectIndex(PrevFI))
-            break;
+            if (MI.mayAlias(static_cast<AAResults *>(nullptr), Prev, false))
+              break;
         }
       }
     }

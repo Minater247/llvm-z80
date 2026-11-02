@@ -448,6 +448,7 @@ let Defs = [UHL], Uses = [I, MB] in
 def LD24ai : I24<EDPre, 0xD7, "ld", "\thl, i">;
 
 let isMoveImm = true, isReMaterializable = true in {
+  let canFoldAsLoad = true in
   def LD8r0   : Pseudo<"ld", "\t$dst, 0",  "",
                        (outs  R8:$dst), (ins), [(set  R8:$dst,  0)]>;
   def LD24r0  : Pseudo<"ld", "\t$dst, 0",  "",
@@ -455,6 +456,7 @@ let isMoveImm = true, isReMaterializable = true in {
   def LD24r_1 : Pseudo<"ld", "\t$dst, -1", "",
                        (outs R24:$dst), (ins), [(set R24:$dst,
                                                      !sub(!shl(1, 24), 1))]>;
+  let canFoldAsLoad = true in
   def LD8ri  : Ii  <Idx0Pre, 0x06, "ld", "\t$dst, $src", "",
                     (outs  R8:$dst), (ins  i8imm:$src),
                     [(set  R8:$dst, imm:$src)]>;

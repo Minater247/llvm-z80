@@ -1,0 +1,89 @@
+# RUN: llc -run-pass=z80-repeated-store-opt -verify-machineinstrs %s -o - | FileCheck %s
+# RUN: llc -run-pass=z80-repeated-store-opt,z80-regalloc,virtregrewriter -verify-machineinstrs %s -o - | FileCheck %s --check-prefix=RA
+# RUN: llc -run-pass=z80-repeated-store-opt,greedy,virtregrewriter -verify-machineinstrs %s -o - | FileCheck %s --check-prefix=RA
+--- |
+  target triple = "z80"
+  declare void @opaque()
+  define void @shared_value() { ret void }
+  define void @value_pressure() { ret void }
+  define void @separate_calls() { ret void }
+  define void @different_values() { ret void }
+...
+---
+name: shared_value
+tracksRegLiveness: true
+# CHECK-LABEL: name: shared_value
+# CHECK: %0:g8 = LD8ri 173
+# CHECK-NEXT: LD8pg $hl, %0 :: (volatile store (s8))
+# CHECK-NEXT: $l = INC8r $l
+# CHECK-NEXT: LD8pg $hl, %0 :: (volatile store (s8))
+# CHECK-NEXT: $l = INC8r $l
+# CHECK-NEXT: LD8pg $hl, %0 :: (volatile store (s8))
+body: |
+  bb.0:
+    liveins: $hl
+    LD8pi $hl, 173 :: (volatile store (s8))
+    $l = INC8r $l, implicit-def dead $f
+    LD8pi $hl, 173 :: (volatile store (s8))
+    $l = INC8r $l, implicit-def dead $f
+    LD8pi $hl, 173 :: (volatile store (s8))
+    RET16 implicit-def $sps, implicit $sps
+...
+---
+name: value_pressure
+tracksRegLiveness: true
+# Fixed live bytes leave no register alternative, so stores retain immediates.
+# RA-LABEL: name: value_pressure
+# RA: stack: []
+# RA: bb.0:
+# RA: liveins: {{.*}}
+# RA-NOT: LD8ri
+# RA: LD8pi $hl, 173 :: (volatile store (s8))
+# RA-NEXT: LD8pi $hl, 173 :: (volatile store (s8))
+# RA-NEXT: LD8pi $hl, 173 :: (volatile store (s8))
+# RA-NEXT: RET16
+body: |
+  bb.0:
+    liveins: $hl, $de, $bc, $a
+    LD8pi $hl, 173 :: (volatile store (s8))
+    LD8pi $hl, 173 :: (volatile store (s8))
+    LD8pi $hl, 173 :: (volatile store (s8))
+    RET16 implicit-def $sps, implicit $sps, implicit $hl, implicit $de, implicit $bc, implicit $a
+...
+---
+name: separate_calls
+tracksRegLiveness: true
+# Two stores cannot pay for materialization; calls delimit sharing regions.
+# CHECK-LABEL: name: separate_calls
+# CHECK: LD8pi $hl, 0
+# CHECK-NEXT: LD8pi $hl, 0
+# CHECK-NEXT: CALL16 @opaque
+# CHECK-NEXT: $hl = LD16ri 12544
+# CHECK-NEXT: LD8pi $hl, 0
+# CHECK-NEXT: LD8pi $hl, 0
+body: |
+  bb.0:
+    liveins: $hl
+    LD8pi $hl, 0 :: (store (s8))
+    LD8pi $hl, 0 :: (store (s8))
+    CALL16 @opaque, csr_z80_c, implicit $sps
+    $hl = LD16ri 12544
+    LD8pi $hl, 0 :: (store (s8))
+    LD8pi $hl, 0 :: (store (s8))
+    RET16 implicit-def $sps, implicit $sps
+...
+---
+name: different_values
+tracksRegLiveness: true
+# CHECK-LABEL: name: different_values
+# CHECK: LD8pi $hl, 0
+# CHECK-NEXT: LD8pi $hl, 1
+# CHECK-NEXT: LD8pi $hl, 2
+body: |
+  bb.0:
+    liveins: $hl
+    LD8pi $hl, 0 :: (volatile store (s8))
+    LD8pi $hl, 1 :: (volatile store (s8))
+    LD8pi $hl, 2 :: (volatile store (s8))
+    RET16 implicit-def $sps, implicit $sps
+...
