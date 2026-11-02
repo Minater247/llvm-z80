@@ -197,6 +197,65 @@ static bool combineExtendedByteCompare(MachineInstr &MI,
   return true;
 }
 
+/// Extract masked word bits using byte-width arithmetic. Byte-sized masks
+/// selecting one source byte produce a zero-extended result of the original
+/// scalar width. Shared shift results and selected sign-fill bits stay intact.
+static bool combineMaskedWordShift(MachineInstr &MI, MachineIRBuilder &Builder,
+                                   GISelChangeObserver &Observer) {
+  if (MI.getOpcode() != TargetOpcode::G_AND)
+    return false;
+  auto &MRI = MI.getMF()->getRegInfo();
+  Register Dst = MI.getOperand(0).getReg();
+  LLT Ty = MRI.getType(Dst);
+  if (!Ty.isScalar() || Ty.getSizeInBits() <= 8 || Ty.getSizeInBits() > 32 ||
+      Ty.getSizeInBits() % 8)
+    return false;
+  Register Shifted = MI.getOperand(1).getReg();
+  auto Mask = getIConstantVRegValWithLookThrough(MI.getOperand(2).getReg(), MRI);
+  if (!Mask) {
+    Shifted = MI.getOperand(2).getReg();
+    Mask = getIConstantVRegValWithLookThrough(MI.getOperand(1).getReg(), MRI);
+  }
+  if (!Mask || Mask->Value.isZero() || !Mask->Value.isIntN(8) ||
+      !MRI.hasOneNonDBGUse(Shifted))
+    return false;
+  auto *Shift = getDefIgnoringCopies(Shifted, MRI);
+  if (!Shift || (Shift->getOpcode() != TargetOpcode::G_LSHR &&
+                 Shift->getOpcode() != TargetOpcode::G_ASHR))
+    return false;
+  auto Amount =
+      getIConstantVRegValWithLookThrough(Shift->getOperand(2).getReg(), MRI);
+  if (!Amount || Amount->Value.uge(Ty.getSizeInBits()))
+    return false;
+  unsigned Count = Amount->Value.getZExtValue();
+  unsigned First = Count + Mask->Value.countr_zero();
+  unsigned Last = Count + Mask->Value.getActiveBits() - 1;
+  if (Last >= Ty.getSizeInBits() || First / 8 != Last / 8)
+    return false;
+
+  Builder.setInstrAndDebugLoc(MI);
+  LLT Byte = LLT::scalar(8);
+  auto Parts = Builder.buildUnmerge(Byte, Shift->getOperand(1).getReg());
+  Register Value = Parts.getReg(First / 8);
+  unsigned Base = First & ~7u;
+  /* The selected byte can start above the original shift count when only
+     high output bits are retained. Shift that byte left into their positions. */
+  if (Count > Base)
+    Value = Builder
+                .buildLShr(Byte, Value, Builder.buildConstant(Byte, Count - Base))
+                .getReg(0);
+  else if (Count < Base)
+    Value = Builder
+                .buildShl(Byte, Value, Builder.buildConstant(Byte, Base - Count))
+                .getReg(0);
+  auto Result = Builder.buildAnd(
+      Byte, Value, Builder.buildConstant(Byte, Mask->Value.trunc(8)));
+  Builder.buildZExt(Dst, Result);
+  Observer.erasingInstr(MI);
+  MI.eraseFromParent();
+  return true;
+}
+
 bool Z80PreLegalizerCombinerImpl::tryCombineAll(MachineInstr &MI) const {
   /* Materialize the known shift count directly. The generic power-of-two
      combine introduces a CTTZ that would otherwise need a software helper. */
@@ -217,6 +276,8 @@ bool Z80PreLegalizerCombinerImpl::tryCombineAll(MachineInstr &MI) const {
       return true;
     }
   }
+  if (combineMaskedWordShift(MI, B, Observer))
+    return true;
   if (combineExtendedByteCompare(MI, B, Observer))
     return true;
   if (combineByteRemainder(MI, B, Observer, STI))
