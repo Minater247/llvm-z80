@@ -44,27 +44,29 @@ ret
         (args.work / (allocator + str(bank) + '.s')).write_text(assembly)
         program = execution.Program(assembly)
         rng = random.Random(724)
-        for name in ('low_copies', 'high_copies', 'escaping_byte', 'observed_pair', 'call_boundary'):
+        for name in ('low_copies', 'high_copies', 'escaping_byte', 'observed_pair',
+                     'call_boundary', 'call_groups'):
             for value in range(256):
                 cpu = execution.CPU(rng)
                 cpu.put('e', value)
-                cpu.put('d', (value + 1) & 255)
+                cpu.put('d', 49 if name == 'call_groups' else (value + 1) & 255)
                 before = bytes(cpu.mem)
                 sp, ix, alternate = cpu.sp, cpu.get('ix'), dict(cpu.alt)
                 cpu.run(program, entry=name)
                 expected = bytearray(before)
                 destinations = set()
                 high = name == 'high_copies'
-                for step in range(1, 4):
+                steps = range(6) if name == 'call_groups' else range(1, 4)
+                for step in steps:
                     lane = (value - step if high else value + step) & 255
                     address = (lane << 8) | 49 if high else 0x3100 | lane
                     expected[address] = 34 if name == 'observed_pair' else 17
                     destinations.add(address)
                 result = ((((value - 3) & 255) << 8) | 49 if high
-                          else 0x3100 | ((value + 3) & 255))
+                          else 0x3100 | ((value + steps[-1]) & 255))
                 assert cpu.get('de') == result, (allocator, bank, name, value)
-                if name == 'escaping_byte':
-                    assert cpu.get('b') == (value + 3) & 255
+                if name in ('escaping_byte', 'call_groups'):
+                    assert cpu.get('b') == (value + steps[-1]) & 255
                 assert cpu.sp == sp + 2 and cpu.get('ix') == ix
                 assert cpu.mem[:sp - 256] == expected[:sp - 256]
                 assert cpu.mem[sp + 2:] == expected[sp + 2:]

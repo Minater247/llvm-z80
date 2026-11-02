@@ -36,8 +36,10 @@ class Z80RegisterInfo final : public Z80GenRegisterInfo {
 public:
   Z80RegisterInfo(const Triple &TT, const Z80Subtarget &ST);
 
-  /// Scale spill weights by the number of memory accesses for the class.
-  float getSpillWeightScaleFactor(const TargetRegisterClass *RC) const override;
+  /// Scale spill weights by the generated cost in the function's size or speed
+  /// mode, including scratch preservation for index-register spills.
+  float getSpillWeightScaleFactor(const TargetRegisterClass *RC,
+                                  const MachineFunction &MF) const override;
 
   /// Code Generation virtual methods...
   ///

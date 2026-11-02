@@ -253,14 +253,14 @@ static bool selectBankInstructions(MachineFunction &MF) {
   return changed;
 }
 
-/// Update local byte cursors in their address-pair lane. A byte copied into
-/// one pair and used only by subsequent increment/decrement copies shares that
-/// lane through the chain. Other pair definitions and escaping bytes retain
-/// their separate lifetimes.
+/// Update copied byte cursors in their address-pair lane within a local group.
+/// The final byte is published before a call, another definition or an escaping
+/// use. Complete chains keep just their initial byte-to-pair copy.
 static bool coalesceCursorUpdates(MachineFunction &MF) {
   if (!MF.getSubtarget<Z80Subtarget>().is16Bit())
     return false;
   auto &MRI = MF.getRegInfo();
+  const auto &TII = *MF.getSubtarget().getInstrInfo();
   bool Changed = false;
   for (auto &MBB : MF) {
     DenseMap<const MachineInstr *, unsigned> Positions;
@@ -274,63 +274,35 @@ static bool coalesceCursorUpdates(MachineFunction &MF) {
       if (!Pair.isVirtual() || !Byte.isVirtual() || Src.getSubReg() ||
           Src.isUndef() || (Sub != Z80::sub_low && Sub != Z80::sub_high) ||
           !Z80::R16RegClass.hasSubClassEq(MRI.getRegClass(Pair)) ||
-          !Z80::R8RegClass.hasSubClassEq(MRI.getRegClass(Byte)))
-        continue;
-      // A construction and two updates are required to remove two copies.
-      if (!llvm::hasNItemsOrMore(MRI.def_operands(Byte), 3))
-        continue;
-      if (Positions.empty()) {
-        unsigned Position = 0;
-        for (const auto &MI : MBB)
-          Positions[&MI] = Position++;
-      }
-      unsigned Start = Positions[&First], Last = Start, Budget = 128;
-      bool Eligible = true;
-      const MachineInstr *FirstByte = &First;
-      for (const auto &MO : MRI.reg_nodbg_operands(Byte)) {
-        const auto *MI = MO.getParent();
-        if (!Budget-- || MI->getParent() != &MBB || MI->isBundled()) {
-          Eligible = false;
-          break;
-        }
-        unsigned At = Positions.lookup(MI);
-        Last = std::max(Last, At);
-        if (At < Positions.lookup(FirstByte))
-          FirstByte = MI;
-      }
-      if (!Eligible || FirstByte == &First ||
-          FirstByte->readsVirtualRegister(Byte) || Last - Start > 128)
+          !Z80::R8RegClass.hasSubClassEq(MRI.getRegClass(Byte)) ||
+          !llvm::hasNItemsOrMore(MRI.def_operands(Byte), 3))
         continue;
       SmallVector<MachineInstr *, 8> Updates, Copies;
-      for (auto It = std::next(First.getIterator());
-           It != MBB.end() && Positions.lookup(&*It) <= Last; ++It) {
+      auto It = std::next(First.getIterator());
+      unsigned Budget = 128;
+      for (; It != MBB.end() && Budget--; ++It) {
         auto &MI = *It;
         if (MI.isDebugInstr())
           continue;
         if (MI.isCall() || MI.isInlineAsm() || MI.isTerminator() ||
-            MI.isBundled()) {
-          Eligible = false;
+            MI.isBundled())
           break;
-        }
-        bool UsesByte = false;
+        bool Boundary = false, UsesByte = false;
         for (const auto &MO : MI.operands()) {
-          if (MO.isRegMask() ||
+          Boundary |=
+              MO.isRegMask() ||
               (MO.isReg() && MO.getReg() == Pair && MO.isDef() &&
-               (!MO.getSubReg() || MO.getSubReg() == Sub || MO.isUndef())))
-            Eligible = false;
+               (!MO.getSubReg() || MO.getSubReg() == Sub || MO.isUndef()));
           UsesByte |= MO.isReg() && MO.getReg() == Byte;
         }
-        if (!Eligible)
+        if (Boundary)
           break;
         if (!UsesByte)
           continue;
         if ((MI.getOpcode() != Z80::INC8r && MI.getOpcode() != Z80::DEC8r) ||
             MI.getOperand(0).getReg() != Byte ||
-            MI.getOperand(1).getReg() != Byte ||
-            MI.getOperand(1).isUndef()) {
-          Eligible = false;
+            MI.getOperand(1).getReg() != Byte || MI.getOperand(1).isUndef())
           break;
-        }
         auto Next = std::next(It);
         while (Next != MBB.end() && Next->isDebugInstr())
           ++Next;
@@ -340,21 +312,23 @@ static bool coalesceCursorUpdates(MachineFunction &MF) {
             Next->getOperand(0).getSubReg() != Sub ||
             Next->getOperand(0).isUndef() ||
             Next->getOperand(1).getReg() != Byte ||
-            Next->getOperand(1).getSubReg() ||
-            Next->getOperand(1).isUndef()) {
-          Eligible = false;
+            Next->getOperand(1).getSubReg() || Next->getOperand(1).isUndef())
           break;
-        }
         Updates.push_back(&MI);
         Copies.push_back(&*Next);
         It = Next;
       }
-      if (!Eligible || Updates.size() < 2)
+      if (Updates.size() < 2)
         continue;
-      /* The pair holds the byte at entry and every update is immediately
-         copied back. Updating its lane in place preserves both the observed
-         addresses and arithmetic flags, while removing the overlapping byte
-         range that prevented ordinary copy coalescing. */
+      if (Positions.empty()) {
+        unsigned Position = 0;
+        for (const auto &MI : MBB)
+          Positions[&MI] = Position++;
+      }
+      /* The pair equals the byte at entry and after each matched update.
+         Publish it before the next observer when the byte has later uses;
+         this releases its duplicate lifetime within the group without
+         constraining how either lane survives a call. */
       for (auto *MI : Updates)
         for (unsigned Op : {0u, 1u}) {
           auto &MO = MI->getOperand(Op);
@@ -368,7 +342,17 @@ static bool coalesceCursorUpdates(MachineFunction &MF) {
         }
       for (auto *MI : Copies)
         MI->eraseFromParent();
+      First.getOperand(0).setIsDead(false);
+      bool Escapes = llvm::any_of(
+          MRI.use_nodbg_instructions(Byte), [&](const MachineInstr &MI) {
+            return MI.getParent() != &MBB ||
+                   Positions.lookup(&MI) > Positions.lookup(&First);
+          });
+      if (Escapes)
+        BuildMI(MBB, It, First.getDebugLoc(), TII.get(TargetOpcode::COPY), Byte)
+            .addReg(Pair, 0, Sub);
       MRI.markUsesInDebugValueAsUndef(Byte);
+      MRI.clearKillFlags(Pair);
       Changed = true;
     }
   }
@@ -398,14 +382,24 @@ static bool separateStableLanes(MachineFunction &MF, unsigned StableSub) {
     auto Compute = [&]() -> std::optional<int64_t> {
       std::optional<int64_t> Value;
       for (const auto &MO : MRI.def_operands(R)) {
-        if (MO.getSubReg() != Sub) {
-          if (!MO.getSubReg() || !Sub)
+        if (MO.getSubReg() && MO.getSubReg() != Sub) {
+          if (!Sub)
             return std::nullopt;
           continue;
         }
         const auto &MI = *MO.getParent();
         std::optional<int64_t> V;
-        if (MI.getOpcode() == Z80::LD8r0)
+        /* Whole-pair copies preserve a known lane just as partial copies do.
+           Arithmetic definitions still invalidate it because a carry can
+           change the page byte. Require every definition to agree. */
+        if (Sub && !MO.getSubReg()) {
+          if (MI.isCopy() && !MI.getOperand(1).isUndef() &&
+              !MI.getOperand(1).getSubReg())
+            V = Self(Self, MI.getOperand(1).getReg(), Sub, Depth + 1);
+          else if (MI.getOpcode() == Z80::LD16ri && MI.getOperand(1).isImm())
+            V = (MI.getOperand(1).getImm() >> (Sub == Z80::sub_high ? 8 : 0)) &
+                255;
+        } else if (MI.getOpcode() == Z80::LD8r0)
           V = 0;
         else if (MI.getOpcode() == Z80::LD8ri && MI.getOperand(1).isImm())
           V = MI.getOperand(1).getImm();
@@ -541,8 +535,7 @@ static bool separateStableLanes(MachineFunction &MF, unsigned StableSub) {
               Boundary |= MO.isRegMask();
               if (!MO.isReg() || MO.getReg() != R)
                 continue;
-              Boundary |= MO.isDef() &&
-                          (!MO.getSubReg() || MO.getSubReg() == StableSub);
+              Boundary |= MO.isDef() && !MO.getSubReg();
               WholeUse |= MO.isUse() && !MO.getSubReg();
               VariableDef |= MO.isDef() && MO.getSubReg() == VariableSub;
               VariableUse |= MO.isUse() && !MO.isUndef() &&
@@ -567,7 +560,14 @@ static bool separateStableLanes(MachineFunction &MF, unsigned StableSub) {
               Loaded |= MI.mayLoad();
               Stored |= MI.mayStore();
             }
-            Updated |= WholeUses && VariableDef;
+            /* Retain a trailing cursor step with its accesses. Publishing
+               the byte first would require another copy merely to advance
+               it, and a repeated definition of its known lane is harmless. */
+            if (WholeUses && VariableDef) {
+              Updated = true;
+              Last = It;
+              UpdatedAtLast = true;
+            }
           }
           /* Repeated stores to independent fixed addresses can interleave.
              Retaining all of those pairs increases pressure without saving
@@ -765,13 +765,92 @@ bool Z80MachinePreRAOptimization::runOnMachineFunction(MachineFunction &MF) {
   SmallSet<Register, 16> FoldAsLoadDefCandidates;
 
   auto &LIS = getAnalysis<LiveIntervalsWrapperPass>().getLIS();
-  /* Delay a pair's initial byte construction until its first common use.
-   * Reaching-value checks preserve captures, including individual lanes of
-   * other pairs. Collect edits while live intervals still describe the input. */
+  /* Collect address reuse and construction edits while live intervals still
+     describe the input. Reaching-value checks preserve captured addresses
+     and individual lanes of other pairs. */
   SmallVector<std::tuple<MachineInstr *, MachineInstr *, MachineInstr *,
                          MachineInstr *>, 8>
       PairConstructions;
   std::optional<MachineDominatorTree> Dominators;
+  SmallVector<std::pair<MachineInstr *, Register>, 8> AdvancedLoads;
+  SmallVector<std::pair<MachineInstr *, MachineInstr *>, 8> PostLoads;
+  SmallPtrSet<MachineInstr *, 8> PostLoadSeen;
+  if (MF.getSubtarget<Z80Subtarget>().is16Bit())
+    for (unsigned N = 0, End = MRI.getNumVirtRegs(); N != End; ++N) {
+      Register R = Register::index2VirtReg(N);
+      if (!LIS.hasInterval(R) || MRI.reg_nodbg_empty(R) ||
+          !TRI.getCommonSubClass(MRI.getRegClass(R), &Z80::A16RegClass))
+        continue;
+      MachineInstr *Copy = nullptr, *Step = nullptr;
+      bool Eligible = true;
+      for (auto &Def : MRI.def_instructions(R)) {
+        if (Def.isBundled() || !Def.getOperand(0).isReg() ||
+            Def.getOperand(0).getReg() != R || Def.getOperand(0).getSubReg()) {
+          Eligible = false;
+          break;
+        }
+        if (Def.isCopy() && Def.getNumOperands() == 2 && !Copy &&
+            !Def.getOperand(1).getSubReg() && !Def.getOperand(1).isUndef())
+          Copy = &Def;
+        else if (!Step &&
+                 (Def.getOpcode() == Z80::INC16r ||
+                  Def.getOpcode() == Z80::DEC16r) &&
+                 Def.getOperand(1).getReg() == R)
+          Step = &Def;
+        else {
+          Eligible = false;
+          break;
+        }
+      }
+      if (!Eligible || !Copy || !Step ||
+          Copy->getParent() != Step->getParent() ||
+          LIS.getInstructionIndex(*Copy) >= LIS.getInstructionIndex(*Step))
+        continue;
+      Register Base = Copy->getOperand(1).getReg();
+      if (!Base.isVirtual() || Base == R || !LIS.hasInterval(Base))
+        continue;
+      const auto &BaseLI = LIS.getInterval(Base);
+      auto *Value = BaseLI.getVNInfoAt(LIS.getInstructionIndex(*Copy));
+      if (!Value)
+        continue;
+      if (Step->getOpcode() == Z80::INC16r) {
+        unsigned ScanBudget = 32;
+        for (auto It = std::next(Step->getIterator());
+             It != Step->getParent()->end() && ScanBudget--; ++It) {
+          if (It->isDebugInstr())
+            continue;
+          if (It->isCall() || It->isInlineAsm() || It->isBundled() ||
+              It->isTerminator() ||
+              llvm::any_of(It->operands(), [&](const MachineOperand &MO) {
+                return MO.isReg() && MO.getReg() == R;
+              }))
+            break;
+          if (It->getOpcode() == Z80::LD8gp &&
+              It->getOperand(1).getReg() == Base &&
+              !BaseLI.liveAt(LIS.getInstructionIndex(*It).getDeadSlot()) &&
+              BaseLI.getVNInfoAt(LIS.getInstructionIndex(*It)) == Value) {
+            if (PostLoadSeen.insert(&*It).second)
+              PostLoads.emplace_back(&*It, Step);
+            break;
+          }
+        }
+      }
+      int64_t Offset = Step->getOpcode() == Z80::INC16r ? 1 : -1;
+      unsigned Budget = 128;
+      for (auto &Use : MRI.use_nodbg_instructions(Base)) {
+        if (!Budget--)
+          break;
+        if (Use.getOpcode() != Z80::LD8go || Use.isBundled() ||
+            Use.getOperand(1).getReg() != Base ||
+            Use.getOperand(2).getImm() != Offset ||
+            BaseLI.getVNInfoAt(LIS.getInstructionIndex(Use)) != Value)
+          continue;
+        if (!Dominators)
+          Dominators.emplace(MF);
+        if (Dominators->dominates(Step, &Use))
+          AdvancedLoads.emplace_back(&Use, R);
+      }
+    }
   for (unsigned N = 0, End = MRI.getNumVirtRegs(); N != End; ++N) {
     Register R = Register::index2VirtReg(N);
     if (!LIS.hasInterval(R) || MRI.reg_nodbg_empty(R) ||
@@ -950,6 +1029,60 @@ bool Z80MachinePreRAOptimization::runOnMachineFunction(MachineFunction &MF) {
               TII.get(TargetOpcode::COPY), Updated).addReg(R);
     }
     MRI.markUsesInDebugValueAsUndef(R);
+    Changed = true;
+  }
+
+  /* Address folding can select an indexed access even when an incremented
+     cursor is already available. Reuse that reaching value so the original
+     cursor can occupy an ordinary pair. Memory order and access width stay
+     intact; the saved value checks also exclude intervening base updates. */
+  SmallSet<Register, 8> AdvancedBases;
+  for (auto [MI, R] : AdvancedLoads) {
+    if (MI->getOpcode() != Z80::LD8go)
+      continue;
+    AdvancedBases.insert(MI->getOperand(1).getReg());
+    MI->setDesc(TII.get(Z80::LD8gp));
+    MI->getOperand(1).setReg(R);
+    MI->getOperand(1).setIsKill(false);
+    MI->removeOperand(2);
+    MRI.constrainRegClass(R, &Z80::A16RegClass);
+    MRI.clearKillFlags(R);
+    Changed = true;
+  }
+  for (Register R : AdvancedBases)
+    MRI.recomputeRegClass(R);
+
+  /* An unobserved next-address calculation can follow the old-address read.
+     Express the read and update together so allocation need not preserve two
+     cursors. Keep the memory access in place and exclude intervening users of
+     the incremented address. */
+  for (auto [Load, Step] : PostLoads) {
+    if (Load->getOpcode() != Z80::LD8gp)
+      continue;
+    Register R = Step->getOperand(0).getReg();
+    /* Address reuse above may introduce a use of the advanced value. */
+    if (llvm::any_of(
+            make_range(std::next(Step->getIterator()), Load->getIterator()),
+            [&](const MachineInstr &MI) {
+              return !MI.isDebugInstr() &&
+                     llvm::any_of(MI.operands(), [&](const MachineOperand &MO) {
+                       return MO.isReg() && MO.getReg() == R;
+                     });
+            }))
+      continue;
+    auto MIB = BuildMI(*Load->getParent(), Load, Load->getDebugLoc(),
+                       TII.get(Z80::LD8_POST16));
+    MIB.add(Load->getOperand(0))
+        .addReg(R, RegState::Define)
+        .addReg(R)
+        .cloneMemRefs(*Load)
+        .setMIFlags(Load->getFlags());
+    MIB->getOperand(0).setIsEarlyClobber(true);
+    MRI.constrainRegClass(R, &Z80::A16RegClass);
+    MRI.clearKillFlags(R);
+    MRI.markUsesInDebugValueAsUndef(R);
+    Load->eraseFromParent();
+    Step->eraseFromParent();
     Changed = true;
   }
 

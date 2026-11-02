@@ -12,6 +12,7 @@
   define void @escaping_byte() { ret void }
   define void @observed_pair() { ret void }
   define void @call_boundary() { ret void }
+  define void @call_groups() { ret void }
 ...
 ---
 name: low_copies
@@ -79,10 +80,14 @@ body: |
 name: escaping_byte
 tracksRegLiveness: true
 # CHECK-LABEL: name: escaping_byte
-# CHECK: %1:r8 = INC8r %1
-# CHECK: %2.sub_low:r16 = COPY %1
-# CHECK: %1:r8 = INC8r %1
-# CHECK: %2.sub_low:r16 = COPY %1
+# CHECK: LD8pa [[PAIR:%[0-9]+]], $a
+# CHECK-NEXT: [[PAIR]].sub_low:r16 = INC8r [[PAIR]].sub_low
+# CHECK-NEXT: LD8pa [[PAIR]], $a
+# CHECK-NEXT: [[PAIR]].sub_low:r16 = INC8r [[PAIR]].sub_low
+# CHECK-NEXT: LD8pa [[PAIR]], $a
+# CHECK-NEXT: [[BYTE:%[0-9]+]]:r8 = COPY [[PAIR]].sub_low
+# CHECK-NEXT: %1:r8 = COPY [[BYTE]]
+# CHECK-NEXT: $b = COPY %1
 body: |
   bb.0:
     liveins: $e
@@ -109,9 +114,15 @@ name: observed_pair
 tracksRegLiveness: true
 # CHECK-LABEL: name: observed_pair
 # CHECK: %1:r8 = INC8r %1
-# CHECK: %2.sub_low:r16 = COPY %1
+# CHECK: [[SAVED:%[0-9]+]]:r8 = COPY %1
 # CHECK: %1:r8 = INC8r %1
-# CHECK: %2.sub_low:r16 = COPY %1
+# CHECK: [[OLD:%[0-9]+]].sub_low:r16 = COPY [[SAVED]]
+# CHECK-NEXT: [[OLD]].sub_high:r16 = LD8ri 49
+# CHECK-NEXT: LD8pa [[OLD]], $a
+# CHECK: [[UPDATED:%[0-9]+]]:r8 = COPY %1
+# CHECK-NEXT: [[NEW:%[0-9]+]].sub_low:r16 = COPY [[UPDATED]]
+# CHECK-NEXT: [[NEW]].sub_high:r16 = LD8ri 49
+# CHECK-NEXT: LD8pa [[NEW]], $a
 body: |
   bb.0:
     liveins: $e
@@ -163,4 +174,46 @@ body: |
     LD8pa %2, $a :: (volatile store (s8))
     $de = COPY %2
     RET16 implicit-def $sps, implicit $sps, implicit $de
+...
+---
+name: call_groups
+tracksRegLiveness: true
+# Each group publishes the cursor before its next external observer.
+# CHECK-LABEL: name: call_groups
+# CHECK: %0.sub_low:r16 = INC8r %0.sub_low
+# CHECK: %0.sub_low:r16 = INC8r %0.sub_low
+# CHECK: [[BYTE:%[0-9]+]]:r8 = COPY %0.sub_low
+# CHECK-NEXT: CALL16 @opaque
+# CHECK: %0.sub_low:r16 = INC8r %0.sub_low
+# CHECK: %0.sub_low:r16 = INC8r %0.sub_low
+# CHECK: [[OUT:%[0-9]+]]:r8 = COPY %0.sub_low
+# CHECK-NEXT: $b = COPY [[OUT]]
+body: |
+  bb.0:
+    liveins: $de
+    %0:r16 = COPY $de
+    %1:r8 = COPY %0.sub_low
+    %0.sub_low:r16 = COPY %1
+    $a = LD8ri 17
+    LD8pa %0, $a :: (volatile store (s8))
+    %1:r8 = INC8r %1, implicit-def dead $f
+    %0.sub_low:r16 = COPY %1
+    LD8pa %0, $a :: (volatile store (s8))
+    %1:r8 = INC8r %1, implicit-def dead $f
+    %0.sub_low:r16 = COPY %1
+    LD8pa %0, $a :: (volatile store (s8))
+    CALL16 @opaque, csr_z80_c, implicit $sps
+    $a = LD8ri 17
+    %1:r8 = INC8r %1, implicit-def dead $f
+    %0.sub_low:r16 = COPY %1
+    LD8pa %0, $a :: (volatile store (s8))
+    %1:r8 = INC8r %1, implicit-def dead $f
+    %0.sub_low:r16 = COPY %1
+    LD8pa %0, $a :: (volatile store (s8))
+    %1:r8 = INC8r %1, implicit-def dead $f
+    %0.sub_low:r16 = COPY %1
+    LD8pa %0, $a :: (volatile store (s8))
+    $b = COPY %1
+    $de = COPY %0
+    RET16 implicit-def $sps, implicit $sps, implicit $de, implicit $b
 ...

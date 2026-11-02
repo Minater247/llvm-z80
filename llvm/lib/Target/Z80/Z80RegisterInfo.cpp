@@ -37,9 +37,16 @@ Z80RegisterInfo::Z80RegisterInfo(const Triple &TT, const Z80Subtarget &ST)
 }
 
 float Z80RegisterInfo::getSpillWeightScaleFactor(
-    const TargetRegisterClass *RC) const {
-  // Z80 pair spills expand into byte accesses; eZ80 can access a whole pair.
-  return ST.hasEZ80Ops() ? 1.0F : getRegSizeInBits(*RC) / 8.0F;
+    const TargetRegisterClass *RC, const MachineFunction &MF) const {
+  if (ST.hasEZ80Ops())
+    return 1.0F;
+  /* Indexed byte accesses cost 19 T-states. A primary pair needs two;
+     an index pair also needs a saved HL scratch, EX (SP),HL and an index
+     PUSH/POP, costing 82 T-states in either direction. For size optimization,
+     these sequences occupy ten bytes compared with three for a byte spill. */
+  if (Z80::I16RegClass.hasSubClassEq(RC))
+    return MF.getFunction().hasOptSize() ? 10.0F / 3.0F : 82.0F / 19.0F;
+  return getRegSizeInBits(*RC) / 8.0F;
 }
 
 ArrayRef<MCPhysReg> Z80RegisterInfo::getIntraCallClobberedRegs(

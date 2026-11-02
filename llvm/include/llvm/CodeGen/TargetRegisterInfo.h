@@ -983,6 +983,14 @@ public:
   /// Get the scale factor of spill weight for this register class.
   virtual float getSpillWeightScaleFactor(const TargetRegisterClass *RC) const;
 
+  /// Return the spill-weight scale for a register class in a function.
+  /// Targets may account for function-specific optimization goals; the default
+  /// uses the register-class scale independently of the function.
+  virtual float getSpillWeightScaleFactor(const TargetRegisterClass *RC,
+                                          const MachineFunction &MF) const {
+    return getSpillWeightScaleFactor(RC);
+  }
+
   /// Get a list of 'hint' registers that the register allocator should try
   /// first when allocating a physical register for the virtual register
   /// VirtReg. These registers are effectively moved to the front of the

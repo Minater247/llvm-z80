@@ -1,0 +1,208 @@
+# RUN: llc -run-pass=z80-machine-prera-opt -verify-machineinstrs %s -o - | FileCheck %s
+# RUN: %python %S/Inputs/advanced-cursor-loads.py --llc llc --mir %s --work %t
+--- |
+  target triple = "z80"
+  define void @advanced() { ret void }
+  define void @retreated() { ret void }
+  define void @changed_base() { ret void }
+  define void @changed_result() { ret void }
+  define void @post_inc() { ret void }
+  define void @observed_next() { ret void }
+  define void @changed_old() { ret void }
+  define void @live_old() { ret void }
+  define void @duplicate_next() { ret void }
+  define void @intervening_advanced() { ret void }
+...
+---
+name: advanced
+tracksRegLiveness: true
+# CHECK-LABEL: name: advanced
+# CHECK: bb.1:
+# CHECK: %2:g8 = LD8gp %1
+# CHECK-NOT: LD8go
+body: |
+  bb.0:
+    successors: %bb.1(0x80000000)
+    liveins: $de
+    %0:i16 = COPY $de
+    %1:r16 = COPY %0
+    %1:r16 = INC16r %1
+    JQ %bb.1
+  bb.1:
+    %2:g8 = LD8go %0, 1 :: (volatile load (s8))
+    $a = COPY %2
+    $de = COPY %1
+    RET16 implicit-def $sps, implicit $sps, implicit $a, implicit $de
+...
+---
+name: retreated
+tracksRegLiveness: true
+# CHECK-LABEL: name: retreated
+# CHECK: bb.1:
+# CHECK: %2:g8 = LD8gp %1
+# CHECK-NOT: LD8go
+body: |
+  bb.0:
+    successors: %bb.1(0x80000000)
+    liveins: $de
+    %0:i16 = COPY $de
+    %1:r16 = COPY %0
+    %1:r16 = DEC16r %1
+    JQ %bb.1
+  bb.1:
+    %2:g8 = LD8go %0, -1 :: (volatile load (s8))
+    $a = COPY %2
+    $de = COPY %1
+    RET16 implicit-def $sps, implicit $sps, implicit $a, implicit $de
+...
+---
+name: changed_base
+tracksRegLiveness: true
+# CHECK-LABEL: name: changed_base
+# CHECK: bb.1:
+# CHECK: %2:g8 = LD8go %0, 1
+body: |
+  bb.0:
+    successors: %bb.1(0x80000000)
+    liveins: $de
+    %0:i16 = COPY $de
+    %1:r16 = COPY %0
+    %1:r16 = INC16r %1
+    %0:i16 = INC16r %0
+    JQ %bb.1
+  bb.1:
+    %2:g8 = LD8go %0, 1 :: (volatile load (s8))
+    $a = COPY %2
+    $de = COPY %1
+    RET16 implicit-def $sps, implicit $sps, implicit $a, implicit $de
+...
+---
+name: changed_result
+tracksRegLiveness: true
+# CHECK-LABEL: name: changed_result
+# CHECK: bb.1:
+# CHECK: %2:g8 = LD8go %0, 1
+body: |
+  bb.0:
+    successors: %bb.1(0x80000000)
+    liveins: $de
+    %0:i16 = COPY $de
+    %1:r16 = COPY %0
+    %1:r16 = INC16r %1
+    %1:r16 = INC16r %1
+    JQ %bb.1
+  bb.1:
+    %2:g8 = LD8go %0, 1 :: (volatile load (s8))
+    $a = COPY %2
+    $de = COPY %1
+    RET16 implicit-def $sps, implicit $sps, implicit $a, implicit $de
+...
+---
+name: post_inc
+tracksRegLiveness: true
+# CHECK-LABEL: name: post_inc
+# CHECK: early-clobber %2:g8, %1:a16 = LD8_POST16 %1
+body: |
+  bb.0:
+    liveins: $de
+    %0:a16 = COPY $de
+    %1:r16 = COPY %0
+    %1:r16 = INC16r %1
+    %2:g8 = LD8gp %0 :: (volatile load (s8))
+    $a = COPY %2
+    $de = COPY %1
+    RET16 implicit-def $sps, implicit $sps, implicit $a, implicit $de
+...
+---
+name: observed_next
+tracksRegLiveness: true
+# CHECK-LABEL: name: observed_next
+# CHECK: %1:r16 = INC16r %1
+# CHECK: %2:g8 = LD8gp %0
+body: |
+  bb.0:
+    liveins: $de
+    %0:a16 = COPY $de
+    %1:r16 = COPY %0
+    %1:r16 = INC16r %1
+    $bc = COPY %1
+    %2:g8 = LD8gp %0 :: (volatile load (s8))
+    $a = COPY %2
+    $de = COPY %1
+    RET16 implicit-def $sps, implicit $sps, implicit $a, implicit $de, implicit $bc
+...
+---
+name: changed_old
+tracksRegLiveness: true
+# CHECK-LABEL: name: changed_old
+# CHECK: %1:r16 = INC16r %1
+# CHECK: %2:g8 = LD8gp %0
+body: |
+  bb.0:
+    liveins: $de
+    %0:a16 = COPY $de
+    %1:r16 = COPY %0
+    %1:r16 = INC16r %1
+    %0:a16 = INC16r %0
+    %2:g8 = LD8gp %0 :: (volatile load (s8))
+    $a = COPY %2
+    $de = COPY %1
+    RET16 implicit-def $sps, implicit $sps, implicit $a, implicit $de
+...
+---
+name: live_old
+tracksRegLiveness: true
+# CHECK-LABEL: name: live_old
+# CHECK: %1:r16 = INC16r %1
+# CHECK: %2:g8 = LD8gp %0
+body: |
+  bb.0:
+    liveins: $de
+    %0:a16 = COPY $de
+    %1:r16 = COPY %0
+    %1:r16 = INC16r %1
+    %2:g8 = LD8gp %0 :: (volatile load (s8))
+    $a = COPY %2
+    $de = COPY %1
+    $hl = COPY %0
+    RET16 implicit-def $sps, implicit $sps, implicit $a, implicit $de, implicit $hl
+...
+---
+name: duplicate_next
+tracksRegLiveness: true
+# CHECK-LABEL: name: duplicate_next
+# CHECK: early-clobber %3:g8, %1:a16 = LD8_POST16 %1
+body: |
+  bb.0:
+    liveins: $de
+    %0:a16 = COPY $de
+    %1:r16 = COPY %0
+    %1:r16 = INC16r %1
+    %3:r16 = COPY %0
+    %3:r16 = INC16r %3
+    %2:g8 = LD8gp %0 :: (volatile load (s8))
+    $a = COPY %2
+    $de = COPY %1
+    $bc = COPY %3
+    RET16 implicit-def $sps, implicit $sps, implicit $a, implicit $de, implicit $bc
+...
+---
+name: intervening_advanced
+tracksRegLiveness: true
+# CHECK-LABEL: name: intervening_advanced
+# CHECK: %1:a16 = INC16r %1
+# CHECK: %2:g8 = LD8gp %1
+# CHECK: %3:g8 = LD8gp %0
+body: |
+  bb.0:
+    liveins: $de
+    %0:i16 = COPY $de
+    %1:r16 = COPY %0
+    %1:r16 = INC16r %1
+    %2:g8 = LD8go %0, 1 :: (volatile load (s8))
+    %3:g8 = LD8gp %0 :: (volatile load (s8))
+    $b = COPY %2
+    $a = COPY %3
+    $de = COPY %1
+    RET16 implicit-def $sps, implicit $sps, implicit $a, implicit $de, implicit $b
+...
