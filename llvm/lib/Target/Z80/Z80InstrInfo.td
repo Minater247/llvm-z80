@@ -1466,6 +1466,10 @@ let hasSideEffects = 0 in {
     def BANK_LD16ro : Pseudo<"", "", "", (outs B16:$dst), (ins off16:$src)>;
   }
   let mayStore = 1 in {
+    // Primary address registers store the byte directly. Other pairs use A;
+    // selection proves its old value is dead before exposing this choice.
+    let Defs = [A] in
+    def BANK_LD8pg : Pseudo<"", "", "", (outs), (ins B16:$dst, G8:$src)>;
     def BANK_LD8pa : Pseudo<"", "", "", (outs), (ins B16:$dst, A8:$src)>;
     def BANK_LD16or : Pseudo<"", "", "", (outs), (ins off16:$dst, B16:$src)>;
   }

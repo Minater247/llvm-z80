@@ -184,6 +184,8 @@ unsigned Z80InstrInfo::getInstSizeInBytes(const MachineInstr &MI) const {
                             MI.getOperand(2).getReg(), true);
   case Z80::BANK_LD16ri:
     return 5;
+  case Z80::BANK_LD8pg:
+    return 4;
   case Z80::BANK_INC16:
   case Z80::BANK_DEC16:
   case Z80::BANK_LD8ap:
@@ -1504,6 +1506,24 @@ bool Z80InstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
       BuildMI(MBB, MI, DL, get(Z80::ALT_LOAD16), Z80::HL).addReg(R);
     MI.getOperand(Op).setReg(Z80::HL);
     applySPAdjust(*BuildMI(MBB, Next, DL, get(Z80::POP16r), Z80::HL));
+    break;
+  }
+  case Z80::BANK_LD8pg: {
+    Register Dst = MI.getOperand(0).getReg();
+    Register Src = MI.getOperand(1).getReg();
+    int Scratch = MI.findRegisterDefOperandIdx(Z80::A, nullptr);
+    if (Scratch != -1)
+      MI.removeOperand(Scratch);
+    if (Z80::A16RegClass.contains(Dst)) {
+      MI.setDesc(get(Z80::LD8pg));
+      break;
+    }
+    if (Src != Z80::A)
+      BuildMI(MBB, MI, DL, get(Z80::LD8gg), Z80::A).add(MI.getOperand(1));
+    MI.getOperand(1).setReg(Z80::A);
+    MI.getOperand(1).setIsKill(true);
+    MI.setDesc(get(Z80::ALT16RegClass.contains(Dst) ? Z80::BANK_LD8pa
+                                                  : Z80::LD8pa));
     break;
   }
   case Z80::BANK_LD16ri:

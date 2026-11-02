@@ -57,6 +57,16 @@ static bool selectBankInstructions(MachineFunction &MF) {
   // Whole-pair pointer chains can stay in either bank. Subregister consumers
   // and instructions requiring a primary pair keep their existing classes.
   SmallDenseSet<Register, 32> Bankable;
+  SmallPtrSet<const MachineInstr *, 32> AccumulatorStores;
+  for (const auto &MBB : MF) {
+    LiveRegUnits Live(*ST.getRegisterInfo());
+    Live.addLiveOuts(MBB);
+    for (const auto &MI : llvm::reverse(MBB)) {
+      if (MI.getOpcode() == Z80::LD8pg && Live.available(Z80::A))
+        AccumulatorStores.insert(&MI);
+      Live.stepBackward(MI);
+    }
+  }
   std::optional<MachineDominatorTree> Dominators;
   for (unsigned I = 0, E = MRI.getNumVirtRegs(); I != E; ++I) {
     Register R = Register::index2VirtReg(I);
@@ -68,6 +78,7 @@ static bool selectBankInstructions(MachineFunction &MF) {
     SmallVector<MachineOperand *, 2> ByteUses;
     bool WholeCopy = false;
     bool WholeDef = false;
+    bool GenericStore = false, AccumulatorStore = false;
     for (auto &MO : MRI.reg_nodbg_operands(R)) {
       const auto &MI = *MO.getParent();
       if (MI.isBundled()) {
@@ -106,13 +117,18 @@ static bool selectBankInstructions(MachineFunction &MF) {
           break;
         }
       }
-      MemoryAddress |= Opc == Z80::LD8ap || Opc == Z80::LD8pa;
+      bool CanUseAccumulator = Opc == Z80::LD8pg &&
+                               AccumulatorStores.contains(&MI);
+      GenericStore |= CanUseAccumulator;
+      AccumulatorStore |= Opc == Z80::LD8pa;
+      MemoryAddress |= Opc == Z80::LD8ap || Opc == Z80::LD8pa ||
+                       CanUseAccumulator;
       HasBankOperation |= Opc == Z80::ADD16rr || Opc == Z80::INC16r ||
                           Opc == Z80::DEC16r || Opc == Z80::LD8ap ||
                           Opc == Z80::LD8pa;
       if (Opc != TargetOpcode::COPY && Opc != Z80::LD16ri &&
           Opc != Z80::ADD16rr && Opc != Z80::INC16r && Opc != Z80::DEC16r &&
-          Opc != Z80::LD8ap && Opc != Z80::LD8pa) {
+          Opc != Z80::LD8ap && Opc != Z80::LD8pa && !CanUseAccumulator) {
         Eligible = false;
         break;
       }
@@ -120,7 +136,11 @@ static bool selectBankInstructions(MachineFunction &MF) {
     /* Arithmetic pairs can expose their bytes through direct bank transfers.
        Memory cursors retain their existing byte constraints: interleaved
        address and byte accesses need a joint region cost before widening. */
-    if (!Eligible || (!HasBankOperation && !(WholeCopy && !ByteDefs.empty())) ||
+    /* Widen mixed accumulator/ordinary stores together. A cursor serving
+       only ordinary stores has no existing accumulator traffic to amortize
+       its scratch transfers; retain its direct-address placement choices. */
+    if ((GenericStore && !AccumulatorStore) ||
+        !Eligible || (!HasBankOperation && !(WholeCopy && !ByteDefs.empty())) ||
         (ByteDefs.empty() && !ByteUses.empty() && MemoryAddress))
       continue;
     if (!ByteDefs.empty()) {
@@ -261,6 +281,13 @@ static bool selectBankInstructions(MachineFunction &MF) {
         continue;
       }
       switch (Opc) {
+      case Z80::LD8pg:
+        if (Bankable.contains(MI.getOperand(0).getReg())) {
+          /* The accumulator scratch is dead here. Keep the byte store
+             generic until placement chooses whether that scratch is needed. */
+          NewOpc = Z80::BANK_LD8pg;
+        }
+        break;
       case Z80::LD16ri:
         NewOpc = Z80::BANK_LD16ri;
         break;
@@ -280,6 +307,9 @@ static bool selectBankInstructions(MachineFunction &MF) {
       }
       if (NewOpc && Bankable.contains(MI.getOperand(Op).getReg())) {
         MI.setDesc(TII->get(NewOpc));
+        if (NewOpc == Z80::BANK_LD8pg)
+          MI.addOperand(
+              MF, MachineOperand::CreateReg(Z80::A, true, true, false, true));
         changed = true;
       }
     }

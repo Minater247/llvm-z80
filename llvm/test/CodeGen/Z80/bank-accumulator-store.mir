@@ -1,0 +1,62 @@
+# RUN: llc -mattr=+alternate-regs -run-pass=z80-machine-prera-opt -verify-machineinstrs %s -o - | FileCheck %s
+# RUN: llc -mattr=-alternate-regs -run-pass=z80-machine-prera-opt -verify-machineinstrs %s -o - | FileCheck %s --check-prefix=OFF
+# RUN: %python %S/Inputs/bank-accumulator-store.py --llc llc --mir %s --work %t
+# OFF-NOT: BANK_
+--- |
+  target triple = "z80"
+  define void @free_accumulator() { ret void }
+  define void @live_accumulator() { ret void }
+  define void @ordinary_stores() { ret void }
+...
+---
+name: free_accumulator
+tracksRegLiveness: true
+# CHECK-LABEL: name: free_accumulator
+# CHECK: BANK_LD8pg %0, $c, implicit-def dead $a :: (volatile store (s8))
+# CHECK: BANK_INC16
+body: |
+  bb.0:
+    liveins: $hl, $bc, $de, $ix, $iy, $f
+    $a = COPY $c
+    CP8ai 91, implicit-def $f, implicit $a
+    %0:a16 = COPY $hl
+    $hl = LD16ri 42
+    LD8pg %0, $c :: (volatile store (s8))
+    %0:a16 = INC16r %0
+    $a = LD8ri 73
+    LD8pa %0, $a :: (volatile store (s8))
+    RET16 implicit-def $sps, implicit $sps, implicit $a, implicit $f, implicit $hl, implicit $bc, implicit $de, implicit $ix, implicit $iy
+...
+---
+name: live_accumulator
+tracksRegLiveness: true
+# CHECK-LABEL: name: live_accumulator
+# CHECK-NOT: BANK_
+# CHECK: LD8pg
+body: |
+  bb.0:
+    liveins: $hl, $bc, $f
+    $a = COPY $c
+    CP8ai 91, implicit-def $f, implicit $a
+    %0:a16 = COPY $hl
+    $a = LD8ri 61
+    LD8pg %0, $c :: (volatile store (s8))
+    %0:a16 = INC16r %0
+    LD8pa %0, $a :: (volatile store (s8))
+    RET16 implicit-def $sps, implicit $sps, implicit $a, implicit $f, implicit $bc
+...
+---
+name: ordinary_stores
+tracksRegLiveness: true
+# CHECK-LABEL: name: ordinary_stores
+# CHECK-NOT: BANK_
+# CHECK: LD8pg
+body: |
+  bb.0:
+    liveins: $hl, $bc
+    %0:a16 = COPY $hl
+    LD8pg %0, $c :: (volatile store (s8))
+    %0:a16 = INC16r %0
+    LD8pg %0, $b :: (volatile store (s8))
+    RET16 implicit-def $sps, implicit $sps
+...

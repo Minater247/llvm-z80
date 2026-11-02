@@ -148,6 +148,12 @@ unsigned copyCost(MCRegister Dst, MCRegister Src, bool KillSrc,
 unsigned extraAccessCost(const MachineInstr &MI, unsigned Operand, MCRegister P,
                          bool Bytes) {
   unsigned Opc = MI.getOpcode();
+  if (Opc == Z80::BANK_LD8pg && Operand == 0) {
+    if (Z80::ALT16RegClass.contains(P))
+      return Bytes ? 3 : 12;
+    if (P == Z80::BC || P == Z80::DE)
+      return Bytes ? 1 : 4;
+  }
   if (Z80::ALT16RegClass.contains(P)) {
     if (Opc == Z80::BANK_LD16ro || Opc == Z80::BANK_LD16or)
       return Bytes ? 6 : 50;
