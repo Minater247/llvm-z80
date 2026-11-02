@@ -1,14 +1,17 @@
 # RUN: llc -run-pass=z80-machine-prera-opt,z80-prepare-live-ranges -verify-machineinstrs %s -o - | FileCheck %s
 # RUN: %python %S/Inputs/local-pair-lanes.py --llc llc --mir %s --work %t
 #
-# A page cursor retains its pair between local byte updates and releases its
-# constant lane across calls. Both byte lanes can be the changing component.
+# Page cursors retain pairs for constant lanes or runtime read/modify/write
+# regions and release them across calls. Either byte lane can change.
 --- |
   target triple = "z80"
   declare void @opaque()
   define void @low_cursor() { ret void }
   define void @high_cursor() { ret void }
   define void @fixed_ports() { ret void }
+  define void @runtime_high() { ret void }
+  define void @runtime_low() { ret void }
+  define void @runtime_stores() { ret void }
 ...
 ---
 name: low_cursor
@@ -117,4 +120,107 @@ body: |
     $a = LD8ri 68
     LD8pa %1, $a :: (volatile store (s8))
     RET16 implicit-def $sps, implicit $sps
+...
+---
+name: runtime_high
+tracksRegLiveness: true
+# CHECK-LABEL: name: runtime_high
+# CHECK: bb.1:
+# CHECK: [[PAIR:%[0-9]+]].sub_low:r16 = COPY
+# CHECK-NEXT: [[PAIR]].sub_high:r16 = COPY
+# CHECK-NEXT: $a = LD8ap [[PAIR]]
+# CHECK: LD8pa [[PAIR]], $a
+# CHECK-NEXT: [[PAIR]].sub_low:r16 = INC8r [[PAIR]].sub_low
+# CHECK: CALL16 @opaque
+# CHECK: [[NEXT:%[0-9]+]].sub_low:r16 = COPY
+# CHECK-NEXT: [[NEXT]].sub_high:r16 = COPY
+# CHECK-NEXT: $a = LD8ap [[NEXT]]
+# CHECK: LD8pa [[NEXT]], $a
+body: |
+  bb.0:
+    successors: %bb.1(0x80000000)
+    liveins: $de
+    undef %0.sub_low:r16 = COPY $e
+    %0.sub_high:r16 = COPY $d
+    JQ %bb.1
+  bb.1:
+    $a = LD8ap %0 :: (volatile load (s8))
+    XOR8ai 17, implicit-def $a, implicit-def dead $f, implicit $a
+    LD8pa %0, $a :: (volatile store (s8))
+    %0.sub_low:r16 = INC8r %0.sub_low, implicit-def dead $f
+    CALL16 @opaque, csr_z80_c, implicit $sps
+    $a = LD8ap %0 :: (volatile load (s8))
+    XOR8ai 34, implicit-def $a, implicit-def dead $f, implicit $a
+    LD8pa %0, $a :: (volatile store (s8))
+    $de = COPY %0
+    RET16 implicit-def $sps, implicit $sps, implicit $de
+...
+---
+name: runtime_low
+tracksRegLiveness: true
+# CHECK-LABEL: name: runtime_low
+# CHECK: bb.1:
+# CHECK: [[PAIR:%[0-9]+]].sub_high:r16 = COPY
+# CHECK-NEXT: [[PAIR]].sub_low:r16 = COPY
+# CHECK-NEXT: $a = LD8ap [[PAIR]]
+# CHECK: LD8pa [[PAIR]], $a
+# CHECK-NEXT: [[PAIR]].sub_high:r16 = DEC8r [[PAIR]].sub_high
+# CHECK: CALL16 @opaque
+# CHECK: [[NEXT:%[0-9]+]].sub_high:r16 = COPY
+# CHECK-NEXT: [[NEXT]].sub_low:r16 = COPY
+# CHECK-NEXT: $a = LD8ap [[NEXT]]
+# CHECK: LD8pa [[NEXT]], $a
+body: |
+  bb.0:
+    successors: %bb.1(0x80000000)
+    liveins: $de
+    undef %0.sub_low:r16 = COPY $e
+    %0.sub_high:r16 = COPY $d
+    JQ %bb.1
+  bb.1:
+    $a = LD8ap %0 :: (volatile load (s8))
+    XOR8ai 17, implicit-def $a, implicit-def dead $f, implicit $a
+    LD8pa %0, $a :: (volatile store (s8))
+    %0.sub_high:r16 = DEC8r %0.sub_high, implicit-def dead $f
+    CALL16 @opaque, csr_z80_c, implicit $sps
+    $a = LD8ap %0 :: (volatile load (s8))
+    XOR8ai 34, implicit-def $a, implicit-def dead $f, implicit $a
+    LD8pa %0, $a :: (volatile store (s8))
+    $de = COPY %0
+    RET16 implicit-def $sps, implicit $sps, implicit $de
+...
+---
+name: runtime_stores
+tracksRegLiveness: true
+# CHECK-LABEL: name: runtime_stores
+# CHECK: bb.1:
+# CHECK: [[FIRST:%[0-9]+]].sub_low:r16 = COPY [[LOW:%[0-9]+]]
+# CHECK-NEXT: [[FIRST]].sub_high:r16 = COPY [[HIGH:%[0-9]+]]
+# CHECK-NEXT: LD8pa [[FIRST]], $a
+# CHECK-NEXT: [[LOW]]:r8 = INC8r [[LOW]]
+# CHECK: [[SECOND:%[0-9]+]].sub_low:r16 = COPY [[LOW]]
+# CHECK-NEXT: [[SECOND]].sub_high:r16 = COPY [[HIGH]]
+# CHECK-NEXT: LD8pa [[SECOND]], $a
+body: |
+  bb.0:
+    successors: %bb.1(0x80000000)
+    liveins: $de
+    undef %0.sub_low:r16 = COPY $e
+    %0.sub_high:r16 = COPY $d
+    JQ %bb.1
+  bb.1:
+    $a = LD8ri 17
+    LD8pa %0, $a :: (volatile store (s8))
+    %0.sub_low:r16 = INC8r %0.sub_low, implicit-def dead $f
+    $a = LD8ri 34
+    LD8pa %0, $a :: (volatile store (s8))
+    CALL16 @opaque, csr_z80_c, implicit $sps
+    %0.sub_low:r16 = INC8r %0.sub_low, implicit-def dead $f
+    $a = LD8ri 51
+    LD8pa %0, $a :: (volatile store (s8))
+    %0.sub_low:r16 = INC8r %0.sub_low, implicit-def dead $f
+    $a = LD8ri 68
+    LD8pa %0, $a :: (volatile store (s8))
+    $de = COPY %0
+    RET16 implicit-def $sps, implicit $sps, implicit $de
 ...

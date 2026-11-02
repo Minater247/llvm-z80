@@ -1281,6 +1281,7 @@ bool Z80InstructionSelector::selectLoadStore(MachineInstr &I,
     }
   }
 
+  bool RetainsAddress = IsLoad && !MRI.hasOneNonDBGUse(PtrReg);
   I.removeOperand(1);
   I.removeOperand(0);
   MachineInstrBuilder MIB(MF, I);
@@ -1405,10 +1406,11 @@ bool Z80InstructionSelector::selectLoadStore(MachineInstr &I,
     if (AccumulatorByte) {
       auto &Use = *MRI.use_nodbg_instructions(ValReg).begin();
       if (Use.getParent() == I.getParent()) {
-        /* Select the read at its accumulator consumer when only pure register
-           work separates them. This avoids creating an A-to-byte-to-A lifetime
-           around address arithmetic. Memory operations and barriers retain
-           their ordering, including volatile reads. */
+        /* Select the read at its accumulator consumer to avoid an
+           A-to-byte-to-A lifetime. Unordered reads can cross each other when
+           the address already has another use; extending a dying address
+           across another read would trade a byte lifetime for a scarce pair.
+           Stores, ordered accesses and other barriers retain their ordering. */
         unsigned Budget = 32;
         for (auto It = std::next(I.getIterator());
              It != I.getParent()->end() && Budget--; ++It) {
@@ -1416,8 +1418,12 @@ bool Z80InstructionSelector::selectLoadStore(MachineInstr &I,
             AccumulatorUse = &Use;
             break;
           }
-          if (It->mayLoadOrStore() || It->isLoadFoldBarrier() ||
-              It->hasUnmodeledSideEffects())
+          if (It->isLoadFoldBarrier() || It->hasUnmodeledSideEffects() ||
+              (It->mayLoad() &&
+               (!RetainsAddress || !MMO.isUnordered() ||
+                llvm::any_of(It->memoperands(), [](const auto *MMO) {
+                  return !MMO->isUnordered();
+                }))))
             break;
         }
       }

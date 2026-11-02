@@ -505,10 +505,10 @@ static bool separateStableLanes(MachineFunction &MF, unsigned StableSub) {
     DenseMap<MachineInstr *, Register> Pairs;
     SmallPtrSet<MachineInstr *, 4> PairDefs;
     MRI.markUsesInDebugValueAsUndef(R);
-    if (StableValue) {
+    {
       /* Keep consecutive word accesses and byte updates in a local pair.
          Splitting the lifetime across calls and blocks still releases its
-         constant lane, but rebuilding at every access would prevent an
+         stable lane, but rebuilding at every access would prevent an
          address cursor from advancing in place. Limit each region's scan
          and publish the changing byte at its end for subsequent regions. */
       SmallVector<MachineBasicBlock *, 8> Blocks;
@@ -536,12 +536,28 @@ static bool separateStableLanes(MachineFunction &MF, unsigned StableSub) {
               if (!MO.isReg() || MO.getReg() != R)
                 continue;
               Boundary |= MO.isDef() && !MO.getSubReg();
+              Boundary |=
+                  !StableValue && MO.isDef() && MO.getSubReg() == StableSub;
               WholeUse |= MO.isUse() && !MO.getSubReg();
               VariableDef |= MO.isDef() && MO.getSubReg() == VariableSub;
               VariableUse |= MO.isUse() && !MO.isUndef() &&
                              MO.getSubReg() == VariableSub;
             }
             Boundary |= VariableDef && !VariableUse;
+            /* Building another arithmetic address competes for HL or an
+               index pair. End the cached cursor before that computation;
+               its next memory region can reconstruct it after the temporary
+               address has been consumed. */
+            if (WholeUses && !Boundary &&
+                MI.modifiesRegister(Z80::F,
+                                    MF.getSubtarget().getRegisterInfo()))
+              Boundary |=
+                  llvm::any_of(MI.defs(), [&, PairReg = R](const auto &MO) {
+                    return MO.isReg() && MO.getReg().isVirtual() &&
+                           MO.getReg() != PairReg && !MO.getSubReg() &&
+                           Z80::R16RegClass.hasSubClassEq(
+                               MRI.getRegClass(MO.getReg()));
+                  });
             /* Arithmetic consumers benefit from independent byte lifetimes:
                retaining their zero-extended operand would occupy a pair
                across the other inputs and results. Group memory accesses,
@@ -571,16 +587,26 @@ static bool separateStableLanes(MachineFunction &MF, unsigned StableSub) {
           }
           /* Repeated stores to independent fixed addresses can interleave.
              Retaining all of those pairs increases pressure without saving
-             cursor updates or a read/modify/write address reconstruction. */
-          if (WholeUses < 2 || (!UpdatedAtLast && !(Loaded && Stored)))
+             cursor updates or a read/modify/write address reconstruction.
+             Runtime lanes retain a pair only for read/modify/write regions:
+             keeping a write-only destination live across other address
+             computations can displace their arithmetic temporaries. */
+          if (WholeUses < 2 || (!UpdatedAtLast && !(Loaded && Stored)) ||
+              (!StableValue && !(Loaded && Stored)))
             continue;
           Register Pair = MRI.createVirtualRegister(RC);
           BuildMI(*MBB, Begin, Begin->getDebugLoc(), TII.get(TargetOpcode::COPY))
               .addReg(Pair, RegState::Define | RegState::Undef, VariableSub)
               .addReg(Variable);
-          BuildMI(*MBB, Begin, Begin->getDebugLoc(), TII.get(Z80::LD8ri))
-              .addReg(Pair, RegState::Define, StableSub)
-              .addImm(*StableValue);
+          if (StableValue)
+            BuildMI(*MBB, Begin, Begin->getDebugLoc(), TII.get(Z80::LD8ri))
+                .addReg(Pair, RegState::Define, StableSub)
+                .addImm(*StableValue);
+          else
+            BuildMI(*MBB, Begin, Begin->getDebugLoc(),
+                    TII.get(TargetOpcode::COPY))
+                .addReg(Pair, RegState::Define, StableSub)
+                .addReg(Stable);
           Pairs[&*Begin] = Pair;
           auto After = std::next(Last);
           for (auto Region = Begin; Region != After; ++Region)

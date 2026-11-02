@@ -44,27 +44,39 @@ ret
         (args.work / (allocator + str(bank) + '.s')).write_text(assembly)
         program = execution.Program(assembly)
         rng = random.Random(724)
-        for name in ('low_cursor', 'high_cursor', 'fixed_ports'):
+        for name in ('low_cursor', 'high_cursor', 'fixed_ports',
+                     'runtime_high', 'runtime_low', 'runtime_stores'):
             for value in range(256):
                 cpu = execution.CPU(rng)
                 cpu.put('e', value)
-                cpu.put('d', (value + 1) & 255)
+                cpu.put('d', value ^ 90 if name.startswith('runtime_')
+                        else (value + 1) & 255)
                 before = bytes(cpu.mem)
                 sp, ix, alternate = cpu.sp, cpu.get('ix'), dict(cpu.alt)
                 cpu.run(program, entry=name)
                 expected = bytearray(before)
                 destinations = set()
-                if name == 'low_cursor':
+                if name in ('low_cursor', 'runtime_stores'):
+                    page = (value ^ 90) << 8 if name == 'runtime_stores' else 0x3100
                     for step in range(4):
-                        address = 0x3100 | ((value + step) & 255)
+                        address = page | ((value + step) & 255)
                         expected[address] = 17 * (step + 1)
                         destinations.add(address)
-                    result = 0x3100 | ((value + 3) & 255)
+                    result = page | ((value + 3) & 255)
                 elif name == 'high_cursor':
                     result = (((value - 3) & 255) << 8) | 49
                     assert cpu.get('a') == before[result]
                     for step in range(4):
                         address = (((value - step) & 255) << 8) | 49
+                        assert cpu.reads.count(address) == 1
+                elif name.startswith('runtime_'):
+                    start = ((value ^ 90) << 8) | value
+                    result = (((value ^ 90) << 8) | ((value + 1) & 255)
+                              if name == 'runtime_high' else
+                              ((((value ^ 90) - 1) & 255) << 8) | value)
+                    for address, mask in ((start, 17), (result, 34)):
+                        expected[address] ^= mask
+                        destinations.add(address)
                         assert cpu.reads.count(address) == 1
                 else:
                     for step in range(4):

@@ -95,3 +95,43 @@ define i8 @pure_register_gap(ptr %p, i8 %other) {
   %r = sub i8 %v, %b
   ret i8 %r
 }
+
+; A retained pointer permits two unordered reads to swap. Ordered reads and
+; a dying pointer retain the original order.
+; CHECK-LABEL: name: retained_read
+; CHECK: LD8ap {{.*}}from %ir.q
+; CHECK: AND8ai 127
+; CHECK: LD8ap {{.*}}from %ir.p
+define i8 @retained_read(ptr %p, ptr %q) {
+  %x = load i8, ptr %p
+  %y = load i8, ptr %q
+  %z = and i8 %y, 127
+  %r = sub i8 %x, %z
+  store i8 %r, ptr %p
+  ret i8 %r
+}
+
+; CHECK-LABEL: name: ordered_read
+; CHECK: LD8ap {{.*}}from %ir.p
+; CHECK: LD8ap {{.*}}from %ir.q
+; CHECK: AND8ai 127
+define i8 @ordered_read(ptr %p, ptr %q) {
+  %x = load i8, ptr %p
+  %y = load volatile i8, ptr %q
+  %z = and i8 %y, 127
+  %r = sub i8 %x, %z
+  store i8 %r, ptr %p
+  ret i8 %r
+}
+
+; CHECK-LABEL: name: dying_read
+; CHECK: LD8ap {{.*}}from %ir.p
+; CHECK: LD8ap {{.*}}from %ir.q
+; CHECK: AND8ai 127
+define i8 @dying_read(ptr %p, ptr %q) {
+  %x = load i8, ptr %p
+  %y = load i8, ptr %q
+  %z = and i8 %y, 127
+  %r = sub i8 %x, %z
+  ret i8 %r
+}

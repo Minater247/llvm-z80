@@ -91,4 +91,24 @@ for address in (0x1200, 0xffff):
             assert cpu.sp == 0xf002
             checks += 1
 
+for value in range(256):
+    for alias in (False, True):
+        for name in ('retained_read', 'ordered_read', 'dying_read'):
+            p, q = 0x1200, 0x1200 if alias else 0xffff
+            other = value if alias else value ^ 255
+            cpu.sp = 0xf000
+            cpu.mem[p], cpu.mem[q] = value, other
+            cpu.put('de', p)
+            cpu.put('bc', q)
+            cpu.reads.clear()
+            cpu.run(program, entry=name)
+            expected = (value - (other & 127)) & 255
+            assert cpu.get('a') == expected, (name, value, alias)
+            assert cpu.mem[p] == (value if name == 'dying_read' else expected)
+            assert cpu.sp == 0xf002
+            assert cpu.reads.count(p) == (2 if alias else 1)
+            if not alias:
+                assert cpu.reads.count(q) == 1
+            checks += 1
+
 print(f'{checks} shared byte load executions passed')
