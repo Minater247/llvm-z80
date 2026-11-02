@@ -1846,50 +1846,55 @@ bool Z80InstructionSelector::selectInsert(MachineInstr &I,
          RBI.constrainGenericRegister(InsertReg, *InsertRC, MRI);
 }
 
-// Keep the preserved high byte attached to a page-wrapped cursor. Building
-// each result from the original high byte keeps that original pair live across
-// an unrolled loop, even after its low byte is dead.
+/// Describe a page-wrapped cursor as a low-byte base, offset and high byte.
+/// Original identifies a full-width base when its high byte supplies the page.
+/// A zero offset also describes the initial cursor before its first update.
 static bool pageCursor(MachineInstr &MI, MachineRegisterInfo &MRI,
-                       Register &Base, int64_t &Step,
-                       MachineInstr *&Add) {
+                       Register &Base, Register &Page, Register &Original,
+                       int64_t &Step, MachineInstr *&Add) {
   if (MI.getOpcode() != TargetOpcode::G_MERGE_VALUES ||
       MI.getNumOperands() != 3 ||
       MRI.getType(MI.getOperand(0).getReg()) != LLT::scalar(16))
     return false;
-  auto Strip = [&](Register R) {
+  auto StripLow = [&](Register R) {
     for (unsigned N = 0; N != 4; ++N) {
       auto *D = MRI.getVRegDef(R);
-      if (!D || (D->getOpcode() != TargetOpcode::G_PTRTOINT &&
-                 D->getOpcode() != TargetOpcode::G_INTTOPTR))
+      if (!D)
+        break;
+      if (D->getOpcode() == TargetOpcode::G_UNMERGE_VALUES &&
+          D->getNumExplicitDefs() == 2 && D->getOperand(0).getReg() == R) {
+        R = D->getOperand(2).getReg();
+        continue;
+      }
+      if (D->getOpcode() != TargetOpcode::G_PTRTOINT &&
+          D->getOpcode() != TargetOpcode::G_INTTOPTR &&
+          D->getOpcode() != TargetOpcode::G_TRUNC)
         break;
       R = D->getOperand(1).getReg();
     }
     return R;
   };
-  auto *High = MRI.getVRegDef(MI.getOperand(2).getReg());
-  if (!High || High->getOpcode() != TargetOpcode::G_UNMERGE_VALUES ||
-      High->getNumExplicitDefs() != 2 ||
-      High->getOperand(1).getReg() != MI.getOperand(2).getReg())
-    return false;
-  Base = Strip(High->getOperand(2).getReg());
-  auto *Low = MRI.getVRegDef(MI.getOperand(1).getReg());
-  if (!Low)
-    return false;
-  if (Low->getOpcode() == TargetOpcode::G_TRUNC)
-    Low = MRI.getVRegDef(Strip(Low->getOperand(1).getReg()));
-  if (!Low || (Low->getOpcode() != TargetOpcode::G_ADD &&
-               Low->getOpcode() != TargetOpcode::G_PTR_ADD))
-    return false;
-  Register AddBase = Low->getOperand(1).getReg();
-  if (auto *D = MRI.getVRegDef(AddBase))
-    if (D->getOpcode() == TargetOpcode::G_TRUNC)
-      AddBase = D->getOperand(1).getReg();
-  auto Offset = getIConstantVRegVal(Low->getOperand(2).getReg(), MRI);
-  if (Strip(AddBase) != Base || !Offset || !Offset->isSignedIntN(8) ||
-      Offset->isZero())
-    return false;
-  Step = Offset->getSExtValue();
-  Add = Low;
+  Page = MI.getOperand(2).getReg();
+  Base = StripLow(MI.getOperand(1).getReg());
+  Add = MRI.getVRegDef(Base);
+  Step = 0;
+  if (Add && (Add->getOpcode() == TargetOpcode::G_ADD ||
+              Add->getOpcode() == TargetOpcode::G_PTR_ADD)) {
+    auto Offset = getIConstantVRegVal(Add->getOperand(2).getReg(), MRI);
+    if (!Offset || !Offset->isSignedIntN(8))
+      return false;
+    Step = Offset->getSExtValue();
+    Base = StripLow(Add->getOperand(1).getReg());
+  } else {
+    Add = nullptr;
+  }
+  Original = Register();
+  auto *High = MRI.getVRegDef(Page);
+  if (High && High->getOpcode() == TargetOpcode::G_UNMERGE_VALUES &&
+      High->getNumExplicitDefs() == 2 &&
+      High->getOperand(1).getReg() == Page &&
+      StripLow(High->getOperand(2).getReg()) == Base)
+    Original = Base;
   return true;
 }
 
@@ -1908,29 +1913,41 @@ bool Z80InstructionSelector::selectMergeValues(MachineInstr &I,
            MRI.getType(I.getOperand(2).getReg()) == LLT::scalar(8) &&
            "Illegal instruction");
     RC = STI.hasIndexHalfRegs() ? &Z80::R16RegClass : &Z80::G16RegClass;
-    Register Base;
+    Register Base, Page, Original;
     int64_t Step;
     MachineInstr *Add;
-    if (STI.is16Bit() && pageCursor(I, MRI, Base, Step, Add)) {
-      Register Previous;
-      unsigned Scanned = 0;
+    /* With a separately supplied page, a shared low byte already has to be
+       computed. Reusing the pair would add another update instead of removing
+       that byte calculation. */
+    if (STI.is16Bit() &&
+        pageCursor(I, MRI, Base, Page, Original, Step, Add) && Step &&
+        (Original || MRI.hasOneNonDBGUse(I.getOperand(1).getReg()))) {
       int64_t Direction = Step > 0 ? 1 : -1;
-      for (auto It = I.getIterator(); It != I.getParent()->begin() &&
-                                    Step != Direction && Scanned++ != 96;) {
+      Register Previous = Step == Direction ? Original : Register();
+      auto PageConstant = getIConstantVRegVal(Page, MRI);
+      unsigned Scanned = 0;
+      /* Reuse the whole preceding address so only its low byte changes. Equal
+         page constants can have distinct registers after legalization. */
+      for (auto It = I.getIterator(); !Previous && It != I.getParent()->begin() &&
+                                    Scanned++ != 96;) {
         auto &Candidate = *--It;
-        Register CandidateBase;
+        Register CandidateBase, CandidatePage, CandidateOriginal;
         int64_t CandidateStep;
         MachineInstr *CandidateAdd;
-        if (pageCursor(Candidate, MRI, CandidateBase, CandidateStep,
-                       CandidateAdd) &&
-            CandidateBase == Base && CandidateStep == Step - Direction) {
-          CandidateAdd->setFlags(0);
+        if (pageCursor(Candidate, MRI, CandidateBase, CandidatePage,
+                       CandidateOriginal, CandidateStep, CandidateAdd) &&
+            CandidateBase == Base &&
+            (CandidatePage == Page ||
+             (Original && CandidateOriginal == Original) ||
+             (PageConstant &&
+              PageConstant == getIConstantVRegVal(CandidatePage, MRI))) &&
+            CandidateStep == Step - Direction) {
+          if (CandidateAdd)
+            CandidateAdd->setFlags(0);
           Previous = Candidate.getOperand(0).getReg();
           break;
         }
       }
-      if (!Previous && Step == Direction)
-        Previous = Base;
       if (Previous) {
         Register Byte = MRI.createVirtualRegister(&Z80::R8RegClass);
         auto Copy = MIB.buildInstr(TargetOpcode::COPY, {Byte}, {})
