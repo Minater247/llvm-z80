@@ -71,6 +71,33 @@ private:
 #undef GET_GICOMBINER_IMPL
 
 bool Z80PostLegalizerCombinerImpl::tryCombineAll(MachineInstr &I) const {
+  if (I.getOpcode() == TargetOpcode::G_SELECT && !STI.hasEZ80Ops() &&
+      MRI.getType(I.getOperand(0).getReg()) == LLT::scalar(16)) {
+    auto True = getIConstantVRegVal(I.getOperand(2).getReg(), MRI);
+    auto False = getIConstantVRegVal(I.getOperand(3).getReg(), MRI);
+    if (True && False) {
+      APInt Difference = *True ^ *False;
+      if (!Difference.isZero() &&
+          (Difference.isIntN(8) || Difference.getLoBits(8).isZero())) {
+        /* Keep the common byte outside the select. Only the changing byte
+           needs conditional definitions, releasing the other lane of both
+           input pairs before register allocation. */
+        unsigned Shift = Difference.isIntN(8) ? 0 : 8;
+        B.setInstrAndDebugLoc(I);
+        LLT Byte = LLT::scalar(8);
+        auto T = B.buildConstant(Byte, True->lshr(Shift).trunc(8));
+        auto F = B.buildConstant(Byte, False->lshr(Shift).trunc(8));
+        auto Selected = B.buildSelect(Byte, I.getOperand(1).getReg(), T, F);
+        auto Common = B.buildConstant(Byte, True->lshr(8 - Shift).trunc(8));
+        Register Low = Shift ? Common.getReg(0) : Selected.getReg(0);
+        Register High = Shift ? Selected.getReg(0) : Common.getReg(0);
+        B.buildMergeValues(I.getOperand(0).getReg(), {Low, High});
+        Observer.erasingInstr(I);
+        I.eraseFromParent();
+        return true;
+      }
+    }
+  }
   return tryCombineAllImpl(I);
 }
 

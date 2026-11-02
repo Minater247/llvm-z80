@@ -8,6 +8,8 @@
 ; RUN: %python %S/Inputs/shared-accumulator-load.py %t.greedy.s
 ; RUN: llc -regalloc=greedy -mattr=+alternate-regs -verify-machineinstrs %s -o %t.greedy-bank.s
 ; RUN: %python %S/Inputs/shared-accumulator-load.py %t.greedy-bank.s
+; RUN: opt -passes=debugify %s -o %t.debug.bc
+; RUN: llc -verify-machineinstrs %t.debug.bc -o /dev/null
 ;
 ; Several comparisons share one accumulator load. The copied value remains
 ; available for bit tests and conditional stores; the pointer can use BC/DE.
@@ -64,4 +66,32 @@ one:
   ret i8 1
 two:
   ret i8 2
+}
+
+; A single accumulator consumer also admits BC/DE addressing. A value whose
+; consumer follows another accumulator use must survive that intervening use.
+; CHECK-LABEL: name: single_return
+; CHECK: $a = LD8ap
+; CHECK-LABEL: name: across_accumulator
+; CHECK: $a = LD8ap
+define i8 @single_return(ptr %p) {
+  %v = load volatile i8, ptr %p
+  ret i8 %v
+}
+define i8 @across_accumulator(ptr %p, i8 %other) {
+  %v = load volatile i8, ptr %p
+  store volatile i8 %other, ptr inttoptr (i16 12288 to ptr)
+  ret i8 %v
+}
+
+; Pure arithmetic can precede the read without extending its A lifetime.
+; CHECK-LABEL: name: pure_register_gap
+; CHECK: ADD8ai 17
+; CHECK: $a = LD8ap
+; CHECK-NEXT: SUB8ar
+define i8 @pure_register_gap(ptr %p, i8 %other) {
+  %v = load volatile i8, ptr %p
+  %b = add i8 %other, 17
+  %r = sub i8 %v, %b
+  ret i8 %r
 }

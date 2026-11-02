@@ -1087,7 +1087,7 @@ bool Z80InstructionSelector::selectLoadStore(MachineInstr &I,
                   MRI.hasOneNonDBGUse(ValReg);
   bool AccumulatorByte = false;
   if (IsLoad && Ty.getSizeInBits() == 8 && MRI.hasOneNonDBGUse(ValReg)) {
-    const auto &Use = *MRI.use_nodbg_instructions(ValReg).begin();
+    auto &Use = *MRI.use_nodbg_instructions(ValReg).begin();
     AccumulatorByte = Use.isCopy() && Use.getOperand(0).getReg() == Z80::A;
   }
   bool SharedAccumulatorByte = false;
@@ -1399,7 +1399,40 @@ bool Z80InstructionSelector::selectLoadStore(MachineInstr &I,
     return selectCopy(*Copy, MRI) &&
            constrainSelectedInstRegOperands(I, TII, TRI, RBI);
   }
-  if ((AddressByte || SharedAccumulatorByte) && !IsOff && RMWOps.empty()) {
+  if ((AddressByte || AccumulatorByte || SharedAccumulatorByte) && !IsOff &&
+      RMWOps.empty()) {
+    MachineInstr *AccumulatorUse = nullptr;
+    if (AccumulatorByte) {
+      auto &Use = *MRI.use_nodbg_instructions(ValReg).begin();
+      if (Use.getParent() == I.getParent()) {
+        /* Select the read at its accumulator consumer when only pure register
+           work separates them. This avoids creating an A-to-byte-to-A lifetime
+           around address arithmetic. Memory operations and barriers retain
+           their ordering, including volatile reads. */
+        unsigned Budget = 32;
+        for (auto It = std::next(I.getIterator());
+             It != I.getParent()->end() && Budget--; ++It) {
+          if (&*It == &Use) {
+            AccumulatorUse = &Use;
+            break;
+          }
+          if (It->mayLoadOrStore() || It->isLoadFoldBarrier() ||
+              It->hasUnmodeledSideEffects())
+            break;
+        }
+      }
+    }
+    if (AccumulatorUse) {
+      auto Load = BuildMI(*AccumulatorUse->getParent(), AccumulatorUse,
+                          I.getDebugLoc(), TII.get(Z80::LD8ap), Z80::A)
+                      .add(MOs[0])
+                      .cloneMemRefs(I)
+                      .setMIFlags(I.getFlags());
+      AccumulatorUse->eraseFromParent();
+      I.eraseFromParent();
+      MRI.markUsesInDebugValueAsUndef(ValReg);
+      return constrainSelectedInstRegOperands(*Load, TII, TRI, RBI);
+    }
     MachineIRBuilder Builder(I);
     Builder.setInsertPt(Builder.getMBB(), std::next(Builder.getInsertPt()));
     auto Copy = Builder.buildCopy(ValReg, Register(Z80::A));

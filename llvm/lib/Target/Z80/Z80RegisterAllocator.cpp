@@ -924,7 +924,26 @@ bool Z80RegisterAllocator::split(const LiveInterval &LI,
       SE->enterIntvAtEnd(*Loop->getLoopPredecessor());
       LoopBlocks.insert(Loop->getLoopPredecessor());
       for (auto *MBB : Loop->blocks()) {
-        SE->useIntv(*MBB);
+        /* Publish the loop value on every live exit. The size-mode splitter
+           can hoist these copies back to the original definition, but needs
+           them to reconstruct the complement's liveness through the loop.
+           Without an exit transition, its range can contain an unprotected
+           hole even though a later use still needs the original value. */
+        SlotIndex End = LIS->getMBBEndIdx(MBB).getPrevSlot();
+        if (LI.liveAt(End) &&
+            llvm::any_of(MBB->successors(), [&](const auto *Succ) {
+              return !Loop->contains(Succ) &&
+                     LI.liveAt(LIS->getMBBStartIdx(Succ));
+            })) {
+          SlotIndex Leave = SE->leaveIntvBefore(SA->getLastSplitPoint(MBB));
+          SE->useIntv(LIS->getMBBStartIdx(MBB), Leave);
+          SE->overlapIntv(Leave, End);
+          /* overlapIntv ends within a block. Keep the final slot in the
+             loop interval as well, preserving liveness on backedges. */
+          SE->useIntv(End, LIS->getMBBEndIdx(MBB));
+        } else {
+          SE->useIntv(*MBB);
+        }
         LoopBlocks.insert(MBB);
       }
     }
@@ -1147,6 +1166,55 @@ Z80RegisterAllocator::selectOrSplit(const LiveInterval &LI,
                    }) &&
       split(LI, NewRegs, true))
     return MCRegister();
+  if (Free && Z80::ALT16RegClass.contains(Free) && LI.isSpillable()) {
+    const auto *Def = MRI->getUniqueVRegDef(LI.reg());
+    if (Def && (Def->getOpcode() == Z80::BANK_LD16ri ||
+                Def->getOpcode() == Z80::LD16ri)) {
+      /* A split constant can survive calls in an alternate pair even when
+         every consumer needs a primary pair. Compare those transfers with
+         recreating the immediate at each copy; reserving a bank register is
+         useful only when it actually saves work. */
+      bool Bytes = OptSize || ST->hasEZ80Ops(), Eligible = true;
+      double Keep = frequency(*Def) * (Bytes ? 5 : 18), Remat = 0;
+      for (const auto &Use : MRI->use_nodbg_instructions(LI.reg())) {
+        if (!Use.isCopy() || Use.getOperand(0).getSubReg() ||
+            Use.getOperand(1).getSubReg()) {
+          Eligible = false;
+          break;
+        }
+        Register Dst = Use.getOperand(0).getReg();
+        SmallVector<MCRegister, 12> Choices;
+        if (Dst.isPhysical())
+          Choices.push_back(Dst.asMCReg());
+        else if (VRM->hasPhys(Dst))
+          Choices.push_back(VRM->getPhys(Dst));
+        else
+          Choices = domain(Dst);
+        unsigned Copy = ~0u, Immediate = ~0u;
+        for (MCRegister P : Choices) {
+          if (!Z80::R16RegClass.contains(P)) {
+            Eligible = false;
+            break;
+          }
+          Copy = std::min(Copy, transferCost(P, Free, false));
+          Immediate = std::min(Immediate, Bytes ? (isIndex(P) ? 4u : 3u)
+                                                : (isIndex(P) ? 14u : 10u));
+        }
+        if (!Eligible || Choices.empty()) {
+          Eligible = false;
+          break;
+        }
+        Keep += frequency(Use) * Copy;
+        Remat += frequency(Use) * Immediate;
+      }
+      if (Eligible && Remat < Keep) {
+        LiveRangeEdit Edit(&LI, NewRegs, *MF, *LIS, VRM, this, &DeadRemats);
+        spiller().spill(Edit);
+        ++NumSpills;
+        return MCRegister();
+      }
+    }
+  }
   if (Free)
     return Free;
   /* Let the remaining original ranges expose their constraints before

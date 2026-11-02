@@ -1,4 +1,4 @@
-"""Execute loop-local invariants, shared exits and loop-updated values."""
+"""Check loop invariants and updated values across shared and live exits."""
 import argparse
 import importlib.util
 import random
@@ -55,17 +55,25 @@ ld hl, 34567
 ld iy, 45678
 ret
 '''
+        for name, preserved in (('before_loop', 'd'), ('in_loop', 'bc')):
+            assembly += '\n' + name + ':\n'
+            for index, reg in enumerate('abcdehl'):
+                if reg not in preserved:
+                    assembly += f'ld {reg}, {60 + index}\n'
+            assembly += 'ret\n'
         (args.work / (allocator + str(bank) + '.s')).write_text(assembly)
         program = execution.Program(assembly)
         rng = random.Random(421)
-        for name in ('invariant', 'conditional_loop', 'updated'):
+        for name in ('invariant', 'conditional_loop', 'updated',
+                     'live_exit', 'shared_live_exit', 'updated_live_exit'):
             for value in range(256):
                 cpu = CPU(rng)
                 cpu.put('e', value)
                 sp, ix, alternate = cpu.sp, cpu.get('ix'), dict(cpu.alt)
                 cpu.run(program, entry=name)
-                count = 0 if name == 'conditional_loop' and value & 1 else 8
-                updated = name == 'updated'
+                skipped = name in ('conditional_loop', 'shared_live_exit') and value & 1
+                count = 0 if skipped else 8
+                updated = name in ('updated', 'updated_live_exit')
                 expected = [(value + i * updated) & 255 for i in range(count)]
                 assert cpu.values == expected, (allocator, bank, name, value)
                 assert cpu.get('a') == (value + count * updated) & 255

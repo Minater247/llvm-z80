@@ -4,9 +4,14 @@
   target triple = "z80"
   declare void @opaque()
   declare void @preserving()
+  declare void @before_loop()
+  declare void @in_loop()
   define void @invariant() optsize minsize { ret void }
   define void @conditional_loop() optsize minsize { ret void }
   define void @updated() optsize minsize { ret void }
+  define void @live_exit() optsize minsize { ret void }
+  define void @shared_live_exit() optsize minsize { ret void }
+  define void @updated_live_exit() optsize minsize { ret void }
 ...
 ---
 name: invariant
@@ -120,6 +125,112 @@ body: |
     JQ %bb.3
   bb.3:
     CALL16 @opaque, csr_z80_c, implicit $sps
+    $a = COPY %0
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...
+---
+name: live_exit
+tracksRegLiveness: true
+frameInfo:
+  adjustsStack: true
+  hasCalls: true
+stack:
+  - { id: 0, size: 1, alignment: 1 }
+# The value crosses calls preserving disjoint registers, then remains live on
+# the loop exit. Its complement must cover the loop or be restored on exit.
+body: |
+  bb.0:
+    successors: %bb.1(0x80000000)
+    liveins: $e
+    %0:r8 = COPY $e
+    LD8or %stack.0, 0, %0 :: (store (s8) into %stack.0)
+    CALL16 @before_loop, CustomRegMask($d,$ix), implicit $sps
+    %1:r8 = LD8ri 8
+    JQ %bb.1
+  bb.1:
+    successors: %bb.2(0x80000000)
+    CALL16 @in_loop, CustomRegMask($b,$c,$ix), implicit $sps
+    JQ %bb.2
+  bb.2:
+    successors: %bb.1(0x70000000), %bb.3(0x10000000)
+    $a = COPY %0
+    LD8ma 12544, implicit $a :: (volatile store (s8))
+    %1:r8 = DEC8r %1, implicit-def $f
+    JQCC %bb.1, 0, implicit $f
+    JQ %bb.3
+  bb.3:
+    $a = COPY %0
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...
+---
+name: shared_live_exit
+tracksRegLiveness: true
+frameInfo:
+  adjustsStack: true
+  hasCalls: true
+stack:
+  - { id: 0, size: 1, alignment: 1 }
+# The value crosses calls preserving disjoint registers, then remains live on
+# the loop exit. Its complement must cover the loop or be restored on exit.
+body: |
+  bb.0:
+    successors: %bb.1(0x40000000), %bb.3(0x40000000)
+    liveins: $e
+    %0:r8 = COPY $e
+    LD8or %stack.0, 0, %0 :: (store (s8) into %stack.0)
+    CALL16 @before_loop, CustomRegMask($d,$ix), implicit $sps
+    %1:r8 = LD8ri 8
+    $a = COPY %0
+    AND8ai 1, implicit-def $a, implicit-def $f, implicit $a
+    JQCC %bb.3, 0, implicit $f
+    JQ %bb.1
+  bb.1:
+    successors: %bb.2(0x80000000)
+    CALL16 @in_loop, CustomRegMask($b,$c,$ix), implicit $sps
+    JQ %bb.2
+  bb.2:
+    successors: %bb.1(0x70000000), %bb.3(0x10000000)
+    $a = COPY %0
+    LD8ma 12544, implicit $a :: (volatile store (s8))
+    %1:r8 = DEC8r %1, implicit-def $f
+    JQCC %bb.1, 0, implicit $f
+    JQ %bb.3
+  bb.3:
+    $a = COPY %0
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...
+---
+name: updated_live_exit
+tracksRegLiveness: true
+frameInfo:
+  adjustsStack: true
+  hasCalls: true
+stack:
+  - { id: 0, size: 1, alignment: 1 }
+# The value crosses calls preserving disjoint registers, then remains live on
+# the loop exit. Its complement must cover the loop or be restored on exit.
+body: |
+  bb.0:
+    successors: %bb.1(0x80000000)
+    liveins: $e
+    %0:r8 = COPY $e
+    LD8or %stack.0, 0, %0 :: (store (s8) into %stack.0)
+    CALL16 @before_loop, CustomRegMask($d,$ix), implicit $sps
+    %1:r8 = LD8ri 8
+    JQ %bb.1
+  bb.1:
+    successors: %bb.2(0x80000000)
+    CALL16 @in_loop, CustomRegMask($b,$c,$ix), implicit $sps
+    JQ %bb.2
+  bb.2:
+    successors: %bb.1(0x70000000), %bb.3(0x10000000)
+    $a = COPY %0
+    LD8ma 12544, implicit $a :: (volatile store (s8))
+    %0:r8 = INC8r %0, implicit-def dead $f
+    %1:r8 = DEC8r %1, implicit-def $f
+    JQCC %bb.1, 0, implicit $f
+    JQ %bb.3
+  bb.3:
     $a = COPY %0
     RET16 implicit-def $sps, implicit $sps, implicit $a
 ...

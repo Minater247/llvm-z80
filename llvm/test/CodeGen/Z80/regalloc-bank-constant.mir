@@ -1,0 +1,42 @@
+# RUN: llc -start-before=z80-regalloc -regalloc=z80 -mattr=+alternate-regs -verify-machineinstrs %s -o %t.s
+# RUN: FileCheck %s < %t.s
+# RUN: %python %S/Inputs/regalloc-bank-constant.py %t.s
+#
+# An immediate crossing a call costs less to recreate at its primary consumer
+# than to retain in an alternate pair and transfer back. An updated pointer
+# still carries its computed value across the call.
+--- |
+  target triple = "z80"
+  declare void @clobber()
+  define void @constant_copy() optsize minsize { ret void }
+  define void @updated_pointer() optsize minsize { ret void }
+...
+---
+name: constant_copy
+tracksRegLiveness: true
+# CHECK-LABEL: constant_copy:
+# CHECK-NOT: exx
+# CHECK: call clobber
+# CHECK-NEXT: ld {{bc|de}}, 4660
+# CHECK-NOT: exx
+# CHECK: ret
+body: |
+  bb.0:
+    %0:bo16 = BANK_LD16ri 4660
+    CALL16 @clobber, CustomRegMask($ix, $de_alt, $d_alt, $e_alt, $bc_alt, $b_alt, $c_alt), implicit $sps
+    %1:o16 = COPY %0
+    $a = LD8ap %1 :: (volatile load (s8))
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...
+---
+name: updated_pointer
+tracksRegLiveness: true
+body: |
+  bb.0:
+    %0:bo16 = BANK_LD16ri 4660
+    %0:bo16 = BANK_INC16 %0
+    CALL16 @clobber, CustomRegMask($ix, $de_alt, $d_alt, $e_alt, $bc_alt, $b_alt, $c_alt), implicit $sps
+    %1:o16 = COPY %0
+    $a = LD8ap %1 :: (volatile load (s8))
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...

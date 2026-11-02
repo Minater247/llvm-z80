@@ -14,6 +14,21 @@ checks = 0
 
 for address in (0x1200, 0xffff):
     for value in range(256):
+        for name in ('single_return', 'across_accumulator'):
+            cpu.sp = 0xf000
+            cpu.mem[address] = value
+            cpu.mem[0x3000] = value
+            cpu.put('de', address)
+            cpu.put('c', value ^ 255)
+            cpu.reads.clear()
+            cpu.run(program, entry=name)
+            assert cpu.get('a') == value, (name, address, value)
+            if name == 'across_accumulator':
+                assert cpu.mem[0x3000] == value ^ 255
+            assert cpu.reads.count(address) == 1
+            assert cpu.sp == 0xf002
+            checks += 1
+
         for alias in (False, True):
             output = address if alias else 0x3000
             cpu.sp = 0xf000
@@ -31,6 +46,15 @@ for address in (0x1200, 0xffff):
             checks += 1
 
         cpu.sp = 0xf000
+        cpu.mem[0x3000] = value
+        cpu.put('de', 0x3000)
+        cpu.put('c', value ^ 255)
+        cpu.run(program, entry='across_accumulator')
+        assert cpu.get('a') == value and cpu.mem[0x3000] == value ^ 255
+        assert cpu.sp == 0xf002
+        checks += 1
+
+        cpu.sp = 0xf000
         cpu.mem[address] = value
         cpu.mem[0x3000] = cpu.mem[0x4000] = value ^ 255
         cpu.put('de', address)
@@ -44,6 +68,17 @@ for address in (0x1200, 0xffff):
         checks += 1
 
         for other in (0, 1, 12, 30, 31, 127, 128, 255):
+            cpu.sp = 0xf000
+            cpu.mem[address] = value
+            cpu.put('de', address)
+            cpu.put('c', other)
+            cpu.reads.clear()
+            cpu.run(program, entry='pure_register_gap')
+            assert cpu.get('a') == (value - other - 17) & 255
+            assert cpu.reads.count(address) == 1
+            assert cpu.sp == 0xf002
+            checks += 1
+
             cpu.sp = 0xf000
             cpu.mem[address] = value
             cpu.put('de', address)
