@@ -2099,6 +2099,10 @@ inline static bool isSZSettingInstr(MachineInstr &MI) {
 
 inline static bool isMatchingRMW(MachineInstr &LoadMI,
                                  MachineInstr &RMWMI) {
+  /* Ordinary memory can reuse the update's result flags. Ordered accesses
+     can observe externally changed memory between the update and reload. */
+  if (LoadMI.hasOrderedMemoryRef() || RMWMI.hasOrderedMemoryRef())
+    return false;
   switch (LoadMI.getOpcode()) {
   default: return false;
   case Z80::LD8rp:

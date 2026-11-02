@@ -1,0 +1,185 @@
+# RUN: llc -run-pass=instruction-select -verify-machineinstrs %s -o - | FileCheck %s
+# RUN: llc -start-before=instruction-select -verify-machineinstrs %s -o %t.s
+# RUN: %python %S/Inputs/small-jump-table.py %t.s
+# RUN: llc -start-before=instruction-select -mattr=+alternate-regs -verify-machineinstrs %s -o %t.bank.s
+# RUN: %python %S/Inputs/small-jump-table.py %t.bank.s
+# Scale byte-sized table offsets before widening; retain word scaling when
+# the last valid offset exceeds a byte. Inputs may already be bytes.
+--- |
+  target triple = "z80"
+  define void @byte_index() { ret void }
+  define void @word_index() { ret void }
+  define void @last_byte_offset() { ret void }
+  define void @wide_offset() { ret void }
+...
+---
+name: byte_index
+legalized: true
+regBankSelected: true
+tracksRegLiveness: true
+# CHECK-LABEL: name: byte_index
+# CHECK: ADD8ar
+# CHECK: ADD16ao
+# CHECK-NOT: ADD16ao
+# CHECK: JP16r
+jumpTable:
+  kind: block-address
+  entries:
+    - id: 0
+      blocks: [ '%bb.1', '%bb.2', '%bb.3', '%bb.4' ]
+body: |
+  bb.0:
+    successors: %bb.1, %bb.2, %bb.3, %bb.4
+    liveins: $c
+    %0:gpr(s8) = COPY $c
+    %1:gpr(p0) = G_JUMP_TABLE %jump-table.0
+    G_BRJT %1(p0), %jump-table.0, %0(s8)
+  bb.1:
+    $a = LD8ri 1
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+  bb.2:
+    $a = LD8ri 2
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+  bb.3:
+    $a = LD8ri 3
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+  bb.4:
+    $a = LD8ri 4
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...
+---
+name: word_index
+legalized: true
+regBankSelected: true
+tracksRegLiveness: true
+# CHECK-LABEL: name: word_index
+# CHECK: ADD8ar
+# CHECK: ADD16ao
+# CHECK-NOT: ADD16ao
+# CHECK: JP16r
+jumpTable:
+  kind: block-address
+  entries:
+    - id: 0
+      blocks: [ '%bb.1', '%bb.2', '%bb.3', '%bb.4' ]
+body: |
+  bb.0:
+    successors: %bb.1, %bb.2, %bb.3, %bb.4
+    liveins: $bc
+    %0:gpr(s16) = COPY $bc
+    %1:gpr(p0) = G_JUMP_TABLE %jump-table.0
+    G_BRJT %1(p0), %jump-table.0, %0(s16)
+  bb.1:
+    $a = LD8ri 1
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+  bb.2:
+    $a = LD8ri 2
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+  bb.3:
+    $a = LD8ri 3
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+  bb.4:
+    $a = LD8ri 4
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...
+---
+name: last_byte_offset
+legalized: true
+regBankSelected: true
+tracksRegLiveness: true
+# CHECK-LABEL: name: last_byte_offset
+# CHECK: ADD8ar
+# CHECK: ADD16ao
+# CHECK-NOT: ADD16ao
+# CHECK: JP16r
+jumpTable:
+  kind: block-address
+  entries:
+    - id: 0
+      blocks: [ '%bb.1', '%bb.2', '%bb.3', '%bb.4', '%bb.1', '%bb.2', '%bb.3', '%bb.4', 
+                '%bb.1', '%bb.2', '%bb.3', '%bb.4', '%bb.1', '%bb.2', '%bb.3', '%bb.4', 
+                '%bb.1', '%bb.2', '%bb.3', '%bb.4', '%bb.1', '%bb.2', '%bb.3', '%bb.4', 
+                '%bb.1', '%bb.2', '%bb.3', '%bb.4', '%bb.1', '%bb.2', '%bb.3', '%bb.4', 
+                '%bb.1', '%bb.2', '%bb.3', '%bb.4', '%bb.1', '%bb.2', '%bb.3', '%bb.4', 
+                '%bb.1', '%bb.2', '%bb.3', '%bb.4', '%bb.1', '%bb.2', '%bb.3', '%bb.4', 
+                '%bb.1', '%bb.2', '%bb.3', '%bb.4', '%bb.1', '%bb.2', '%bb.3', '%bb.4', 
+                '%bb.1', '%bb.2', '%bb.3', '%bb.4', '%bb.1', '%bb.2', '%bb.3', '%bb.4', 
+                '%bb.1', '%bb.2', '%bb.3', '%bb.4', '%bb.1', '%bb.2', '%bb.3', '%bb.4', 
+                '%bb.1', '%bb.2', '%bb.3', '%bb.4', '%bb.1', '%bb.2', '%bb.3', '%bb.4', 
+                '%bb.1', '%bb.2', '%bb.3', '%bb.4', '%bb.1', '%bb.2', '%bb.3', '%bb.4', 
+                '%bb.1', '%bb.2', '%bb.3', '%bb.4', '%bb.1', '%bb.2', '%bb.3', '%bb.4', 
+                '%bb.1', '%bb.2', '%bb.3', '%bb.4', '%bb.1', '%bb.2', '%bb.3', '%bb.4', 
+                '%bb.1', '%bb.2', '%bb.3', '%bb.4', '%bb.1', '%bb.2', '%bb.3', '%bb.4', 
+                '%bb.1', '%bb.2', '%bb.3', '%bb.4', '%bb.1', '%bb.2', '%bb.3', '%bb.4', 
+                '%bb.1', '%bb.2', '%bb.3', '%bb.4', '%bb.1', '%bb.2', '%bb.3', '%bb.4' ]
+body: |
+  bb.0:
+    successors: %bb.1, %bb.2, %bb.3, %bb.4
+    liveins: $bc
+    %0:gpr(s16) = COPY $bc
+    %1:gpr(p0) = G_JUMP_TABLE %jump-table.0
+    G_BRJT %1(p0), %jump-table.0, %0(s16)
+  bb.1:
+    $a = LD8ri 1
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+  bb.2:
+    $a = LD8ri 2
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+  bb.3:
+    $a = LD8ri 3
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+  bb.4:
+    $a = LD8ri 4
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...
+---
+name: wide_offset
+legalized: true
+regBankSelected: true
+tracksRegLiveness: true
+# CHECK-LABEL: name: wide_offset
+# CHECK-NOT: ADD8ar
+# CHECK: ADD16ao
+# CHECK: ADD16ao
+# CHECK: JP16r
+jumpTable:
+  kind: block-address
+  entries:
+    - id: 0
+      blocks: [ '%bb.1', '%bb.2', '%bb.3', '%bb.4', '%bb.1', '%bb.2', '%bb.3', '%bb.4', 
+                '%bb.1', '%bb.2', '%bb.3', '%bb.4', '%bb.1', '%bb.2', '%bb.3', '%bb.4', 
+                '%bb.1', '%bb.2', '%bb.3', '%bb.4', '%bb.1', '%bb.2', '%bb.3', '%bb.4', 
+                '%bb.1', '%bb.2', '%bb.3', '%bb.4', '%bb.1', '%bb.2', '%bb.3', '%bb.4', 
+                '%bb.1', '%bb.2', '%bb.3', '%bb.4', '%bb.1', '%bb.2', '%bb.3', '%bb.4', 
+                '%bb.1', '%bb.2', '%bb.3', '%bb.4', '%bb.1', '%bb.2', '%bb.3', '%bb.4', 
+                '%bb.1', '%bb.2', '%bb.3', '%bb.4', '%bb.1', '%bb.2', '%bb.3', '%bb.4', 
+                '%bb.1', '%bb.2', '%bb.3', '%bb.4', '%bb.1', '%bb.2', '%bb.3', '%bb.4', 
+                '%bb.1', '%bb.2', '%bb.3', '%bb.4', '%bb.1', '%bb.2', '%bb.3', '%bb.4', 
+                '%bb.1', '%bb.2', '%bb.3', '%bb.4', '%bb.1', '%bb.2', '%bb.3', '%bb.4', 
+                '%bb.1', '%bb.2', '%bb.3', '%bb.4', '%bb.1', '%bb.2', '%bb.3', '%bb.4', 
+                '%bb.1', '%bb.2', '%bb.3', '%bb.4', '%bb.1', '%bb.2', '%bb.3', '%bb.4', 
+                '%bb.1', '%bb.2', '%bb.3', '%bb.4', '%bb.1', '%bb.2', '%bb.3', '%bb.4', 
+                '%bb.1', '%bb.2', '%bb.3', '%bb.4', '%bb.1', '%bb.2', '%bb.3', '%bb.4', 
+                '%bb.1', '%bb.2', '%bb.3', '%bb.4', '%bb.1', '%bb.2', '%bb.3', '%bb.4', 
+                '%bb.1', '%bb.2', '%bb.3', '%bb.4', '%bb.1', '%bb.2', '%bb.3', '%bb.4', 
+                '%bb.1' ]
+body: |
+  bb.0:
+    successors: %bb.1, %bb.2, %bb.3, %bb.4
+    liveins: $bc
+    %0:gpr(s16) = COPY $bc
+    %1:gpr(p0) = G_JUMP_TABLE %jump-table.0
+    G_BRJT %1(p0), %jump-table.0, %0(s16)
+  bb.1:
+    $a = LD8ri 1
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+  bb.2:
+    $a = LD8ri 2
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+  bb.3:
+    $a = LD8ri 3
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+  bb.4:
+    $a = LD8ri 4
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...

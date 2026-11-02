@@ -46,6 +46,7 @@ protected:
   const CombinerHelper Helper;
   const Z80PostLegalizerCombinerImplRuleConfig &RuleConfig;
   const Z80Subtarget &STI;
+  GISelValueTracking &ValueTracking;
 
 public:
   Z80PostLegalizerCombinerImpl(
@@ -71,6 +72,24 @@ private:
 #undef GET_GICOMBINER_IMPL
 
 bool Z80PostLegalizerCombinerImpl::tryCombineAll(MachineInstr &I) const {
+  if (I.getOpcode() == TargetOpcode::G_ICMP &&
+      MRI.getType(I.getOperand(2).getReg()) == LLT::scalar(16) &&
+      ValueTracking.getKnownBits(I.getOperand(2).getReg())
+              .countMinLeadingZeros() >= 8 &&
+      ValueTracking.getKnownBits(I.getOperand(3).getReg())
+              .countMinLeadingZeros() >= 8) {
+    /* Both words hold unsigned bytes. Compare their low lanes directly;
+       signed word ordering is also unsigned byte ordering in this range. */
+    B.setInstrAndDebugLoc(I);
+    auto Left = B.buildTrunc(LLT::scalar(8), I.getOperand(2).getReg());
+    auto Right = B.buildTrunc(LLT::scalar(8), I.getOperand(3).getReg());
+    auto Pred = ICmpInst::getUnsignedPredicate(
+        static_cast<CmpInst::Predicate>(I.getOperand(1).getPredicate()));
+    B.buildICmp(Pred, I.getOperand(0).getReg(), Left, Right);
+    Observer.erasingInstr(I);
+    I.eraseFromParent();
+    return true;
+  }
   if (I.getOpcode() == TargetOpcode::G_SELECT && !STI.hasEZ80Ops() &&
       MRI.getType(I.getOperand(0).getReg()) == LLT::scalar(16)) {
     auto True = getIConstantVRegVal(I.getOperand(2).getReg(), MRI);
@@ -105,11 +124,10 @@ Z80PostLegalizerCombinerImpl::Z80PostLegalizerCombinerImpl(
     MachineFunction &MF, CombinerInfo &CInfo, const TargetPassConfig *TPC,
     GISelValueTracking &VT, GISelCSEInfo *CSEInfo,
     const Z80PostLegalizerCombinerImplRuleConfig &RuleConfig,
-    const Z80Subtarget &STI, MachineDominatorTree *MDT,
-    const LegalizerInfo *LI)
+    const Z80Subtarget &STI, MachineDominatorTree *MDT, const LegalizerInfo *LI)
     : Combiner(MF, CInfo, TPC, &VT, CSEInfo),
       Helper(Observer, B, /*IsPreLegalize*/ false, &VT, MDT, LI),
-      RuleConfig(RuleConfig), STI(STI),
+      RuleConfig(RuleConfig), STI(STI), ValueTracking(VT),
 #define GET_GICOMBINER_CONSTRUCTOR_INITS
 #include "Z80GenPostLegalizeGICombiner.inc"
 #undef GET_GICOMBINER_CONSTRUCTOR_INITS

@@ -731,6 +731,155 @@ static bool separateStableLanes(MachineFunction &MF, unsigned StableSub) {
   return Changed;
 }
 
+/// Describe an address use that can share an updated cursor.
+struct CursorRebase {
+  MachineInstr *Use;
+  MachineInstr *Add;
+  Register Base, Cursor;
+  unsigned Operand;
+  int64_t Offset;
+};
+
+/// Reuse updated cursors for memory fields and adjacent constant sums.
+/// Reaching values must match at the update and use, including across
+/// backedges.
+static SmallVector<CursorRebase, 16> findCursorRebases(MachineFunction &MF,
+                                                    LiveIntervals &LIS) {
+  SmallVector<CursorRebase, 16> Result;
+  if (!MF.getSubtarget<Z80Subtarget>().is16Bit() ||
+      MF.getSubtarget<Z80Subtarget>().hasEZ80Ops())
+    return Result;
+  auto &MRI = MF.getRegInfo();
+  SmallPtrSet<MachineInstr *, 16> Seen;
+  std::optional<MachineDominatorTree> Dominators;
+  auto Constant = [&](Register R) -> std::optional<int64_t> {
+    if (!R.isVirtual())
+      return std::nullopt;
+    auto *Def = MRI.getUniqueVRegDef(R);
+    if (!Def || Def->getOpcode() != Z80::LD16ri || !Def->getOperand(1).isImm())
+      return std::nullopt;
+    return Def->getOperand(1).getImm();
+  };
+  for (auto &MBB : MF)
+    for (auto &Step : MBB) {
+      unsigned StepOpc = Step.getOpcode();
+      if ((StepOpc != Z80::ADD16rr && StepOpc != Z80::INC16r &&
+           StepOpc != Z80::DEC16r) ||
+          Step.isBundled())
+        continue;
+      Register Cursor = Step.getOperand(0).getReg();
+      if (!Cursor.isVirtual() || Step.getOperand(0).getSubReg() ||
+          Step.getOperand(1).getReg() != Cursor || !LIS.hasInterval(Cursor))
+        continue;
+      auto Delta =
+          StepOpc == Z80::ADD16rr
+              ? Constant(Step.getOperand(2).getReg())
+              : std::optional<int64_t>(StepOpc == Z80::INC16r ? 1 : -1);
+      if (!Delta || !*Delta || !isInt<8>(*Delta))
+        continue;
+      auto &CursorLI = LIS.getInterval(Cursor);
+      SlotIndex AtStep = LIS.getInstructionIndex(Step);
+      auto *Before = CursorLI.getVNInfoAt(AtStep);
+      auto *After = CursorLI.getVNInfoAt(AtStep.getRegSlot());
+      if (!Before || !After || Before == After ||
+          !LIS.isLiveOutOfMBB(CursorLI, &MBB))
+        continue;
+      auto *Copy = LIS.getInstructionFromIndex(Before->def);
+      if (!Copy || !Copy->isFullCopy() || Copy->getOperand(1).isUndef())
+        continue;
+      bool CanExtend = StepOpc != Z80::ADD16rr &&
+                       llvm::all_of(MRI.def_instructions(Cursor),
+                                    [&](const MachineInstr &MI) {
+                                      return &MI == Copy || &MI == &Step;
+                                    });
+      Register Base = Copy->getOperand(1).getReg();
+      if (!Base.isVirtual() || Base == Cursor || !LIS.hasInterval(Base))
+        continue;
+      auto &BaseLI = LIS.getInterval(Base);
+      auto *BaseValue = BaseLI.getVNInfoAt(LIS.getInstructionIndex(*Copy));
+      if (!BaseValue)
+        continue;
+      unsigned Budget = 128;
+      for (auto &Use : MRI.use_nodbg_instructions(Base)) {
+        if (!Budget--)
+          break;
+        if (Use.isBundled() || Seen.contains(&Use))
+          continue;
+        SlotIndex AtUse = LIS.getInstructionIndex(Use);
+        auto *CursorValue = CursorLI.getVNInfoAt(AtUse);
+        if (BaseLI.getVNInfoAt(AtUse) != BaseValue ||
+            (CursorValue && CursorValue != After) ||
+            (!CursorValue && !CanExtend))
+          continue;
+        unsigned Operand;
+        int64_t Offset;
+        MachineInstr *Add = nullptr;
+        switch (Use.getOpcode()) {
+        case Z80::LD8go:
+        case Z80::LD8ro:
+        case Z80::LD88ro:
+          Operand = 1;
+          break;
+        case Z80::LD8og:
+        case Z80::LD8or:
+        case Z80::LD8oi:
+        case Z80::LD88or:
+        case Z80::INC8o:
+        case Z80::DEC8o:
+        case Z80::SET8ob:
+        case Z80::RES8ob:
+          Operand = 0;
+          break;
+        case TargetOpcode::COPY: {
+          if (!Use.isFullCopy())
+            continue;
+          auto Next = std::next(Use.getIterator());
+          if (Next == Use.getParent()->end() || Next->isBundled() ||
+              Next->getOpcode() != Z80::ADD16rr ||
+              Next->findRegisterDefOperandIdx(Z80::F, nullptr, true) == -1 ||
+              Next->getOperand(0).getReg() != Use.getOperand(0).getReg() ||
+              Next->getOperand(1).getReg() != Use.getOperand(0).getReg())
+            continue;
+          auto OtherDelta = Constant(Next->getOperand(2).getReg());
+          if (!OtherDelta)
+            continue;
+          Offset = *OtherDelta;
+          Operand = 1;
+          Add = &*Next;
+          break;
+        }
+        default:
+          continue;
+        }
+        if (Use.getOperand(Operand).getReg() != Base ||
+            Use.getOperand(Operand).getSubReg())
+          continue;
+        if (!Add)
+          Offset = Use.getOperand(Operand + 1).getImm();
+        int64_t NewOffset = Offset - *Delta;
+        unsigned Width =
+            Use.getOpcode() == Z80::LD88ro || Use.getOpcode() == Z80::LD88or
+                ? 2
+                : 1;
+        if (!isInt<8>(NewOffset) || !isInt<8>(NewOffset + Width - 1))
+          continue;
+        /* A unique unit update can also supply a successor that only used
+           the old cursor. Prove dominance before extending its range into
+           that path; other reaching values remain protected by the checks
+           above. This lets sibling handlers share one incremented pointer. */
+        if (!CursorValue) {
+          if (!Dominators)
+            Dominators.emplace(MF);
+          if (!Dominators->dominates(&Step, &Use))
+            continue;
+        }
+        Result.push_back({&Use, Add, Base, Cursor, Operand, NewOffset});
+        Seen.insert(&Use);
+      }
+    }
+  return Result;
+}
+
 /// Give disconnected definitions independent intervals before allocation.
 /// Lane separation can expose components formerly joined by a constant byte.
 class Z80PrepareLiveRanges : public MachineFunctionPass {
@@ -791,6 +940,7 @@ bool Z80MachinePreRAOptimization::runOnMachineFunction(MachineFunction &MF) {
   SmallSet<Register, 16> FoldAsLoadDefCandidates;
 
   auto &LIS = getAnalysis<LiveIntervalsWrapperPass>().getLIS();
+  auto CursorRebases = findCursorRebases(MF, LIS);
   /* Collect address reuse and construction edits while live intervals still
      describe the input. Reaching-value checks preserve captured addresses
      and individual lanes of other pairs. */
@@ -1077,6 +1227,105 @@ bool Z80MachinePreRAOptimization::runOnMachineFunction(MachineFunction &MF) {
   }
   for (Register R : AdvancedBases)
     MRI.recomputeRegClass(R);
+
+  SmallSet<Register, 16> RebasedRegisters, OldOffsets;
+  SmallPtrSet<MachineInstr *, 16> EraseRebased;
+  DenseMap<std::pair<Register, int64_t>, Register> RebasedOffsets;
+  for (const auto &Rebase : CursorRebases) {
+    auto &Use = *Rebase.Use;
+    if (!Use.getOperand(Rebase.Operand).isReg() ||
+        Use.getOperand(Rebase.Operand).getReg() != Rebase.Base)
+      continue;
+    if (!Rebase.Add && !MRI.constrainRegClass(Rebase.Cursor, &Z80::I16RegClass))
+      continue;
+    Use.getOperand(Rebase.Operand).setReg(Rebase.Cursor);
+    Use.getOperand(Rebase.Operand).setIsKill(false);
+    if (Rebase.Add) {
+      Register OldOffset = Rebase.Add->getOperand(2).getReg();
+      OldOffsets.insert(OldOffset);
+      auto Next = std::next(Rebase.Add->getIterator());
+      while (Next != Use.getParent()->end() && Next->isDebugInstr())
+        ++Next;
+      unsigned Indexed = 0;
+      if (Next != Use.getParent()->end() && !Next->isBundled())
+        switch (Next->getOpcode()) {
+        case Z80::INC8p:
+          Indexed = Z80::INC8o;
+          break;
+        case Z80::DEC8p:
+          Indexed = Z80::DEC8o;
+          break;
+        case Z80::SET8pb:
+          Indexed = Z80::SET8ob;
+          break;
+        case Z80::RES8pb:
+          Indexed = Z80::RES8ob;
+          break;
+        default:
+          break;
+        }
+      Register Address = Use.getOperand(0).getReg();
+      if (Indexed && Next->getOperand(0).getReg() == Address &&
+          llvm::hasNItems(MRI.use_nodbg_operands(Address), 2) &&
+          llvm::all_of(MRI.def_instructions(Address),
+                       [&](const auto &MI) {
+                         return &MI == &Use || &MI == Rebase.Add;
+                       }) &&
+          MRI.constrainRegClass(Rebase.Cursor, &Z80::I16RegClass)) {
+        /* The field address is consumed immediately by an indexed-capable
+           update. Fold its displacement into that access, retaining the
+           shared cursor and the update's flag and memory contracts. */
+        auto MIB = BuildMI(*Next->getParent(), &*Next, Next->getDebugLoc(),
+                           TII.get(Indexed));
+        MIB.addReg(Rebase.Cursor).addImm(Rebase.Offset);
+        for (unsigned N = 1; N < Next->getNumExplicitOperands(); ++N)
+          MIB.add(Next->getOperand(N));
+        MIB.cloneMemRefs(*Next).setMIFlags(Next->getFlags());
+        MRI.markUsesInDebugValueAsUndef(Address);
+        EraseRebased.insert(&Use);
+        EraseRebased.insert(Rebase.Add);
+        EraseRebased.insert(&*Next);
+      } else if (Rebase.Offset >= -1 && Rebase.Offset <= 1) {
+        if (!Rebase.Offset) {
+          EraseRebased.insert(Rebase.Add);
+        } else {
+          Rebase.Add->setDesc(
+              TII.get(Rebase.Offset == 1 ? Z80::INC16r : Z80::DEC16r));
+          while (Rebase.Add->getNumOperands() > 2)
+            Rebase.Add->removeOperand(2);
+          Rebase.Add->setFlags(0);
+        }
+      } else {
+        Register &Offset = RebasedOffsets[{OldOffset, Rebase.Offset}];
+        if (!Offset) {
+          auto *Def = MRI.getUniqueVRegDef(OldOffset);
+          Offset = MRI.createVirtualRegister(&Z80::O16RegClass);
+          BuildMI(*Def->getParent(), Def, Def->getDebugLoc(),
+                  TII.get(Z80::LD16ri), Offset)
+              .addImm(Rebase.Offset);
+        }
+        Rebase.Add->getOperand(2).setReg(Offset);
+        Rebase.Add->getOperand(2).setIsKill(false);
+        Rebase.Add->setFlags(0);
+      }
+    } else {
+      Use.getOperand(Rebase.Operand + 1).setImm(Rebase.Offset);
+    }
+    RebasedRegisters.insert(Rebase.Base);
+    RebasedRegisters.insert(Rebase.Cursor);
+    Changed = true;
+  }
+  for (auto *MI : EraseRebased)
+    MI->eraseFromParent();
+  for (Register R : OldOffsets)
+    if (MRI.use_nodbg_empty(R)) {
+      MRI.markUsesInDebugValueAsUndef(R);
+      MRI.getUniqueVRegDef(R)->eraseFromParent();
+    }
+  for (Register R : RebasedRegisters) {
+    MRI.recomputeRegClass(R);
+    MRI.clearKillFlags(R);
+  }
 
   /* An unobserved next-address calculation can follow the old-address read.
      Express the read and update together so allocation need not preserve two

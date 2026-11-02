@@ -3045,7 +3045,31 @@ bool Z80InstructionSelector::selectBrJT(MachineInstr &I,
   Register IndexReg = I.getOperand(2).getReg();
   MachineIRBuilder MIB(I);
 
-  for (unsigned Factor = 0; Factor != EntrySize; ++Factor) {
+  unsigned AddressAdds = EntrySize;
+  if (STI.is16Bit() && !STI.hasEZ80Ops() && EntrySize == 2 &&
+      MF.getJumpTableInfo()
+              ->getJumpTables()[I.getOperand(1).getIndex()]
+              .MBBs.size() <= 128) {
+    /* Every valid entry's byte offset fits in a byte. Scale before widening
+       so dispatch needs one address addition and can release the unscaled
+       word index. Scaling a valid table index cannot overflow this byte. */
+    Register ByteReg = IndexReg;
+    if (MRI.getType(IndexReg) != LLT::scalar(8)) {
+      ByteReg = createGenericVirtualRegister(MRI, LLT::scalar(8));
+      if (!select(*MIB.buildTrunc(ByteReg, IndexReg)))
+        return false;
+    }
+    Register ScaledReg = createGenericVirtualRegister(MRI, LLT::scalar(8));
+    Register WideReg = createGenericVirtualRegister(MRI, LLT::scalar(16));
+    auto Scaled = MIB.buildAdd(ScaledReg, ByteReg, ByteReg);
+    auto Wide = MIB.buildZExt(WideReg, Scaled);
+    if (!select(*Wide) || !select(*Scaled))
+      return false;
+    IndexReg = WideReg;
+    AddressAdds = 1;
+  }
+
+  for (unsigned Factor = 0; Factor != AddressAdds; ++Factor) {
     auto Add = MIB.buildInstr(STI.is24Bit() ? Z80::ADD24ao : Z80::ADD16ao,
                               {AddrTy}, {AddrReg, IndexReg});
     if (!constrainSelectedInstRegOperands(*Add, TII, TRI, RBI))

@@ -1,0 +1,238 @@
+# RUN: llc -run-pass=z80-machine-prera-opt -verify-machineinstrs %s -o - | FileCheck %s
+# RUN: llc -start-before=z80-machine-prera-opt -verify-machineinstrs %s -o %t.s
+# RUN: %python %S/Inputs/rebase-live-cursor.py %t.s
+# RUN: llc -start-before=z80-machine-prera-opt -mattr=+alternate-regs -verify-machineinstrs %s -o %t.bank.s
+# RUN: %python %S/Inputs/rebase-live-cursor.py %t.bank.s
+--- |
+  target triple = "z80"
+  define void @forward() { ret void }
+  define void @backward() { ret void }
+  define void @changed_cursor() { ret void }
+  define void @changed_base() { ret void }
+  define void @wide_displacement() { ret void }
+  define void @next_cursor() { ret void }
+  define void @previous_cursor() { ret void }
+  define void @live_carry() { ret void }
+...
+---
+name: forward
+tracksRegLiveness: true
+# CHECK-LABEL: name: forward
+# CHECK: %0:i16 = ADD16rr
+# CHECK: LD8go %0, 0
+# CHECK: SET8ob %0, 3, 2
+# CHECK-NOT: ADD16rr
+# CHECK: RET16
+body: |
+  bb.0:
+    successors: %bb.1
+    liveins: $de, $a
+    %0:r16 = COPY $de
+    %3:o16 = LD16ri 17
+    %4:o16 = LD16ri 20
+    %5:g8 = COPY $a
+  bb.1:
+    successors: %bb.1, %bb.2
+    %1:i16 = COPY %0
+    %0:r16 = COPY %1
+    %0:r16 = ADD16rr %0, %3, implicit-def dead $f
+    %2:g8 = LD8go %1, 17 :: (load (s8))
+    %6:a16 = COPY %1
+    %6:a16 = ADD16rr %6, %4, implicit-def dead $f
+    SET8pb %6, 2 :: (load store (s8))
+    %5:g8 = DEC8r %5, implicit-def $f
+    JQCC %bb.1, 0, implicit killed $f
+  bb.2:
+    $a = COPY %2
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...
+---
+name: backward
+tracksRegLiveness: true
+# CHECK-LABEL: name: backward
+# CHECK: %0:i16 = ADD16rr
+# CHECK: LD8go %0, 0
+# CHECK: DEC8o %0, 5
+# CHECK-NOT: ADD16rr
+# CHECK: RET16
+body: |
+  bb.0:
+    successors: %bb.1
+    liveins: $de, $a
+    %0:r16 = COPY $de
+    %3:o16 = LD16ri -17
+    %4:o16 = LD16ri -12
+    %5:g8 = COPY $a
+  bb.1:
+    successors: %bb.1, %bb.2
+    %1:i16 = COPY %0
+    %0:r16 = COPY %1
+    %0:r16 = ADD16rr %0, %3, implicit-def dead $f
+    %2:g8 = LD8go %1, -17 :: (load (s8))
+    %6:a16 = COPY %1
+    %6:a16 = ADD16rr %6, %4, implicit-def dead $f
+    DEC8p %6, implicit-def dead $f :: (load store (s8))
+    %5:g8 = DEC8r %5, implicit-def $f
+    JQCC %bb.1, 0, implicit killed $f
+  bb.2:
+    $a = COPY %2
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...
+---
+name: changed_cursor
+tracksRegLiveness: true
+# CHECK-LABEL: name: changed_cursor
+# CHECK: LD8go %{{[0-9]+}}, 17
+body: |
+  bb.0:
+    successors: %bb.1
+    liveins: $de
+    %0:r16 = COPY $de
+    %3:o16 = LD16ri 17
+    %1:i16 = COPY %0
+    %0:r16 = COPY %1
+    %0:r16 = ADD16rr %0, %3, implicit-def dead $f
+    %0:r16 = LD16ri 8192
+    %2:g8 = LD8go %1, 17 :: (load (s8))
+  bb.1:
+    $a = COPY %2
+    $hl = COPY %0
+    RET16 implicit-def $sps, implicit $sps, implicit $a, implicit $hl
+...
+---
+name: changed_base
+tracksRegLiveness: true
+# CHECK-LABEL: name: changed_base
+# CHECK: LD8go %{{[0-9]+}}, 17
+body: |
+  bb.0:
+    successors: %bb.1
+    liveins: $de
+    %0:r16 = COPY $de
+    %3:o16 = LD16ri 17
+    %1:i16 = COPY %0
+    %0:r16 = COPY %1
+    %0:r16 = ADD16rr %0, %3, implicit-def dead $f
+    %1:i16 = LD16ri 8192
+    %2:g8 = LD8go %1, 17 :: (load (s8))
+  bb.1:
+    $a = COPY %2
+    $hl = COPY %0
+    RET16 implicit-def $sps, implicit $sps, implicit $a, implicit $hl
+...
+---
+name: wide_displacement
+tracksRegLiveness: true
+# CHECK-LABEL: name: wide_displacement
+# CHECK: LD8go %{{[0-9]+}}, 126
+body: |
+  bb.0:
+    successors: %bb.1
+    liveins: $de
+    %0:r16 = COPY $de
+    %3:o16 = LD16ri -17
+    %1:i16 = COPY %0
+    %0:r16 = COPY %1
+    %0:r16 = ADD16rr %0, %3, implicit-def dead $f
+    %2:g8 = LD8go %1, 126 :: (load (s8))
+  bb.1:
+    $a = COPY %2
+    $hl = COPY %0
+    RET16 implicit-def $sps, implicit $sps, implicit $a, implicit $hl
+...
+---
+name: next_cursor
+tracksRegLiveness: true
+# CHECK-LABEL: name: next_cursor
+# CHECK: INC16r
+# CHECK-NOT: ADD16rr
+# CHECK: INC16r
+# CHECK-NOT: ADD16rr
+# CHECK: RET16
+body: |
+  bb.0:
+    successors: %bb.1
+    liveins: $de, $a
+    %0:r16 = COPY $de
+    %3:o16 = LD16ri 2
+    %5:g8 = COPY $a
+  bb.1:
+    successors: %bb.2
+    %1:r16 = COPY %0
+    %1:r16 = INC16r %1
+  bb.2:
+    successors: %bb.1, %bb.3
+    %2:a16 = COPY %0
+    %2:a16 = ADD16rr %2, %3, implicit-def dead $f
+    %0:r16 = COPY %2
+    %6:g8 = LD8gp %2 :: (load (s8))
+    %5:g8 = DEC8r %5, implicit-def $f
+    JQCC %bb.1, 0, implicit killed $f
+  bb.3:
+    $a = COPY %6
+    $de = COPY %1
+    RET16 implicit-def $sps, implicit $sps, implicit $a, implicit $de
+...
+---
+name: previous_cursor
+tracksRegLiveness: true
+# CHECK-LABEL: name: previous_cursor
+# CHECK: DEC16r
+# CHECK-NOT: ADD16rr
+# CHECK: DEC16r
+# CHECK-NOT: ADD16rr
+# CHECK: RET16
+body: |
+  bb.0:
+    successors: %bb.1
+    liveins: $de, $a
+    %0:r16 = COPY $de
+    %3:o16 = LD16ri -2
+    %5:g8 = COPY $a
+  bb.1:
+    successors: %bb.2
+    %1:r16 = COPY %0
+    %1:r16 = DEC16r %1
+  bb.2:
+    successors: %bb.1, %bb.3
+    %2:a16 = COPY %0
+    %2:a16 = ADD16rr %2, %3, implicit-def dead $f
+    %0:r16 = COPY %2
+    %6:g8 = LD8gp %2 :: (load (s8))
+    %5:g8 = DEC8r %5, implicit-def $f
+    JQCC %bb.1, 0, implicit killed $f
+  bb.3:
+    $a = COPY %6
+    $de = COPY %1
+    RET16 implicit-def $sps, implicit $sps, implicit $a, implicit $de
+...
+---
+name: live_carry
+tracksRegLiveness: true
+# Address equivalence does not imply equivalent carry flags.
+# CHECK-LABEL: name: live_carry
+# CHECK: [[BASE:%[0-9]+]]:i16 = COPY %0
+# CHECK: [[ADDRESS:%[0-9]+]]:a16 = COPY [[BASE]]
+# CHECK-NEXT: [[ADDRESS]]:a16 = ADD16rr [[ADDRESS]], %{{[0-9]+}}, implicit-def $f
+body: |
+  bb.0:
+    successors: %bb.1, %bb.2
+    liveins: $de
+    %0:r16 = COPY $de
+    %3:o16 = LD16ri 17
+    %4:o16 = LD16ri 20
+    %1:i16 = COPY %0
+    %0:r16 = COPY %1
+    %0:r16 = ADD16rr %0, %3, implicit-def dead $f
+    %2:a16 = COPY %1
+    %2:a16 = ADD16rr %2, %4, implicit-def $f
+    JQCC %bb.2, 3, implicit killed $f
+  bb.1:
+    $a = LD8ri 79
+    $hl = COPY %0
+    RET16 implicit-def $sps, implicit $sps, implicit $a, implicit $hl
+  bb.2:
+    $a = LD8ri 31
+    $hl = COPY %0
+    RET16 implicit-def $sps, implicit $sps, implicit $a, implicit $hl
+...

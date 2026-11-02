@@ -1,4 +1,5 @@
 # RUN: llc -run-pass=peephole-opt -verify-machineinstrs %s -o - | FileCheck %s
+# RUN: llc -run-pass=z80-postselect-combiner -verify-machineinstrs %s -o - | FileCheck %s
 # RUN: llc -start-before=peephole-opt -verify-machineinstrs %s -o %t.s
 # RUN: %python %S/Inputs/accumulator-flags.py %t.s
 --- |

@@ -6,8 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// This pass does combining of machine instructions at the generic MI level,
-// before the legalizer.
+// Combine selected instructions before scheduling and register allocation.
 //
 //===----------------------------------------------------------------------===//
 
@@ -39,70 +38,6 @@ public:
   void getAnalysisUsage(AnalysisUsage &AU) const override;
 };
 
-class ValLoc {
-  Register Reg, Base;
-  int8_t Off;
-
-  static Register getBaseReg(const MachineInstr &MI, unsigned OpNo) {
-    Register BaseReg;
-    const MachineOperand &BaseMO = MI.getOperand(OpNo);
-    if (BaseMO.isReg())
-      BaseReg = BaseMO.getReg();
-    else if (BaseMO.getIndex() >= 0)
-      return Register::index2StackSlot(BaseMO.getIndex());
-    return BaseReg;
-  }
-
-public:
-  ValLoc() : Reg(), Base(), Off() {}
-
-  ValLoc &setReg(Register Reg) {
-    this->Reg = Reg;
-    return *this;
-  }
-  ValLoc &setReg(const MachineInstr &MI, unsigned OpNo) {
-    return setReg(MI.getOperand(OpNo).getReg());
-  }
-  ValLoc &setMem(Register Base, int8_t Off = 0) {
-    this->Base = Base;
-    this->Off = Off;
-    return *this;
-  }
-  ValLoc &setPtr(const MachineInstr &MI, unsigned OpNo) {
-    return setMem(MI.getOperand(OpNo).getReg());
-  }
-  ValLoc &setOff(const MachineInstr &MI, unsigned OpNo) {
-    return setMem(getBaseReg(MI, OpNo), MI.getOperand(OpNo + 1).getImm());
-  }
-
-  bool matchesReg(Register Reg) const {
-    return Reg.isValid() && this->Reg == Reg;
-  }
-  bool matchesReg(const MachineInstr &MI, unsigned OpNo) const {
-    return matchesReg(MI.getOperand(OpNo).getReg());
-  }
-  bool matchesMem(Register Base, int8_t Off = 0) const {
-    return Base.isValid() && this->Base == Base && this->Off == Off;
-  }
-  bool matchesPtr(const MachineInstr &MI, unsigned OpNo) const {
-    return matchesMem(MI.getOperand(OpNo).getReg());
-  }
-  bool matchesOff(const MachineInstr &MI, unsigned OpNo) const {
-    return matchesMem(getBaseReg(MI, OpNo), MI.getOperand(OpNo + 1).getImm());
-  }
-
-  void clobberDefs(const MachineInstr &MI, const TargetRegisterInfo &TRI) {
-    for (const MachineOperand &DefMO : MI.defs())
-      for (Register LocReg : {Reg, Base})
-        if (LocReg.isValid() && TRI.regsOverlap(DefMO.getReg(), LocReg))
-          return clear();
-  }
-
-  void clear() {
-    *this = ValLoc();
-  }
-};
-
 } // end anonymous namespace
 
 void Z80PostSelectCombiner::getAnalysisUsage(AnalysisUsage &AU) const {
@@ -123,17 +58,25 @@ bool Z80PostSelectCombiner::runOnMachineFunction(MachineFunction &MF) {
   bool Changed = false;
   for (MachineBasicBlock &MBB : MF) {
     auto I = MBB.begin(), E = MBB.end();
-    ValLoc SZFlagLoc;
-    auto FlagLocs = {&SZFlagLoc};
     while (I != E) {
       MachineInstr &MI = *I;
       ++I;
 
+      /* Reuse flags while result copies still name virtual values. Later
+         load folding can replace a result copy with a load directly into A,
+         after which the generic peephole pass excludes the physical source.
+         The target hook checks every flag consumer before removing a test. */
+      Register Src, Src2;
+      int64_t Mask, Value;
+      if (TII.analyzeCompare(MI, Src, Src2, Mask, Value) && Mask == -1 &&
+          Value == 0 &&
+          TII.optimizeCompareInstr(MI, Src, Src2, Mask, Value, &MRI)) {
+        Changed = true;
+        continue;
+      }
+
       switch (unsigned Opc = MI.getOpcode()) {
       case TargetOpcode::COPY: {
-        for (ValLoc *FlagLoc : FlagLocs)
-          if (FlagLoc->matchesReg(MI, 1))
-            FlagLoc->setReg(MI, 0);
         Register DstReg = MI.getOperand(0).getReg();
         if (DstReg != Z80::SPS && DstReg != Z80::SPL)
           break;
@@ -173,108 +116,9 @@ bool Z80PostSelectCombiner::runOnMachineFunction(MachineFunction &MF) {
         Changed = true;
         break;
       }
-      case Z80::LD8rp:
-      case Z80::LD8gp:
-        for (ValLoc *FlagLoc : FlagLocs)
-          if (FlagLoc->matchesPtr(MI, 1))
-            FlagLoc->setReg(MI, 0);
-        break;
-      case Z80::LD8ro:
-      case Z80::LD8go:
-        for (ValLoc *FlagLoc : FlagLocs)
-          if (FlagLoc->matchesOff(MI, 1))
-            FlagLoc->setReg(MI, 0);
-        break;
-      case Z80::LD8pr:
-      case Z80::LD8pg:
-        for (ValLoc *FlagLoc : FlagLocs)
-          if (FlagLoc->matchesReg(MI, 1))
-            FlagLoc->setPtr(MI, 0);
-        break;
-      case Z80::LD8or:
-      case Z80::LD8og:
-        for (ValLoc *FlagLoc : FlagLocs)
-          if (FlagLoc->matchesReg(MI, 2))
-            FlagLoc->setOff(MI, 0);
-        break;
-      case Z80::OR8ar:
-        if (MI.getOperand(0).getReg() == Z80::A &&
-            SZFlagLoc.matchesReg(MI, 0)) {
-          MI.eraseFromParent();
-          break;
-        }
-        LLVM_FALLTHROUGH;
-      case Z80::ADD8ar:
-      case Z80::ADD8ai:
-      case Z80::ADC8ar:
-      case Z80::ADC8ai:
-      case Z80::SUB8ar:
-      case Z80::SUB8ai:
-      case Z80::SBC8ar:
-      case Z80::SBC8ai:
-      case Z80::AND8ar:
-      case Z80::AND8ai:
-      case Z80::XOR8ar:
-      case Z80::XOR8ai:
-      case Z80::OR8ai:
-        SZFlagLoc.setReg(Z80::A);
-        break;
-      case Z80::RLC8g:
-      case Z80::RRC8g:
-      case Z80:: RL8g:
-      case Z80:: RR8g:
-      case Z80::SLA8g:
-      case Z80::SRA8g:
-      case Z80::SRL8g:
-      case Z80::INC8r:
-      case Z80::DEC8r:
-        SZFlagLoc.setReg(MI, 0);
-        break;
-      case Z80::ADD8ap:
-      case Z80::ADC8ap:
-      case Z80::SUB8ap:
-      case Z80::SBC8ap:
-      case Z80::AND8ap:
-      case Z80::XOR8ap:
-      case Z80:: OR8ap:
-      case Z80:: RLC8p:
-      case Z80:: RRC8p:
-      case Z80::  RL8p:
-      case Z80::  RR8p:
-      case Z80:: SLA8p:
-      case Z80:: SRA8p:
-      case Z80:: SRL8p:
-      case Z80:: INC8p:
-      case Z80:: DEC8p:
-        SZFlagLoc.setPtr(MI, 0);
-        break;
-      case Z80::ADD8ao:
-      case Z80::ADC8ao:
-      case Z80::SUB8ao:
-      case Z80::SBC8ao:
-      case Z80::AND8ao:
-      case Z80::XOR8ao:
-      case Z80:: OR8ao:
-      case Z80:: RLC8o:
-      case Z80:: RRC8o:
-      case Z80::  RL8o:
-      case Z80::  RR8o:
-      case Z80:: SLA8o:
-      case Z80:: SRA8o:
-      case Z80:: SRL8o:
-      case Z80:: INC8o:
-      case Z80:: DEC8o:
-        SZFlagLoc.setOff(MI, 0);
-        break;
       default:
-        if (MI.modifiesRegister(Z80::F, &TRI))
-          for (ValLoc *FlagLoc : FlagLocs)
-            FlagLoc->clear();
         break;
       }
-
-      for (ValLoc *FlagLoc : FlagLocs)
-        FlagLoc->clobberDefs(MI, TRI);
     }
   }
 
