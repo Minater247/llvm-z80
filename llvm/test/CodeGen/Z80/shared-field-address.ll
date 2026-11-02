@@ -76,9 +76,10 @@ define i8 @field_only(ptr %p) nounwind {
   ret i8 %n
 }
 
-; A field outside the displacement range still needs its own pointer.
+; A field beyond the original displacement range can advance from the
+; earlier field pointer. Its address still needs arithmetic.
 ; CHECK-LABEL: outside_field:
-; CHECK: ld{{.*}}128
+; CHECK: ld{{.*}}125
 ; CHECK: inc	({{hl|ix|iy}})
 define i8 @outside_field(ptr %p) nounwind {
   %q = getelementptr i8, ptr %p, i16 3

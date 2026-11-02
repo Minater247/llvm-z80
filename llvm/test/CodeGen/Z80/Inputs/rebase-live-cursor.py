@@ -67,3 +67,18 @@ for base in (0, 0xffec, 0xffee, 0xffef, 0xffff):
     assert cpu.get('a') == (31 if base + 20 > 65535 else 79)
     assert cpu.get('hl') == (base + 17) & 65535
 print('Checked live carry across rebased address candidates')
+
+for name, step, offset in [('far_forward', 1024, 1031),
+                           ('far_backward', -1024, -1021)]:
+    for base in (0, 7, 0x2100, 0xffe8):
+        for value in range(256):
+            cpu = x.CPU(random.Random(value))
+            cpu.put('de', base)
+            cpu.put('a', value)
+            address = (base + offset) & 65535
+            expected = cpu.mem[address]
+            cpu.run(program, entry=name)
+            assert cpu.get('a') == expected, (name, base, value)
+            assert cpu.mem[(base + step) & 65535] == value
+            assert cpu.sp == 0xf002
+print('Checked 2048 distant-base updates across blocks')

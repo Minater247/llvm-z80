@@ -1588,6 +1588,43 @@ bool Z80InstructionSelector::selectFrameIndexOrGep(MachineInstr &I,
         return constrainSelectedInstRegOperands(I, TII, TRI, RBI);
       }
     }
+    if (!HasLEA && PtrSize == 16 && OffConst && !OffConst->isSignedIntN(8)) {
+      Register Base = I.getOperand(1).getReg();
+      MachineInstr *Previous = nullptr;
+      int64_t BestOffset = 128;
+      unsigned Budget = 64;
+      for (auto It = I.getIterator(); It != I.getParent()->begin() && Budget--;) {
+        auto &Candidate = *--It;
+        if (Candidate.getOpcode() != TargetOpcode::G_PTR_ADD ||
+            Candidate.getOperand(1).getReg() != Base ||
+            MRI.use_nodbg_empty(Candidate.getOperand(0).getReg()))
+          continue;
+        auto Offset = getIConstantVRegVal(Candidate.getOperand(2).getReg(), MRI);
+        if (!Offset)
+          continue;
+        int64_t Difference = (*OffConst - *Offset).getSExtValue();
+        if (isInt<8>(Difference) && std::abs(Difference) < std::abs(BestOffset)) {
+          Previous = &Candidate;
+          BestOffset = Difference;
+        }
+      }
+      if (Previous) {
+        /* Nearby pointers can share a computed base even when the original
+           displacement is large. Selection visits definitions backwards;
+           using only earlier definitions keeps this bounded chain acyclic. */
+        Previous->setFlags(0);
+        I.setFlags(0);
+        I.getOperand(1).setReg(Previous->getOperand(0).getReg());
+        OffConst = APInt(16, BestOffset, true);
+        if (BestOffset < -1 || BestOffset > 1) {
+          Register OffsetReg = MRI.createVirtualRegister(&Z80::O16RegClass);
+          BuildMI(*I.getParent(), I, I.getDebugLoc(), TII.get(Z80::LD16ri),
+                  OffsetReg)
+              .addImm(BestOffset);
+          I.getOperand(2).setReg(OffsetReg);
+        }
+      }
+    }
     if (OffConst && OffConst->sge(-1) && OffConst->sle(1)) {
       I.removeOperand(2);
       if (OffConst->isZero()) {

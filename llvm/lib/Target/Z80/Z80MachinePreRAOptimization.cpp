@@ -808,7 +808,9 @@ static SmallVector<CursorRebase, 16> findCursorRebases(MachineFunction &MF,
           StepOpc == Z80::ADD16rr
               ? Constant(Step.getOperand(2).getReg())
               : std::optional<int64_t>(StepOpc == Z80::INC16r ? 1 : -1);
-      if (!Delta || !*Delta || !isInt<8>(*Delta))
+      /* The adjusted cursor may be far from its original base. Only the
+         difference used by each subsequent access must fit a displacement. */
+      if (!Delta || !*Delta || !isInt<16>(*Delta))
         continue;
       auto &CursorLI = LIS.getInterval(Cursor);
       SlotIndex AtStep = LIS.getInstructionIndex(Step);
@@ -820,11 +822,10 @@ static SmallVector<CursorRebase, 16> findCursorRebases(MachineFunction &MF,
       auto *Copy = LIS.getInstructionFromIndex(Before->def);
       if (!Copy || !Copy->isFullCopy() || Copy->getOperand(1).isUndef())
         continue;
-      bool CanExtend = StepOpc != Z80::ADD16rr &&
-                       llvm::all_of(MRI.def_instructions(Cursor),
-                                    [&](const MachineInstr &MI) {
-                                      return &MI == Copy || &MI == &Step;
-                                    });
+      bool CanExtend = llvm::all_of(MRI.def_instructions(Cursor),
+                                   [&](const MachineInstr &MI) {
+                                     return &MI == Copy || &MI == &Step;
+                                   });
       Register Base = Copy->getOperand(1).getReg();
       if (!Base.isVirtual() || Base == Cursor || !LIS.hasInterval(Base))
         continue;
@@ -896,7 +897,7 @@ static SmallVector<CursorRebase, 16> findCursorRebases(MachineFunction &MF,
                 : 1;
         if (!isInt<8>(NewOffset) || !isInt<8>(NewOffset + Width - 1))
           continue;
-        /* A unique unit update can also supply a successor that only used
+        /* A unique update can also supply a successor that only used
            the old cursor. Prove dominance before extending its range into
            that path; other reaching values remain protected by the checks
            above. This lets sibling handlers share one incremented pointer. */

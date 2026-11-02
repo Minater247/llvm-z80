@@ -13,6 +13,8 @@
   define void @next_cursor() { ret void }
   define void @previous_cursor() { ret void }
   define void @live_carry() { ret void }
+  define void @far_forward() { ret void }
+  define void @far_backward() { ret void }
 ...
 ---
 name: forward
@@ -235,4 +237,68 @@ body: |
     $a = LD8ri 31
     $hl = COPY %0
     RET16 implicit-def $sps, implicit $sps, implicit $a, implicit $hl
+...
+
+---
+name: far_forward
+tracksRegLiveness: true
+# Extend the adjusted pointer into a successor using a nearby field.
+# CHECK-LABEL: name: far_forward
+# CHECK: [[FOFFSET:%[0-9]+]]:o16 = LD16ri 7
+# CHECK: [[FCURSOR:%[0-9]+]]:a16 = ADD16rr
+# CHECK: bb.2:
+# CHECK: [[FFIELD:%[0-9]+]]:a16 = COPY [[FCURSOR]]
+# CHECK: [[FFIELD]]:a16 = ADD16rr [[FFIELD]], [[FOFFSET]]
+# CHECK: RET16
+body: |
+  bb.0:
+    successors: %bb.1
+    liveins: $de, $a
+    %0:r16 = COPY $de
+    %3:o16 = LD16ri 1024
+    %4:o16 = LD16ri 1031
+    %5:g8 = COPY $a
+    %1:a16 = COPY %0
+    %1:a16 = ADD16rr %1, %3, implicit-def dead $f
+  bb.1:
+    successors: %bb.2
+    LD8pg %1, %5 :: (store (s8))
+  bb.2:
+    %2:a16 = COPY %0
+    %2:a16 = ADD16rr %2, %4, implicit-def dead $f
+    %6:g8 = LD8gp %2 :: (load (s8))
+    $a = COPY %6
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...
+
+---
+name: far_backward
+tracksRegLiveness: true
+# Extend the adjusted pointer into a successor using a nearby field.
+# CHECK-LABEL: name: far_backward
+# CHECK: [[BOFFSET:%[0-9]+]]:o16 = LD16ri 3
+# CHECK: [[BCURSOR:%[0-9]+]]:a16 = ADD16rr
+# CHECK: bb.2:
+# CHECK: [[BFIELD:%[0-9]+]]:a16 = COPY [[BCURSOR]]
+# CHECK: [[BFIELD]]:a16 = ADD16rr [[BFIELD]], [[BOFFSET]]
+# CHECK: RET16
+body: |
+  bb.0:
+    successors: %bb.1
+    liveins: $de, $a
+    %0:r16 = COPY $de
+    %3:o16 = LD16ri -1024
+    %4:o16 = LD16ri -1021
+    %5:g8 = COPY $a
+    %1:a16 = COPY %0
+    %1:a16 = ADD16rr %1, %3, implicit-def dead $f
+  bb.1:
+    successors: %bb.2
+    LD8pg %1, %5 :: (store (s8))
+  bb.2:
+    %2:a16 = COPY %0
+    %2:a16 = ADD16rr %2, %4, implicit-def dead $f
+    %6:g8 = LD8gp %2 :: (load (s8))
+    $a = COPY %6
+    RET16 implicit-def $sps, implicit $sps, implicit $a
 ...
