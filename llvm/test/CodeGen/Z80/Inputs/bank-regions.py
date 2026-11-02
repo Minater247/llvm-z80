@@ -53,12 +53,21 @@ def main():
                       f'    ${bank} = INC16r ${bank}', 'af', True))
     # Two arithmetic regions separated only by unbanked accumulator work can
     # retain the active bank, eliminating the middle pair of EXX instructions.
-    fused_case = len(cases)
+    fused_cases = {len(cases)}
     cases.append(('hl', 'hl',
                   '$hl = INC16r $hl\n    $hl_alt = ALT_SAVE16 $hl\n'
                   '    ADD8ai 7, implicit-def $a, implicit-def $f, implicit $a\n'
                   '    $hl = ALT_LOAD16 $hl_alt\n    LD8pa $hl, $a\n'
                   '    $hl = INC16r $hl', 'afbcde', True))
+    # Atomic saturation can stay inside an active bank when its source is
+    # immediate or indexed; its internal branch leaves the bank unchanged.
+    for operation in ('SADDSAT8ai 13', 'SADDSAT8ap $iy'):
+        fused_cases.add(len(cases))
+        cases.append(('hl', 'hl',
+                      '$hl = INC16r $hl\n    $hl_alt = ALT_SAVE16 $hl\n'
+                      f'    {operation}, implicit-def $a, implicit-def $f, implicit $a\n'
+                      '    $hl = ALT_LOAD16 $hl_alt\n    LD8pa $hl, $a\n'
+                      '    $hl = INC16r $hl', 'afbcde', True))
     # Unsafe/unprofitable cases must retain transfers: a second banked input,
     # A already used by the body, preserving A would overwrite computed flags,
     # a stack-changing instruction, and an incompatible address register.
@@ -146,7 +155,7 @@ body: |
             expected &= not (busy_af and i in needs_free_af)
             body = re.search(rf'^name: +f{i}\n.*?^\.\.\.', text, re.M | re.S)[0]
             assert ('EXX16' in body) == expected, (i, cases[i], body)
-            if i == fused_case:
+            if i in fused_cases:
                 assert body.count('EXX16') == 2, body
         outputs = []
         for name, path in [('reference', source), ('regions', transformed)]:

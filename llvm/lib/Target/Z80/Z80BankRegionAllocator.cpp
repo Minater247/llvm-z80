@@ -551,6 +551,12 @@ bool Z80BankRegionAllocator::runOnMachineFunction(MachineFunction &MF) {
     MachineInstr *LastExit = nullptr;
     for (auto It = MBB.begin(); It != MBB.end();) {
       auto &MI = *It++;
+      /* Saturating byte arithmetic expands atomically and touches only its
+         declared operands and AF. An index-memory operand remains accessible
+         while either bank is active, just like an ordinary accumulator op. */
+      bool AtomicArithmetic = MI.getOpcode() == Z80::SADDSAT8ar ||
+                              MI.getOpcode() == Z80::SADDSAT8ai ||
+                              MI.getOpcode() == Z80::SADDSAT8ap;
       if (Entries.contains(&MI) && LastExit) {
         LastExit->eraseFromParent();
         MI.eraseFromParent();
@@ -558,7 +564,8 @@ bool Z80BankRegionAllocator::runOnMachineFunction(MachineFunction &MF) {
         ++NumBankJoins;
       } else if (Exits.contains(&MI)) {
         LastExit = &MI;
-      } else if (MI.isPseudo() || MI.isTerminator() || MI.isCall() ||
+      } else if ((MI.isPseudo() && !AtomicArithmetic) ||
+                 MI.isTerminator() || MI.isCall() ||
                  MI.isInlineAsm() || MI.isBundled() ||
                  MI.hasUnmodeledSideEffects() ||
                  llvm::any_of(MI.operands(), [&](const MachineOperand &MO) {
