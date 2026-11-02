@@ -18,6 +18,7 @@
 namespace llvm {
 
 class FunctionPass;
+class ModulePass;
 class InstructionSelector;
 class PassRegistry;
 class MachineFunction;
@@ -58,6 +59,7 @@ FunctionPass *createZ80AlternateRegAllocator();
 FunctionPass *createZ80BankRegionAllocator();
 FunctionPass *createZ80LateCopyPropagation();
 FunctionPass *createZ80StackStream();
+ModulePass *createZ80StatePromotion(const Z80TargetMachine &TM);
 
 void initializeZ80PreLegalizerCombinerPass(PassRegistry &);
 void initializeZ80PostLegalizerCombinerPass(PassRegistry &);

@@ -148,6 +148,12 @@ unsigned copyCost(MCRegister Dst, MCRegister Src, bool KillSrc,
 unsigned extraAccessCost(const MachineInstr &MI, unsigned Operand, MCRegister P,
                          bool Bytes) {
   unsigned Opc = MI.getOpcode();
+  if ((Opc == Z80::BANK_LD16rm && Operand == 0) ||
+      (Opc == Z80::BANK_LD16mr && Operand == 1)) {
+    if (Z80::ALT16RegClass.contains(P))
+      return P == Z80::HL_ALT ? (Bytes ? 2 : 8) : (Bytes ? 3 : 12);
+    return P == Z80::HL ? 0 : (Bytes ? 1 : 4);
+  }
   if (Opc == Z80::BANK_LD8pg && Operand == 0) {
     if (Z80::ALT16RegClass.contains(P))
       return Bytes ? 3 : 12;
@@ -159,7 +165,8 @@ unsigned extraAccessCost(const MachineInstr &MI, unsigned Operand, MCRegister P,
       return Bytes ? 6 : 50;
     if ((Opc == Z80::BANK_LD8ap && Operand == 1) ||
         ((Opc == Z80::BANK_LD8pa || Opc == Z80::BANK_LD16ri ||
-          Opc == Z80::BANK_INC16 || Opc == Z80::BANK_DEC16) &&
+          Opc == Z80::BANK_INC16 || Opc == Z80::BANK_DEC16 ||
+          Opc == Z80::BANK_INCL16 || Opc == Z80::BANK_DECL16) &&
          Operand == 0))
       return Bytes ? 2 : 8;
   }
@@ -242,6 +249,8 @@ class Z80RegisterAllocator final : public MachineFunctionPass,
   // Retain equally cheap placements when spilling shortens an assigned range.
   DenseMap<Register, MCRegister> PreviousAssignments;
   SmallDenseSet<Register, 8> LoopCaches;
+  SmallDenseSet<Register, 16> StateValues;
+  bool HasStateBank = false;
   std::priority_queue<std::tuple<unsigned, double, Register>> Queue;
   unsigned RemainingStates = 0;
   bool OptSize = false;
@@ -284,6 +293,10 @@ class Z80RegisterAllocator final : public MachineFunctionPass,
       enqueue(&LI);
     }
   }
+  void LRE_DidCloneVirtReg(Register New, Register Old) override {
+    if (StateValues.contains(Old))
+      StateValues.insert(New);
+  }
   Spiller &spiller() override { return *SpillerInstance; }
   void enqueueImpl(const LiveInterval *LI) override;
   const LiveInterval *dequeue() override {
@@ -303,6 +316,11 @@ class Z80RegisterAllocator final : public MachineFunctionPass,
   SmallVector<MCRegister, 12> domain(Register R) const {
     SmallVector<MCRegister, 12> Result;
     for (MCRegister P : RegClassInfo.getOrder(MRI->getRegClass(R))) {
+      /* Reserve the coordinated channel for state lifetimes. An unrelated
+         local placement can otherwise force transfers at every nested call. */
+      if (HasStateBank && !StateValues.contains(R) &&
+          TRI->regsOverlap(P, Z80::HL_ALT))
+        continue;
       if (!ST->hasIndexHalfRegs()) {
         if (Z80::I8RegClass.contains(P))
           continue;
@@ -1828,6 +1846,33 @@ bool Z80RegisterAllocator::runOnMachineFunction(MachineFunction &Func) {
   RegAllocBase::init(getAnalysis<VirtRegMapWrapperLegacy>().getVRM(),
                      getAnalysis<LiveIntervalsWrapperPass>().getLIS(),
                      getAnalysis<LiveRegMatrixWrapperLegacy>().getLRM());
+  StateValues.clear();
+  HasStateBank = MF->getFunction().hasFnAttribute("z80-state-bank");
+  if (HasStateBank) {
+    SmallVector<Register, 16> Work;
+    auto Add = [&](Register R) {
+      if (R.isVirtual() && StateValues.insert(R).second)
+        Work.push_back(R);
+    };
+    for (const auto &MBB : *MF)
+      for (const auto &MI : MBB)
+        if (MI.isCopy() && !MI.getOperand(0).getSubReg() &&
+            !MI.getOperand(1).getSubReg()) {
+          if (MI.getOperand(0).getReg() == Z80::HL_ALT)
+            Add(MI.getOperand(1).getReg());
+          if (MI.getOperand(1).getReg() == Z80::HL_ALT)
+            Add(MI.getOperand(0).getReg());
+        }
+    while (!Work.empty()) {
+      Register R = Work.pop_back_val();
+      for (const auto &MO : MRI->reg_nodbg_operands(R)) {
+        const auto &MI = *MO.getParent();
+        if (MI.isCopy() && !MI.getOperand(0).getSubReg() &&
+            !MI.getOperand(1).getSubReg())
+          Add(MI.getOperand(MO.isDef() ? 1 : 0).getReg());
+      }
+    }
+  }
   VirtRegAuxInfo VRAI(*MF, *LIS, *VRM, Loops, *MBFI,
                       &getAnalysis<ProfileSummaryInfoWrapperPass>().getPSI());
   VRAI.calculateSpillWeightsAndHints();

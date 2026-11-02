@@ -36,6 +36,7 @@ set(sources
   GISel/Z80Tracker.cpp
   GISel/Z80UnrollLd.cpp
   Z80StackStream.cpp
+  Z80StatePromotion.cpp
   Z80BankRegionAllocator.cpp
   Z80LateCopyPropagation.cpp
   Z80AlternateRegAllocator.cpp
@@ -69,6 +70,7 @@ add_llvm_target(Z80CodeGen ${sources}
   SelectionDAG
   Support
   Target
+  TransformUtils
   Z80Desc
   Z80Info
 

@@ -184,10 +184,18 @@ unsigned Z80InstrInfo::getInstSizeInBytes(const MachineInstr &MI) const {
                             MI.getOperand(2).getReg(), true);
   case Z80::BANK_LD16ri:
     return 5;
+  case Z80::BANK_LD16rm:
+  case Z80::BANK_LD16mr:
+    return MI.getOperand(MI.getOpcode() == Z80::BANK_LD16rm ? 0 : 1).getReg() ==
+                   Z80::HL_ALT
+               ? 5
+               : 6;
   case Z80::BANK_LD8pg:
     return 4;
   case Z80::BANK_INC16:
   case Z80::BANK_DEC16:
+  case Z80::BANK_INCL16:
+  case Z80::BANK_DECL16:
   case Z80::BANK_LD8ap:
   case Z80::BANK_LD8pa:
     return 3;
@@ -1527,19 +1535,34 @@ bool Z80InstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
     break;
   }
   case Z80::BANK_LD16ri:
+  case Z80::BANK_LD16rm:
+  case Z80::BANK_LD16mr:
   case Z80::BANK_INC16:
   case Z80::BANK_DEC16:
+  case Z80::BANK_INCL16:
+  case Z80::BANK_DECL16:
   case Z80::BANK_LD8ap:
   case Z80::BANK_LD8pa: {
-    unsigned Op = Opc == Z80::BANK_LD8ap ? 1 : 0;
+    unsigned Op = Opc == Z80::BANK_LD8ap || Opc == Z80::BANK_LD16mr ? 1 : 0;
     if (Z80::ALT16RegClass.contains(MI.getOperand(Op).getReg()))
       return false;
+    if (Opc == Z80::BANK_INCL16 || Opc == Z80::BANK_DECL16) {
+      MI.setDesc(get(Opc == Z80::BANK_INCL16 ? Z80::INC8r : Z80::DEC8r));
+      for (unsigned I : {0u, 1u})
+        MI.getOperand(I).setReg(TRI.getSubReg(MI.getOperand(I).getReg(),
+                                            Z80::sub_low));
+      break;
+    }
     unsigned MainOpc = Opc == Z80::BANK_LD16ri  ? Z80::LD16ri
+                       : Opc == Z80::BANK_LD16rm ? Z80::LD16rm
+                       : Opc == Z80::BANK_LD16mr ? Z80::LD16mr
                        : Opc == Z80::BANK_INC16 ? Z80::INC16r
                        : Opc == Z80::BANK_DEC16 ? Z80::DEC16r
                        : Opc == Z80::BANK_LD8ap ? Z80::LD8ap
                                                 : Z80::LD8pa;
     MI.setDesc(get(MainOpc));
+    if (Opc == Z80::BANK_LD16rm || Opc == Z80::BANK_LD16mr)
+      return expandPostRAPseudo(MI);
     break;
   }
   case Z80::ADD16rr: {

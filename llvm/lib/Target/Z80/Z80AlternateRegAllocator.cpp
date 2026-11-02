@@ -153,6 +153,10 @@ bool Z80AlternateRegAllocator::runOnMachineFunction(MachineFunction &MF) {
   auto &MBFI = getAnalysis<MachineBlockFrequencyInfoWrapperPass>().getMBFI();
   const auto &TII = *ST.getInstrInfo();
   SmallVector<Slot, 16> Slots(N);
+  if (MF.getFunction().hasFnAttribute("z80-state-bank") ||
+      MF.getFunction().hasFnAttribute("z80-preserve-state-bank"))
+    for (auto &S : Slots)
+      S.UnavailableBanks |= bankMask(Z80::HL_ALT);
   SmallVector<Access, 32> Accesses;
   DenseMap<const MachineInstr *, unsigned> AccessIndex;
   bool HasCopiedStep = false;

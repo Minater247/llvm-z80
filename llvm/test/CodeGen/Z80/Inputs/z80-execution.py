@@ -85,6 +85,13 @@ class CPU:
     def instruction_complete(self):
         """Hook for bus traces, at the end of an executed instruction."""
 
+    def condition(self, name):
+        """Evaluate a Z80 branch condition from the current flags."""
+        return {'z': bool(self.r['f'] & 64), 'nz': not self.r['f'] & 64,
+                'c': bool(self.r['f'] & 1), 'nc': not self.r['f'] & 1,
+                'pe': bool(self.r['f'] & 4), 'po': not self.r['f'] & 4,
+                'm': bool(self.r['f'] & 128), 'p': not self.r['f'] & 128}[name]
+
     def run(self, body, entry=None, untimed=(), aborts=(),
             stop_on_reentry=False, max_steps=100000, checkpoints=None):
         """Execute until return, an explicit stop, or the instruction limit.
@@ -303,24 +310,21 @@ class CPU:
             elif op in ('jp', 'jr'):
                 take = True
                 if len(args) == 2:
-                    cond = args[0]
-                    take = {'z': bool(self.r['f'] & 64), 'nz': not self.r['f'] & 64,
-                            'c': bool(self.r['f'] & 1), 'nc': not self.r['f'] & 1,
-                            'pe': bool(self.r['f'] & 4), 'po': not self.r['f'] & 4,
-                            'm': bool(self.r['f'] & 128), 'p': not self.r['f'] & 128}[cond]
+                    take = self.condition(args[0])
                 if take:
                     pc = labels[args[-1]]
                 self.cycles += 10 if op == 'jp' else 12 if take else 7
             elif op == 'call':
-                assert len(args) == 1, ('Unsupported conditional call', args)
-                assert args[0] in labels, ('Unresolved call', args[0])
-                self.sp = (self.sp - 2) & 65535
-                self.write('(sp)', pc, 2)
-                returns.append(pc)
-                pc = labels[args[0]]
-                self.calls += 1
-                self.max_call_depth = max(self.max_call_depth, len(returns))
-                self.cycles += 17
+                take = len(args) == 1 or self.condition(args[0])
+                if take:
+                    assert args[-1] in labels, ('Unresolved call', args[-1])
+                    self.sp = (self.sp - 2) & 65535
+                    self.write('(sp)', pc, 2)
+                    returns.append(pc)
+                    pc = labels[args[-1]]
+                    self.calls += 1
+                    self.max_call_depth = max(self.max_call_depth, len(returns))
+                self.cycles += 17 if take else 10
             elif op == 'ret':
                 assert not args, ('Unsupported conditional return', args)
                 self.cycles += 10

@@ -218,8 +218,10 @@ void Z80AsmPrinter::emitInstruction(const MachineInstr *MI) {
       Add(Dst, Src);
     return;
   }
-  if (Opc == Z80::BANK_LD16ri || Opc == Z80::BANK_INC16 ||
-      Opc == Z80::BANK_DEC16 || Opc == Z80::BANK_LD8ap ||
+  if (Opc == Z80::BANK_LD16ri || Opc == Z80::BANK_LD16rm ||
+      Opc == Z80::BANK_LD16mr || Opc == Z80::BANK_INC16 ||
+      Opc == Z80::BANK_DEC16 || Opc == Z80::BANK_INCL16 ||
+      Opc == Z80::BANK_DECL16 || Opc == Z80::BANK_LD8ap ||
       Opc == Z80::BANK_LD8pa || Opc == Z80::ALT_COPY16) {
     auto Main = [](MCRegister R) -> MCRegister {
       return R == Z80::HL_ALT ? Z80::HL : R == Z80::DE_ALT ? Z80::DE : Z80::BC;
@@ -241,12 +243,28 @@ void Z80AsmPrinter::emitInstruction(const MachineInstr *MI) {
         Emit(Z80::LD8gg,
              {Reg(TRI.getSubReg(Dst, Sub)), Reg(TRI.getSubReg(Src, Sub))});
     } else {
-      unsigned Op = Opc == Z80::BANK_LD8ap ? 1 : 0;
+      unsigned Op = Opc == Z80::BANK_LD8ap || Opc == Z80::BANK_LD16mr ? 1 : 0;
       auto Pair = Reg(Main(MI->getOperand(Op).getReg()));
-      if (Opc == Z80::BANK_LD16ri) {
+      if (Opc == Z80::BANK_LD16rm || Opc == Z80::BANK_LD16mr) {
+        bool Load = Opc == Z80::BANK_LD16rm;
+        bool HL = Main(MI->getOperand(Op).getReg()) == Z80::HL;
+        unsigned Code = Load ? (HL ? Z80::LD16am : Z80::LD16gm)
+                             : (HL ? Z80::LD16ma : Z80::LD16mg);
+        Z80MCInstLower Lower(*MF, *this);
+        auto Address = *Lower.LowerMachineOperand(MI, MI->getOperand(1 - Op));
+        if (Load)
+          Emit(Code, {Pair, Address});
+        else
+          Emit(Code, {Address, Pair});
+      } else if (Opc == Z80::BANK_LD16ri) {
         Z80MCInstLower Lower(*MF, *this);
         Emit(Z80::LD16ri,
              {Pair, *Lower.LowerMachineOperand(MI, MI->getOperand(1))});
+      } else if (Opc == Z80::BANK_INCL16 || Opc == Z80::BANK_DECL16) {
+        const auto &TRI = *getSubtarget().getRegisterInfo();
+        auto Low = Reg(TRI.getSubReg(Main(MI->getOperand(Op).getReg()),
+                                    Z80::sub_low));
+        Emit(Opc == Z80::BANK_INCL16 ? Z80::INC8r : Z80::DEC8r, {Low, Low});
       } else if (Opc == Z80::BANK_INC16 || Opc == Z80::BANK_DEC16)
         Emit(Opc == Z80::BANK_INC16 ? Z80::INC16r : Z80::DEC16r, {Pair, Pair});
       else if (Opc == Z80::BANK_LD8ap)

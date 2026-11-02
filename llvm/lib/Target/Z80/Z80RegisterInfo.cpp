@@ -187,6 +187,9 @@ const uint32_t *Z80RegisterInfo::getNoPreservedMask() const {
 
 BitVector Z80RegisterInfo::getReservedRegs(const MachineFunction &MF) const {
   BitVector Reserved(getNumRegs());
+  if (MF.getFunction().hasFnAttribute("z80-preserve-state-bank"))
+    for (MCRegAliasIterator A(Z80::UHL_ALT, this, true); A.isValid(); ++A)
+      Reserved.set(*A);
 
   // Only bank-aware whole-pair instructions admit alternate operands.
   // All banks remain reserved unless the compilation explicitly permits them.

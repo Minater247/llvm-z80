@@ -210,6 +210,7 @@ public:
     return getTM<Z80TargetMachine>();
   }
 
+  void addIRPasses() override;
   bool addIRTranslator() override;
   void addPreLegalizeMachineIR() override;
   bool addLegalizeMachineIR() override;
@@ -230,6 +231,12 @@ public:
 
 TargetPassConfig *Z80TargetMachine::createPassConfig(PassManagerBase &PM) {
   return new Z80PassConfig(*this, PM);
+}
+
+void Z80PassConfig::addIRPasses() {
+  if (getOptLevel() != CodeGenOptLevel::None)
+    addPass(createZ80StatePromotion(getZ80TargetMachine()));
+  TargetPassConfig::addIRPasses();
 }
 
 bool Z80PassConfig::addIRTranslator() {

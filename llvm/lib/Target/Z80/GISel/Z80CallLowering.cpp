@@ -749,7 +749,12 @@ bool Z80CallLowering::lowerFormalArguments(MachineIRBuilder &MIRBuilder,
       continue;
 
     // TODO: handle not simple cases.
-    if (Arg.hasAttribute(Attribute::InReg) ||
+    bool BankState = F.getCallingConv() == CallingConv::Fast &&
+                     MF.getSubtarget<Z80Subtarget>().useAlternateRegs() &&
+                     MF.getSubtarget<Z80Subtarget>().is16Bit() &&
+                     !MF.getSubtarget<Z80Subtarget>().hasEZ80Ops() &&
+                     Arg.getType()->isIntegerTy(16);
+    if ((Arg.hasAttribute(Attribute::InReg) && !BankState) ||
         Arg.hasAttribute(Attribute::SwiftSelf) ||
         Arg.hasAttribute(Attribute::SwiftError) ||
         Arg.hasAttribute(Attribute::Nest) || VRegs[Idx].size() > 1)
@@ -848,11 +853,24 @@ Z80CallLowering::buildSCMP(MachineIRBuilder &MIRBuilder) const {
   const auto &TLI = *getTLI<Z80TargetLowering>();
   const Z80RegisterInfo &TRI = *STI.getRegisterInfo();
   bool Is24Bit = STI.is24Bit();
+  const uint32_t *Preserved =
+      TRI.getCallPreservedMask(MF, TLI.getLibcallCallingConv(RTLIB::SCMP));
+  if (!Is24Bit && !STI.hasEZ80Ops()) {
+    /* The signed-compare helper changes S while preserving data registers
+       in both banks. Its mask is independent of multiword arithmetic
+       helpers, which may use alternate registers as scratch storage. */
+    uint32_t *Mask = MF.allocateRegMask();
+    std::copy_n(Preserved, MachineOperand::getRegMaskSize(TRI.getNumRegs()), Mask);
+    for (MCRegister R : {Z80::AF_ALT, Z80::UBC_ALT, Z80::UDE_ALT,
+                         Z80::UHL_ALT})
+      for (MCRegAliasIterator A(R, &TRI, true); A.isValid(); ++A)
+        Mask[*A / 32] |= uint32_t(1) << (*A % 32);
+    Preserved = Mask;
+  }
   return MIRBuilder.buildInstr(Is24Bit ? Z80::CALL24CC : Z80::CALL16CC)
       .addExternalSymbol(TLI.getLibcallName(RTLIB::SCMP))
       .addImm(Z80::COND_PE)
       .addReg(Z80::F, RegState::ImplicitDefine)
       .addReg(Z80::F, RegState::ImplicitKill)
-      .addRegMask(
-          TRI.getCallPreservedMask(MF, TLI.getLibcallCallingConv(RTLIB::SCMP)));
+      .addRegMask(Preserved);
 }

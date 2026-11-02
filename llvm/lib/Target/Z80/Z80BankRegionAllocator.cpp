@@ -127,6 +127,21 @@ bool Z80BankRegionAllocator::runOnMachineFunction(MachineFunction &MF) {
     case Z80::BANK_LD16ri:
       MainOpc = Z80::LD16ri;
       break;
+    case Z80::BANK_LD16rm:
+      MainOpc = mainReg(MI.getOperand(0).getReg()) == Z80::HL
+                    ? Z80::LD16am : Z80::LD16gm;
+      break;
+    case Z80::BANK_LD16mr:
+      Op = 1;
+      MainOpc = mainReg(MI.getOperand(1).getReg()) == Z80::HL
+                    ? Z80::LD16ma : Z80::LD16mg;
+      break;
+    case Z80::BANK_INCL16:
+      MainOpc = Z80::INC8r;
+      break;
+    case Z80::BANK_DECL16:
+      MainOpc = Z80::DEC8r;
+      break;
     case Z80::BANK_INC16:
       MainOpc = Z80::INC16r;
       break;
@@ -508,6 +523,8 @@ bool Z80BankRegionAllocator::runOnMachineFunction(MachineFunction &MF) {
             Operation.eraseFromParent();
             continue;
           }
+          bool Low = Operation.getOpcode() == Z80::BANK_INCL16 ||
+                     Operation.getOpcode() == Z80::BANK_DECL16;
           Operation.setDesc(TII.get(BankOpcode(Operation)));
           for (auto &MO : Operation.operands())
             if (MO.isReg() && MO.getReg()) {
@@ -518,6 +535,10 @@ bool Z80BankRegionAllocator::runOnMachineFunction(MachineFunction &MF) {
               else
                 MO.setIsDead(false);
             }
+          if (Low)
+            for (unsigned Op : {0u, 1u})
+              Operation.getOperand(Op).setReg(
+                  TRI.getSubReg(Operation.getOperand(Op).getReg(), Z80::sub_low));
           if (Operation.getOpcode() == Z80::ADD16rr)
             TII.expandPostRAPseudo(Operation);
         }

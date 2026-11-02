@@ -1460,12 +1460,18 @@ let hasSideEffects = 0 in {
                           (ins B16:$imp, BO16:$src)>;
   def BANK_INC16 : Pseudo<"", "", "$dst = $src", (outs B16:$dst), (ins B16:$src)>;
   def BANK_DEC16 : Pseudo<"", "", "$dst = $src", (outs B16:$dst), (ins B16:$src)>;
+  let Defs = [F] in {
+    def BANK_INCL16 : Pseudo<"", "", "$dst = $src", (outs B16:$dst), (ins B16:$src)>;
+    def BANK_DECL16 : Pseudo<"", "", "$dst = $src", (outs B16:$dst), (ins B16:$src)>;
+  }
   def ALT_COPY16 : Pseudo<"", "", "", (outs ALT16:$dst), (ins ALT16:$src)>;
   let mayLoad = 1 in {
+    def BANK_LD16rm : Pseudo<"", "", "", (outs B16:$dst), (ins mem:$src)>;
     def BANK_LD8ap : Pseudo<"", "", "", (outs A8:$dst), (ins B16:$src)>;
     def BANK_LD16ro : Pseudo<"", "", "", (outs B16:$dst), (ins off16:$src)>;
   }
   let mayStore = 1 in {
+    def BANK_LD16mr : Pseudo<"", "", "", (outs), (ins mem:$dst, B16:$src)>;
     // Primary address registers store the byte directly. Other pairs use A;
     // selection proves its old value is dead before exposing this choice.
     let Defs = [A] in
