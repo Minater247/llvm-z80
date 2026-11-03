@@ -151,3 +151,36 @@ define ptr @constant_carry_base(i16 %unused, i16 %index) {
   %r = getelementptr i8, ptr inttoptr (i16 -31 to ptr), i16 %lo
   ret ptr %r
 }
+
+; Both low bytes vary, but their sum still fits in the known page.
+define ptr @bounded_byte_base(i16 %base, i16 %index) {
+; CHECK-LABEL: bounded_byte_base:
+; CHECK-NOT: add{{[ \t]+}}hl,
+; CHECK: ret
+  %part = and i16 %base, 128
+  %address = or i16 %part, 65296
+  %p = inttoptr i16 %address to ptr
+  %offset = and i16 %index, 111
+  %r = getelementptr i8, ptr %p, i16 %offset
+  ret ptr %r
+}
+
+; An unknown high byte retains the pair operation rather than extending its
+; lifetime to feed byte reconstruction.
+define ptr @variable_page_base(i16 %base, i16 %index) {
+  %address = and i16 %base, -128
+  %p = inttoptr i16 %address to ptr
+  %offset = and i16 %index, 127
+  %r = getelementptr i8, ptr %p, i16 %offset
+  ret ptr %r
+}
+
+; One extra low bit allows a carry out of page 255, including address wrap.
+define ptr @bounded_carry_base(i16 %base, i16 %index) {
+  %part = and i16 %base, 128
+  %address = or i16 %part, 65297
+  %p = inttoptr i16 %address to ptr
+  %offset = and i16 %index, 111
+  %r = getelementptr i8, ptr %p, i16 %offset
+  ret ptr %r
+}

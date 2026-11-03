@@ -211,6 +211,7 @@ public:
   }
 
   void addIRPasses() override;
+  void addCodeGenPrepare() override;
   bool addIRTranslator() override;
   void addPreLegalizeMachineIR() override;
   bool addLegalizeMachineIR() override;
@@ -237,6 +238,14 @@ void Z80PassConfig::addIRPasses() {
   if (getOptLevel() != CodeGenOptLevel::None)
     addPass(createZ80StatePromotion(getZ80TargetMachine()));
   TargetPassConfig::addIRPasses();
+}
+
+void Z80PassConfig::addCodeGenPrepare() {
+  TargetPassConfig::addCodeGenPrepare();
+  if (getOptLevel() != CodeGenOptLevel::None) {
+    addPass(createZ80PrivateMemory());
+    addPass(createZ80PrepareDispatch(getZ80TargetMachine()));
+  }
 }
 
 bool Z80PassConfig::addIRTranslator() {

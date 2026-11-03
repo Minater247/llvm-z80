@@ -37,6 +37,8 @@ set(sources
   GISel/Z80UnrollLd.cpp
   Z80StackStream.cpp
   Z80StatePromotion.cpp
+  Z80PrepareDispatch.cpp
+  Z80PrivateMemory.cpp
   Z80BankRegionAllocator.cpp
   Z80LateCopyPropagation.cpp
   Z80AlternateRegAllocator.cpp

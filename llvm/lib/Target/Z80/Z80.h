@@ -60,6 +60,8 @@ FunctionPass *createZ80BankRegionAllocator();
 FunctionPass *createZ80LateCopyPropagation();
 FunctionPass *createZ80StackStream();
 ModulePass *createZ80StatePromotion(const Z80TargetMachine &TM);
+FunctionPass *createZ80PrepareDispatch(const Z80TargetMachine &TM);
+ModulePass *createZ80PrivateMemory();
 
 void initializeZ80PreLegalizerCombinerPass(PassRegistry &);
 void initializeZ80PostLegalizerCombinerPass(PassRegistry &);

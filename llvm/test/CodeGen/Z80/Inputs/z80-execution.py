@@ -312,8 +312,17 @@ class CPU:
                 if len(args) == 2:
                     take = self.condition(args[0])
                 if take:
-                    pc = labels[args[-1]]
-                self.cycles += 10 if op == 'jp' else 12 if take else 7
+                    target = args[-1]
+                    if target.startswith('('):
+                        assert op == 'jp' and target in ('(hl)', '(ix)', '(iy)')
+                        pc = self.get(target[1:-1])
+                        assert 0 <= pc < len(code), ('Invalid jump destination', pc)
+                    else:
+                        pc = labels[target]
+                if op == 'jp' and args[-1].startswith('('):
+                    self.cycles += 4 if args[-1] == '(hl)' else 8
+                else:
+                    self.cycles += 10 if op == 'jp' else 12 if take else 7
             elif op == 'call':
                 take = len(args) == 1 or self.condition(args[0])
                 if take:

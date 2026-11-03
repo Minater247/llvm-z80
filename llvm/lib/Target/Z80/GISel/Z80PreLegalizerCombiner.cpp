@@ -55,6 +55,7 @@ struct ConstantMultiply {
 
 struct PageOffset {
   bool Reverse = false;
+  bool AddBaseLow = false;
   uint8_t LowOffset = 0;
 };
 
@@ -408,8 +409,8 @@ static void applyConstantMultiply(MachineInstr &MI, MachineIRBuilder &Builder,
 }
 
 /// Recognize disjoint high and low bytes in a 16-bit pointer sum in either
-/// order. Constant bases also use byte arithmetic when the offset cannot carry
-/// into the high byte. Constant offsets retain the existing immediate forms.
+/// order. Bases with a known high byte use byte arithmetic when the offset
+/// cannot carry into it. Constant offsets retain existing immediate forms.
 static bool matchPageOffset(MachineInstr &MI, MachineRegisterInfo &MRI,
                             GISelValueTracking *VT, PageOffset &Match) {
   LLT Ty = MRI.getType(MI.getOperand(0).getReg());
@@ -442,6 +443,14 @@ static bool matchPageOffset(MachineInstr &MI, MachineRegisterInfo &MRI,
       return true;
     }
   }
+  if (ByteOffset && !getIConstantVRegValWithLookThrough(Offset, MRI) &&
+      (BaseBits.Zero | BaseBits.One).countLeadingOnes() >= 8 &&
+      (BaseBits.getMaxValue().getZExtValue() & 255) +
+              OffsetBits.getMaxValue().getZExtValue() <=
+          255) {
+    Match.AddBaseLow = true;
+    return true;
+  }
   return false;
 }
 
@@ -461,6 +470,8 @@ static void applyPageOffset(MachineInstr &MI, MachineIRBuilder &Builder,
     auto Offset = Builder.buildConstant(Byte, Match.LowOffset);
     Low = Builder.buildAdd(Byte, Low, Offset).getReg(0);
   }
+  if (Match.AddBaseLow)
+    Low = Builder.buildAdd(Byte, Low, Builder.buildTrunc(Byte, Base)).getReg(0);
   /* Proven absence of a carry lets the high byte stay unchanged. Only the
      low byte needs arithmetic when the base has a nonzero page offset. */
   auto Address = Builder.buildMergeValues(Word, {Low, High.getReg(0)});
