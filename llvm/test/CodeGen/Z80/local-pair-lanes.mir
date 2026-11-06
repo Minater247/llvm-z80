@@ -12,6 +12,7 @@
   define void @runtime_high() { ret void }
   define void @runtime_low() { ret void }
   define void @runtime_stores() { ret void }
+  define void @runtime_reads() { ret void }
 ...
 ---
 name: low_cursor
@@ -223,4 +224,35 @@ body: |
     LD8pa %0, $a :: (volatile store (s8))
     $de = COPY %0
     RET16 implicit-def $sps, implicit $sps, implicit $de
+...
+---
+name: runtime_reads
+tracksRegLiveness: true
+# Runtime page bytes retain a streaming pair through consecutive reads.
+# CHECK-LABEL: name: runtime_reads
+# CHECK: bb.1:
+# CHECK: [[PAIR:%[0-9]+]].sub_low:r16 = COPY
+# CHECK-NEXT: [[PAIR]].sub_high:r16 = COPY
+# CHECK-NEXT: $a = LD8ap [[PAIR]]
+# CHECK-NEXT: [[PAIR]].sub_low:r16 = INC8r [[PAIR]].sub_low
+# CHECK-NEXT: $a = LD8ap [[PAIR]]
+# CHECK: CALL16 @opaque
+body: |
+  bb.0:
+    successors: %bb.1(0x80000000)
+    liveins: $e, $d
+    undef %0.sub_low:r16 = COPY $e
+    %0.sub_high:r16 = COPY $d
+    JQ %bb.1
+  bb.1:
+    $a = LD8ap %0 :: (volatile load (s8))
+    %0.sub_low:r16 = INC8r %0.sub_low, implicit-def dead $f
+    $a = LD8ap %0 :: (volatile load (s8))
+    CALL16 @opaque, csr_z80_c, implicit $sps
+    %0.sub_low:r16 = INC8r %0.sub_low, implicit-def dead $f
+    $a = LD8ap %0 :: (volatile load (s8))
+    %0.sub_low:r16 = INC8r %0.sub_low, implicit-def dead $f
+    $a = LD8ap %0 :: (volatile load (s8))
+    $de = COPY %0
+    RET16 implicit-def $sps, implicit $sps, implicit $de, implicit $a
 ...

@@ -1,0 +1,123 @@
+# RUN: llc -run-pass=z80-machine-prera-opt -verify-machineinstrs %s -o - | FileCheck %s
+# RUN: %python %S/Inputs/accumulator-branches.py --llc llc --mir %s --work %t
+#
+# Comparisons preserve the incoming accumulator until a path overwrites it.
+# Captures before calls, joins and replacement definitions preserve its value.
+--- |
+  target triple = "z80"
+  declare void @opaque()
+  define void @classify() { ret void }
+  define void @diamond() { ret void }
+  define void @replacement() { ret void }
+...
+---
+name: classify
+isSSA: false
+noPhis: true
+tracksRegLiveness: true
+# CHECK-LABEL: name: classify
+# CHECK: bb.1:
+# CHECK: liveins: $a
+# CHECK-NOT: COPY
+# CHECK: CP8ai 1
+# CHECK: bb.2:
+# CHECK: liveins: $a
+# CHECK-NOT: COPY
+# CHECK: OR8aa
+# CHECK: bb.3:
+# CHECK: COPY $a
+# CHECK: RLC8g
+# CHECK: bb.4:
+# CHECK: COPY $a
+# CHECK: CALL16 @opaque
+body: |
+  bb.0:
+    liveins: $e
+    $a = COPY $e
+    %0:g8 = COPY $a
+    $a = COPY %0
+    CP8ai 32, implicit-def $f, implicit $a
+    JQCC %bb.3, 2, implicit $f
+    JQ %bb.1
+  bb.1:
+    $a = COPY %0
+    CP8ai 1, implicit-def $f, implicit $a
+    JQCC %bb.6, 1, implicit $f
+    JQ %bb.2
+  bb.2:
+    $a = COPY %0
+    OR8aa implicit-def $f, implicit $a
+    JQCC %bb.5, 1, implicit $f
+    JQ %bb.4
+  bb.3:
+    %1:g8 = COPY %0
+    %1:g8 = RLC8g %1, implicit-def dead $f
+    $a = COPY %0
+    ADD8ar %1, implicit-def $a, implicit-def dead $f, implicit $a
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+  bb.4:
+    CALL16 @opaque, csr_z80_c, implicit $sps
+    $a = COPY %0
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+  bb.5:
+    $a = LD8ri 255
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+  bb.6:
+    $a = LD8ri 255
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...
+---
+name: diamond
+isSSA: false
+noPhis: true
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $e
+    $a = COPY $e
+    %0:g8 = COPY $a
+    $a = COPY %0
+    CP8ai 128, implicit-def $f, implicit $a
+    JQCC %bb.3, 2, implicit $f
+    JQ %bb.1
+  bb.1:
+    $a = COPY %0
+    CP8ai 64, implicit-def $f, implicit $a
+    JQCC %bb.3, 2, implicit $f
+    JQ %bb.2
+  bb.2:
+    $a = LD8ri 123
+    JQ %bb.3
+  bb.3:
+    $a = COPY %0
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...
+---
+name: replacement
+isSSA: false
+noPhis: true
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $e
+    $a = COPY $e
+    %0:g8 = COPY $a
+    $a = COPY %0
+    CP8ai 32, implicit-def $f, implicit $a
+    JQCC %bb.3, 2, implicit $f
+    JQ %bb.1
+  bb.1:
+    $a = COPY %0
+    CP8ai 16, implicit-def $f, implicit $a
+    JQCC %bb.2, 2, implicit $f
+    JQ %bb.4
+  bb.2:
+    %0:g8 = LD8ri 99
+    JQ %bb.4
+  bb.3:
+    %0:g8 = LD8ri 173
+    JQ %bb.4
+  bb.4:
+    $a = COPY %0
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...

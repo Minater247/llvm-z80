@@ -157,6 +157,7 @@ def RetCC_Z80 : CallingConv<[
 
 def CSR_NoRegs : CalleeSavedRegs<(add)>;
 def CSR_Z80_C : CalleeSavedRegs<(add IX)>;
+def CSR_Z80_Region : CalleeSavedRegs<(add IX, DE_ALT)>;
 def CSR_EZ80_C : CalleeSavedRegs<(add UIX)>;
 def CSR_Z80_AllRegs : CalleeSavedRegs<(add R16, A)>;
 def CSR_Z80_AllRegsAndFlags : CalleeSavedRegs<(add R16, AF)>;

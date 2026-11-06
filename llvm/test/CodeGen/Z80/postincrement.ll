@@ -78,3 +78,30 @@ loop:
 exit:
   ret ptr %next
 }
+
+; A byte merged with its transformed value retains the advancing source.
+; BANK-LABEL: name: scan_and_map
+; BANK: LD8A_POST16
+define ptr @scan_and_map(ptr %start, ptr %out, i8 %count, ptr %cursor) {
+entry:
+  br label %loop
+loop:
+  %p = phi ptr [ %start, %entry ], [ %next, %merge ]
+  %n = phi i8 [ %count, %entry ], [ %left, %merge ]
+  %v = load volatile i8, ptr %p
+  %next = getelementptr i8, ptr %p, i16 1
+  store volatile ptr %next, ptr %cursor
+  %small = icmp ult i8 %v, 32
+  br i1 %small, label %merge, label %large
+large:
+  %mapped = lshr i8 %v, 5
+  br label %merge
+merge:
+  %value = phi i8 [ %v, %loop ], [ %mapped, %large ]
+  store volatile i8 %value, ptr %out
+  %left = add i8 %n, -1
+  %done = icmp eq i8 %left, 0
+  br i1 %done, label %exit, label %loop
+exit:
+  ret ptr %next
+}

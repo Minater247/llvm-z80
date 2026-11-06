@@ -132,6 +132,8 @@ unsigned Z80RegisterInfo::getRegPressureLimit(const TargetRegisterClass *RC,
 
 const MCPhysReg *
 Z80RegisterInfo::getCalleeSavedRegs(const MachineFunction *MF) const {
+  if (!Is24Bit && MF->getFunction().hasFnAttribute("z80-save-region-bank"))
+    return CSR_Z80_Region_SaveList;
   switch (MF->getFunction().getCallingConv()) {
   default:
     llvm_unreachable("Unsupported calling convention");

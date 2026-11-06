@@ -56,17 +56,25 @@ for allocator in ('z80', 'greedy'):
                                 '-mattr='+('+' if bank else '-')+'alternate-regs',
                                 '-verify-machineinstrs', str(ir), '-o', str(out)], check=True)
                 assembly = out.read_text()
+                conditional = assembly.split('conditional:', 1)[1].split('.Lfunc_end', 1)[0]
+                assert '.address' not in conditional, conditional
                 if bank and allocator == 'z80' and not arithmetic:
-                    leaf = assembly.split('emit.state:', 1)[1].split('.Lfunc_end', 1)[0]
-                    assert len(re.findall(r'\bexx\b', leaf)) == 2, leaf
-                    assert leaf.index('exx') < leaf.index('bit'), leaf
-                    assert not re.search(r'\b(push|pop)\b', leaf), leaf
+                    leaves = re.findall(r'emit\.state(?:\.address)?:\s*(.*?)\.Lfunc_end',
+                                        assembly, re.S)
+                    assert leaves, assembly
+                    for leaf in leaves:
+                        assert len(re.findall(r'\bexx\b', leaf)) == 2, leaf
+                        assert leaf.index('exx') < leaf.index('bit'), leaf
+                        assert not re.search(r'\b(push|pop)\b', leaf), leaf
                 assembly = re.sub(r'\bcursor\b', '8192', assembly)
                 assembly = re.sub(r'\btimer\b', '8194', assembly)
                 program = x.Program(assembly)
+                entries = [('run', 12), ('outside', 1)]
+                if bank and resident == 1 and 'emit.state.address:' in assembly:
+                    entries.append(('group', 6))
                 for start in range(256):
                     for delay in (0, 1, 3):
-                        for entry, count in (('run', 8), ('outside', 1)):
+                        for entry, count in entries + [('maybe', 6 if start & 1 else 0)]:
                             cpu = DeviceCPU(start, port, delay)
                             cpu.mem[8192:8195] = bytes((start, 49, 21))
                             expected = []
@@ -75,10 +83,20 @@ for allocator in ('z80', 'greedy'):
                                 expected += [(port, 39), (port + 1, 22 if arithmetic else 21),
                                              (port, 42), (port + 1, sample)]
                             sp, ix = cpu.sp, cpu.get('ix')
+                            saved_pair = (cpu.alt['d'], cpu.alt['e'])
+                            if entry == 'maybe':
+                                cpu.put('e', start & 1)
+                            if entry == 'group':
+                                cpu.alt['b'], cpu.alt['c'] = 49, start
+                                cpu.alt['h'], cpu.alt['l'] = port >> 8, port & 255
                             cpu.run(program, entry=entry)
                             result = 0x3100 | ((start + count) & 255)
                             assert cpu.trace == expected, (allocator, bank, resident, arithmetic, start, delay, entry)
-                            assert cpu.mem[8192] + 256 * cpu.mem[8193] == result
+                            if entry == 'group':
+                                assert cpu.alt['b'] * 256 + cpu.alt['c'] == result
+                                assert (cpu.alt['d'], cpu.alt['e']) == saved_pair
+                            else:
+                                assert cpu.mem[8192] + 256 * cpu.mem[8193] == result
                             assert cpu.sp == sp + 2 and cpu.get('ix') == ix
                             if entry == 'outside':
                                 assert cpu.get('hl') == result

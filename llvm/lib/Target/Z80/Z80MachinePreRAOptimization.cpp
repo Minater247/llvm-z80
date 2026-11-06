@@ -903,11 +903,11 @@ static bool separateStableLanes(MachineFunction &MF, unsigned StableSub) {
           /* Repeated stores to independent fixed addresses can interleave.
              Retaining all of those pairs increases pressure without saving
              cursor updates or a read/modify/write address reconstruction.
-             Runtime lanes retain a pair only for read/modify/write regions:
-             keeping a write-only destination live across other address
-             computations can displace their arithmetic temporaries. */
+             Runtime read cursors also benefit from advancing in place.
+             Write-only destinations keep independent lanes: extending them
+             across other address computations can displace temporaries. */
           if (WholeUses < 2 || (!UpdatedAtLast && !(Loaded && Stored)) ||
-              (!StableValue && !(Loaded && Stored)))
+              (!StableValue && !Loaded))
             continue;
           Register Pair = MRI.createVirtualRegister(RC);
           BuildMI(*MBB, Begin, Begin->getDebugLoc(), TII.get(TargetOpcode::COPY))
@@ -1299,6 +1299,100 @@ static bool sinkIncomingCopies(MachineFunction &MF) {
     MRI.markUsesInDebugValueAsUndef(Dst.getReg());
     Copy.getOperand(1).setIsKill(false);
     UseBlock->splice(First, &Entry, Copy.getIterator());
+    Changed = true;
+  }
+  return Changed;
+}
+
+/// Retain an accumulator result through a tree of comparisons. Capture its
+/// virtual value on paths that overwrite A or consume it in another register.
+/// Joins retain virtual values; instructions and memory accesses stay in
+/// their original order. PHI elimination supplies independent path definitions.
+/// Each search visits at most eight blocks and 64 instructions.
+static bool sinkAccumulatorCaptures(MachineFunction &MF) {
+  auto &MRI = MF.getRegInfo();
+  if (!MF.getProperties().hasNoPHIs() || MRI.isSSA())
+    return false;
+  const auto &TII = *MF.getSubtarget().getInstrInfo();
+  const auto &TRI = *MF.getSubtarget().getRegisterInfo();
+  SmallVector<MachineInstr *, 16> Candidates;
+  for (auto &MBB : MF)
+    for (auto &MI : MBB)
+      if (MI.isFullCopy() && MI.getOperand(0).getReg().isVirtual() &&
+          MI.getOperand(1).getReg() == Z80::A &&
+          !MI.getOperand(1).isUndef() && !MI.isBundled() &&
+          !MRI.hasOneNonDBGUse(MI.getOperand(0).getReg()))
+        Candidates.push_back(&MI);
+  bool Changed = false;
+  for (auto *Capture : Candidates) {
+    Register R = Capture->getOperand(0).getReg();
+    SmallVector<MachineBasicBlock *, 8> Blocks{Capture->getParent()};
+    SmallVector<MachineInstr *, 8> Frontiers, Redundant;
+    SmallVector<MachineInstr *, 32> Retained;
+    unsigned Budget = 64;
+    bool Eligible = true;
+    for (unsigned N = 0; N != Blocks.size(); ++N) {
+      auto *MBB = Blocks[N];
+      auto It = N ? MBB->begin() : std::next(Capture->getIterator());
+      bool Stop = false;
+      for (; It != MBB->end(); ++It) {
+        auto &MI = *It;
+        if (MI.isDebugInstr())
+          continue;
+        bool CopyBack = MI.isFullCopy() &&
+                        MI.getOperand(0).getReg() == Z80::A &&
+                        MI.getOperand(1).getReg() == R &&
+                        !MI.getOperand(1).isUndef();
+        if (!Budget || MI.isBundled() || MI.isInlineAsm() ||
+            (!CopyBack && (MI.modifiesRegister(Z80::A, &TRI) ||
+                           MI.modifiesRegister(R, &TRI) ||
+                           MI.readsRegister(R, &TRI)))) {
+          Frontiers.push_back(&MI);
+          Stop = true;
+          break;
+        }
+        --Budget;
+        if (CopyBack)
+          Redundant.push_back(&MI);
+        else
+          Retained.push_back(&MI);
+      }
+      if (Stop || MBB->succ_empty())
+        continue;
+      /* Every entered block has one predecessor, so A has the same value
+         on all incoming paths. Capture before a join or backedge instead of
+         imposing a physical-register agreement on unrelated paths. */
+      bool Enter = Blocks.size() + MBB->succ_size() <= 8;
+      for (auto *Succ : MBB->successors())
+        Enter &= Succ->pred_size() == 1 &&
+                 !llvm::is_contained(Blocks, Succ) &&
+                 (Succ->empty() || !Succ->front().isPHI());
+      if (Enter)
+        Blocks.append(MBB->succ_begin(), MBB->succ_end());
+      else {
+        auto Terminator = MBB->getFirstTerminator();
+        if (Terminator == MBB->end()) {
+          Eligible = false;
+          break;
+        }
+        Frontiers.push_back(&*Terminator);
+      }
+    }
+    if (!Eligible || Blocks.size() < 2 || Redundant.size() < 2)
+      continue;
+    for (auto *Before : Frontiers)
+      BuildMI(*Before->getParent(), Before, Capture->getDebugLoc(),
+              TII.get(TargetOpcode::COPY), R).addReg(Z80::A);
+    for (auto *MI : Redundant)
+      MI->eraseFromParent();
+    MRI.clearKillFlags(R);
+    for (auto *MBB : ArrayRef(Blocks).drop_front())
+      if (!MBB->isLiveIn(Z80::A))
+        MBB->addLiveIn(Z80::A);
+    for (auto *MI : Retained)
+      MI->clearRegisterKills(Z80::A, &TRI);
+    MRI.markUsesInDebugValueAsUndef(R);
+    Capture->eraseFromParent();
     Changed = true;
   }
   return Changed;
@@ -2303,6 +2397,7 @@ bool Z80MachinePreRAOptimization::runOnMachineFunction(MachineFunction &MF) {
   Changed |= separateStableLanes(MF, Z80::sub_high);
   Changed |= separateStableLanes(MF, Z80::sub_low);
   Changed |= sinkIncomingCopies(MF);
+  Changed |= sinkAccumulatorCaptures(MF);
   Changed |= selectBankInstructions(MF);
   identifySingleBankRegion(MF);
   return Changed;

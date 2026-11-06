@@ -57,12 +57,14 @@ int Z80InstrInfo::getSPAdjust(const MachineInstr &MI) const {
     return Subtarget.is24Bit() ? -1 : 0;
   case Z80::POP16r:
   case Z80::POP16AF:
+  case Z80::BANK_POP16:
     return 2;
   case Z80::POP24r:
   case Z80::POP24AF:
     return 3;
   case Z80::PUSH16r:
   case Z80::PUSH16AF:
+  case Z80::BANK_PUSH16:
   case Z80::PEA16o:
     return -2;
   case Z80::PUSH24r:
@@ -210,6 +212,8 @@ Z80InstrInfo::getEmissionPseudoSize(const MachineInstr &MI) const {
   case Z80::BANK_LD8pi:
     return 4;
   case Z80::BANK_INC16:
+  case Z80::BANK_PUSH16:
+  case Z80::BANK_POP16:
   case Z80::BANK_DEC16:
   case Z80::BANK_INCL16:
   case Z80::BANK_DECL16:

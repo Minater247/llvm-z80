@@ -40,8 +40,30 @@ static cl::opt<unsigned> BankAddressCount(
     "z80-bank-address-count", cl::Hidden, cl::init(1),
     cl::desc("Maximum invariant addresses carried with private state"));
 
+static cl::opt<bool> RegionalBankAddresses(
+    "z80-regional-bank-addresses", cl::Hidden, cl::init(true),
+    cl::desc("Cache a second byte address within repeated leaf-call regions"));
+
 namespace {
 using Functions = SmallSetVector<Function *, 16>;
+
+/// Return the numeric address of a direct byte access in the default space.
+static ConstantInt *absoluteByteAddress(Instruction &I) {
+  Value *P = nullptr;
+  if (auto *L = dyn_cast<LoadInst>(&I)) {
+    if (L->getType()->isIntegerTy(8))
+      P = L->getPointerOperand();
+  } else if (auto *S = dyn_cast<StoreInst>(&I)) {
+    if (S->getValueOperand()->getType()->isIntegerTy(8))
+      P = S->getPointerOperand();
+  }
+  auto *C = dyn_cast_or_null<ConstantExpr>(P);
+  if (!C || C->getOpcode() != Instruction::IntToPtr ||
+      C->getType()->getPointerAddressSpace())
+    return nullptr;
+  auto *Address = dyn_cast<ConstantInt>(C->getOperand(0));
+  return Address && Address->getType()->isIntegerTy(16) ? Address : nullptr;
+}
 
 /// Recognize updates whose arithmetic can execute on an alternate pair.
 /// Word increments and byte-wrapping increments preserve bank residency;
@@ -64,6 +86,150 @@ bool isBankUpdate(Value *V, GlobalVariable &G) {
       !match(Low, m_Add(m_Specific(High), m_ConstantInt(Step))))
     return false;
   return Step->isOne() || Step->isMinusOne();
+}
+
+/// Cache a second address for repeated calls to a small leaf within a caller.
+/// The specialized leaf receives the constant in its third bank argument. The
+/// containing caller establishes it locally and preserves the borrowed pair,
+/// keeping its incoming interface and its callers' register lifetimes intact.
+/// Other callers continue to use the original leaf and register convention.
+static bool specializeAddressRegions(Module &M) {
+  if (!RegionalBankAddresses)
+    return false;
+  struct Region {
+    Function *Caller;
+    Function *Leaf;
+    ConstantInt *Address;
+  };
+  SmallVector<Region, 8> Regions;
+  for (Function &F : M) {
+    if (F.getCallingConv() != CallingConv::Z80_BankState ||
+        !F.hasLocalLinkage() || F.getInstructionCount() > 256)
+      continue;
+    auto Text = F.getFnAttribute("z80-bank-addresses").getValueAsString();
+    if (Text.empty() || Text.contains(','))
+      continue;
+    Function *Leaf = nullptr;
+    unsigned Count = 0;
+    bool Valid = true;
+    for (Instruction &I : instructions(F))
+      if (auto *C = dyn_cast<CallBase>(&I)) {
+        auto *Target = C->getCalledFunction();
+        if (Target && Target->isIntrinsic() && C->doesNotAccessMemory())
+          continue;
+        if (!isa<CallInst>(C) || C->isMustTailCall() || C->hasOperandBundles() ||
+            !Target || Target->isDeclaration() || Target == &F ||
+            (Leaf && Leaf != Target)) {
+          Valid = false;
+          break;
+        }
+        Leaf = Target;
+        ++Count;
+      }
+    if (!Valid || Count < 3 || !Leaf || Leaf->arg_size() != 2 ||
+        !Leaf->hasLocalLinkage() || Leaf->getInstructionCount() > 32 ||
+        Leaf->getCallingConv() != CallingConv::Z80_BankState ||
+        Leaf->getFnAttribute("z80-bank-addresses").getValueAsString() != Text ||
+        llvm::any_of(instructions(Leaf), [](Instruction &I) {
+          return isa<CallBase>(I);
+        }))
+      continue;
+    uint64_t Existing = 0;
+    if (Text.getAsInteger(10, Existing))
+      continue;
+    MapVector<ConstantInt *, unsigned> Counts;
+    for (Instruction &I : instructions(Leaf))
+      if (auto *A = absoluteByteAddress(I))
+        if (A->getZExtValue() != Existing)
+          ++Counts[A];
+    ConstantInt *Address = nullptr;
+    unsigned Best = 1;
+    for (auto [A, Uses] : Counts)
+      if (Uses > Best) {
+        Address = A;
+        Best = Uses;
+      }
+    /* Each indirect byte access saves six T states. Establishing DE' takes
+       18, and preserving it across this region takes another 37. Charge
+       those once per caller invocation before specializing its leaf calls.
+       Calls in mutually exclusive handlers cannot repay a shared setup. */
+    if (!Address || Count * Best * 6 <= 55)
+      continue;
+    SmallVector<ReturnInst *, 4> Returns;
+    for (auto &BB : F)
+      if (auto *Ret = dyn_cast<ReturnInst>(BB.getTerminator()))
+        Returns.push_back(Ret);
+    if (Returns.empty())
+      continue;
+    DominatorTree DT(F);
+    unsigned MandatoryCalls = 0;
+    for (Instruction &I : instructions(F))
+      if (auto *C = dyn_cast<CallInst>(&I))
+        if (C->getCalledFunction() == Leaf &&
+            llvm::all_of(Returns, [&](const auto *Ret) {
+              return DT.dominates(C, Ret);
+            }))
+          ++MandatoryCalls;
+    if (MandatoryCalls * Best * 6 > 55) {
+      Regions.push_back({&F, Leaf, Address});
+      if (Regions.size() == 8)
+        break;
+    }
+  }
+  DenseMap<Function *, Function *> Versions;
+  for (auto [Caller, Leaf, Address] : Regions) {
+    Caller->addFnAttr("z80-save-region-bank");
+    Function *Version = Versions.lookup(Leaf);
+    if (!Version) {
+      auto *Ty = Address->getType();
+      SmallVector<Type *> Params(Leaf->getFunctionType()->params());
+      Params.push_back(Ty);
+      Version = Function::Create(
+          FunctionType::get(Leaf->getReturnType(), Params, false),
+          Leaf->getLinkage(), Leaf->getAddressSpace(),
+          Leaf->getName() + ".address", &M);
+      Version->copyAttributesFrom(Leaf);
+      ValueToValueMapTy Map;
+      auto Dest = Version->arg_begin();
+      for (Argument &A : Leaf->args()) {
+        Dest->setName(A.getName());
+        Map[&A] = &*Dest++;
+      }
+      Dest->setName("region.address");
+      SmallVector<ReturnInst *, 4> Returns;
+      CloneFunctionInto(Version, Leaf, Map,
+                        CloneFunctionChangeType::LocalChangesOnly, Returns);
+      Version->addParamAttr(2, Attribute::InReg);
+      Version->addFnAttr(
+          "z80-bank-addresses",
+          Leaf->getFnAttribute("z80-bank-addresses").getValueAsString().str() +
+              "," + std::to_string(Address->getZExtValue()));
+      IRBuilder<> Entry(&*Version->getEntryBlock().getFirstInsertionPt());
+      Value *Pointer = Entry.CreateIntToPtr(
+          &*Dest, PointerType::getUnqual(M.getContext()), "region.pointer");
+      for (Instruction &I : instructions(Version))
+        if (absoluteByteAddress(I) == Address)
+          I.setOperand(isa<LoadInst>(I) ? 0 : 1, Pointer);
+      Versions[Leaf] = Version;
+    }
+    for (Instruction &I : make_early_inc_range(instructions(Caller)))
+      if (auto *C = dyn_cast<CallInst>(&I)) {
+        if (C->getCalledFunction() != Leaf)
+          continue;
+        SmallVector<Value *> Args(C->args());
+        Args.push_back(Address);
+        IRBuilder<> B(C);
+        auto *N = B.CreateCall(Version, Args);
+        N->setCallingConv(Version->getCallingConv());
+        N->setAttributes(C->getAttributes());
+        N->addParamAttr(2, Attribute::InReg);
+        N->setTailCallKind(C->getTailCallKind());
+        N->setDebugLoc(C->getDebugLoc());
+        C->replaceAllUsesWith(N);
+        C->eraseFromParent();
+      }
+  }
+  return !Regions.empty();
 }
 
 class Z80StatePromotion : public ModulePass {
@@ -246,28 +412,12 @@ bool Z80StatePromotion::runOnModule(Module &M) {
         }))
       Versions.insert(F);
 
-  auto AbsoluteAddress = [](Instruction &I) -> ConstantInt * {
-    Value *P = nullptr;
-    if (auto *L = dyn_cast<LoadInst>(&I)) {
-      if (L->getType()->isIntegerTy(8))
-        P = L->getPointerOperand();
-    } else if (auto *S = dyn_cast<StoreInst>(&I)) {
-      if (S->getValueOperand()->getType()->isIntegerTy(8))
-        P = S->getPointerOperand();
-    }
-    auto *C = dyn_cast_or_null<ConstantExpr>(P);
-    if (!C || C->getOpcode() != Instruction::IntToPtr ||
-        C->getType()->getPointerAddressSpace())
-      return nullptr;
-    auto *Address = dyn_cast<ConstantInt>(C->getOperand(0));
-    return Address && Address->getType()->isIntegerTy(16) ? Address : nullptr;
-  };
   SmallVector<ConstantInt *, 2> Addresses;
   if (CacheBankAddresses && BankAddressCount) {
     MapVector<ConstantInt *, unsigned> Counts, ByteCounts;
     for (Function *F : Candidates)
       for (Instruction &I : instructions(F))
-        if (auto *A = AbsoluteAddress(I)) {
+        if (auto *A = absoluteByteAddress(I)) {
           unsigned Weight = F->getNumUses();
           ByteCounts[A] += Weight;
           Counts[A] +=
@@ -378,7 +528,7 @@ bool Z80StatePromotion::runOnModule(Module &M) {
       });
       if (Candidates.contains(F) && Leaf)
         for (Instruction &I : instructions(N))
-          if (auto *A = AbsoluteAddress(I)) {
+          if (auto *A = absoluteByteAddress(I)) {
             auto Found = llvm::find(Addresses, A);
             if (Found != Addresses.end()) {
               IRBuilder<> At(&I);
@@ -447,6 +597,7 @@ bool Z80StatePromotion::runOnModule(Module &M) {
     DominatorTree DT(*F);
     PromoteMemToReg({Slots.lookup(F)}, DT);
   }
+  specializeAddressRegions(M);
   return true;
 }
 

@@ -45,7 +45,8 @@ ret
         program = execution.Program(assembly)
         rng = random.Random(724)
         for name in ('low_cursor', 'high_cursor', 'fixed_ports',
-                     'runtime_high', 'runtime_low', 'runtime_stores'):
+                     'runtime_high', 'runtime_low', 'runtime_stores',
+                     'runtime_reads'):
             for value in range(256):
                 cpu = execution.CPU(rng)
                 cpu.put('e', value)
@@ -68,6 +69,12 @@ ret
                     assert cpu.get('a') == before[result]
                     for step in range(4):
                         address = (((value - step) & 255) << 8) | 49
+                        assert cpu.reads.count(address) == 1
+                elif name == 'runtime_reads':
+                    result = ((value ^ 90) << 8) | ((value + 3) & 255)
+                    assert cpu.get('a') == before[result]
+                    for step in range(4):
+                        address = ((value ^ 90) << 8) | ((value + step) & 255)
                         assert cpu.reads.count(address) == 1
                 elif name.startswith('runtime_'):
                     start = ((value ^ 90) << 8) | value

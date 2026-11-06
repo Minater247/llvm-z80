@@ -616,7 +616,11 @@ static bool hasEmptyFrame(MachineFunction &MF, ArrayRef<CalleeSavedInfo> CSI) {
   const auto &ST = MF.getSubtarget<Z80Subtarget>();
   const auto &TRI = *ST.getRegisterInfo();
   const auto &TII = *ST.getInstrInfo();
-  if (!CSI.empty() || MFI.hasVarSizedObjects() ||
+  /* Alternate callee saves use balanced stack operations without an address
+     base. They do not require a frame pointer when no frame objects remain. */
+  if (llvm::any_of(CSI, [](const CalleeSavedInfo &C) {
+        return !Z80::ALT16RegClass.contains(C.getReg());
+      }) || MFI.hasVarSizedObjects() ||
       MFI.hasOpaqueSPAdjustment() || MFI.isFrameAddressTaken() ||
       MFI.isReturnAddressTaken() || MFI.hasStackMap() || MFI.hasPatchPoint() ||
       F.isVarArg() || F.hasOptNone() || F.hasFnAttribute(Attribute::Naked) ||
@@ -722,7 +726,11 @@ bool Z80FrameLowering::spillCalleeSavedRegisters(
     // passed in callee saved registers.
     // Omitting the kill flags is conservatively correct even if the live-in
     // is not used after all.
-    if (Reg == Z80::AF)
+    if (Z80::ALT16RegClass.contains(Reg))
+      BuildMI(MBB, MI, DL, TII.get(Z80::BANK_PUSH16))
+          .addReg(Reg, getKillRegState(CanKill))
+          .setMIFlag(MachineInstr::FrameSetup);
+    else if (Reg == Z80::AF)
       BuildMI(MBB, MI, DL, TII.get(Is24Bit ? Z80::PUSH24AF : Z80::PUSH16AF))
           .setMIFlag(MachineInstr::FrameSetup);
     else
@@ -746,7 +754,10 @@ bool Z80FrameLowering::restoreCalleeSavedRegisters(
         !Z80::I16RegClass.contains(Reg))
       continue;
 
-    if (Reg == Z80::AF)
+    if (Z80::ALT16RegClass.contains(Reg))
+      BuildMI(MBB, MI, DL, TII.get(Z80::BANK_POP16), Reg)
+          .setMIFlag(MachineInstr::FrameDestroy);
+    else if (Reg == Z80::AF)
       BuildMI(MBB, MI, DL, TII.get(Is24Bit ? Z80::POP24AF : Z80::POP16AF))
           .setMIFlag(MachineInstr::FrameDestroy);
     else

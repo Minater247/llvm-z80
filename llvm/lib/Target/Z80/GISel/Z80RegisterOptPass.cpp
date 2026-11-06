@@ -72,14 +72,14 @@ static bool combinePostIncrementLoads(MachineFunction &MF) {
         continue;
       bool Accumulator = Opc == Z80::LD8ap;
       if (ST.useAlternateRegs() && !Accumulator) {
-        /* Copies and rotates can retain the loaded byte in A. Binary source
-           operands compete with the accumulator's other input, so preserving
-           their independent load placement is usually cheaper. */
+        /* Copies, PHIs and rotates can retain the loaded byte in A. Binary
+           source operands compete with the accumulator's other input, so
+           preserving their independent load placement is usually cheaper. */
         unsigned Uses = 0;
         if (llvm::any_of(MRI.use_nodbg_instructions(Load.getOperand(0).getReg()),
                          [&](const MachineInstr &Use) {
                            return ++Uses > 16 ||
-                                  (!Use.isCopy() &&
+                                  (!Use.isCopy() && !Use.isPHI() &&
                                    Use.getOpcode() != Z80::RLC8g &&
                                    Use.getOpcode() != Z80::RRC8g);
                          }))

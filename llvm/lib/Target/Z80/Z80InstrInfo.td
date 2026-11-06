@@ -1462,6 +1462,12 @@ let Defs = [A, F], Uses = [A], hasSideEffects = 0 in {
 
 // Bank-aware whole-pair operations preserve the inactive bank and flags.
 // They remain atomic until emission; ordinary byte operands still name A.
+let Defs = [SPS], Uses = [SPS], hasSideEffects = 0 in {
+  let mayStore = 1 in
+  def BANK_PUSH16 : Pseudo<"", "", "", (outs), (ins ALT16:$src)>;
+  let mayLoad = 1 in
+  def BANK_POP16 : Pseudo<"", "", "", (outs ALT16:$dst), (ins)>;
+}
 let hasSideEffects = 0 in {
   let isReMaterializable = 1, isMoveImm = 1 in
   def BANK_LD16ri : Pseudo<"", "", "", (outs B16:$dst), (ins i16imm:$src)>;

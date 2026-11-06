@@ -35,11 +35,33 @@ define internal fastcc void @group() noinline nounwind {
   call fastcc void @emit()
   call fastcc void @emit()
   call fastcc void @emit()
+  call fastcc void @emit()
+  call fastcc void @emit()
   ret void
 }
 define void @run() minsize optsize nounwind {
   call fastcc void @group()
   call fastcc void @group()
+  ret void
+}
+; A bypass exit makes these calls optional. Their static count cannot justify
+; saving and establishing another address on every invocation.
+define internal fastcc void @conditional(i8 %which) noinline nounwind {
+  %skip = icmp eq i8 %which, 0
+  br i1 %skip, label %exit, label %calls
+calls:
+  call fastcc void @emit()
+  call fastcc void @emit()
+  call fastcc void @emit()
+  call fastcc void @emit()
+  call fastcc void @emit()
+  call fastcc void @emit()
+  br label %exit
+exit:
+  ret void
+}
+define void @maybe(i8 %which) nounwind {
+  call fastcc void @conditional(i8 %which)
   ret void
 }
 define i16 @outside() nounwind {
