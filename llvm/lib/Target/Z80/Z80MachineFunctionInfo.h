@@ -53,6 +53,8 @@ private:
   /// Register allocation finished without frame objects or frame-register uses.
   bool HasEmptyFrame = false;
 
+  bool HasSingleBankRegion = false;
+
   /// UsesAltFP - We use an alternate frame pointer as an optimization.
   AltFPMode UsesAltFP = AFPM_None;
 
@@ -90,6 +92,9 @@ public:
 
   bool hasEmptyFrame() const { return HasEmptyFrame; }
   void setHasEmptyFrame() { HasEmptyFrame = true; }
+
+  bool hasSingleBankRegion() const { return HasSingleBankRegion; }
+  void setHasSingleBankRegion() { HasSingleBankRegion = true; }
 
   AltFPMode getUsesAltFP() const { return UsesAltFP; }
   void setUsesAltFP(AltFPMode V) { UsesAltFP = V; }

@@ -314,6 +314,9 @@ namespace CallingConv {
     Z80_LibCall_HL_A_ret_HL = 209,
     Z80_LibCall_End,
 
+    /// Internal state and invariant addresses carried in the alternate bank.
+    Z80_BankState = 211,
+
     /// The highest possible ID. Must be some 2^k - 1.
     MaxID = 1023
   };

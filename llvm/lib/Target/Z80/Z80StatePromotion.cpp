@@ -11,6 +11,7 @@
 #include "Z80Subtarget.h"
 #include "Z80TargetMachine.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/IRBuilder.h"
@@ -28,6 +29,16 @@ using namespace llvm::PatternMatch;
 static cl::opt<bool> EnableStatePromotion(
     "z80-promote-private-state", cl::Hidden, cl::init(true),
     cl::desc("Retain private word state across internal calls"));
+
+static cl::opt<bool> CacheBankAddresses(
+    "z80-cache-bank-addresses", cl::Hidden, cl::init(true),
+    cl::desc("Carry repeated constant byte addresses with private state"));
+
+/* Keep a spare pair for unrelated values. A second invariant address needs
+   regional placement to repay the spills it introduces in larger callers. */
+static cl::opt<unsigned> BankAddressCount(
+    "z80-bank-address-count", cl::Hidden, cl::init(1),
+    cl::desc("Maximum invariant addresses carried with private state"));
 
 namespace {
 using Functions = SmallSetVector<Function *, 16>;
@@ -81,7 +92,7 @@ public:
 
 char Z80StatePromotion::ID;
 
-/// Carry one private word through a closed set of direct internal calls.
+/// Carry a private word and frequent constant addresses through internal calls.
 /// Calls that may observe memory synchronize the word with its original global.
 /// Escaping addresses, atomic accesses and unsupported call sites retain
 /// memory.
@@ -235,11 +246,70 @@ bool Z80StatePromotion::runOnModule(Module &M) {
         }))
       Versions.insert(F);
 
+  auto AbsoluteAddress = [](Instruction &I) -> ConstantInt * {
+    Value *P = nullptr;
+    if (auto *L = dyn_cast<LoadInst>(&I)) {
+      if (L->getType()->isIntegerTy(8))
+        P = L->getPointerOperand();
+    } else if (auto *S = dyn_cast<StoreInst>(&I)) {
+      if (S->getValueOperand()->getType()->isIntegerTy(8))
+        P = S->getPointerOperand();
+    }
+    auto *C = dyn_cast_or_null<ConstantExpr>(P);
+    if (!C || C->getOpcode() != Instruction::IntToPtr ||
+        C->getType()->getPointerAddressSpace())
+      return nullptr;
+    auto *Address = dyn_cast<ConstantInt>(C->getOperand(0));
+    return Address && Address->getType()->isIntegerTy(16) ? Address : nullptr;
+  };
+  SmallVector<ConstantInt *, 2> Addresses;
+  if (CacheBankAddresses && BankAddressCount) {
+    MapVector<ConstantInt *, unsigned> Counts, ByteCounts;
+    for (Function *F : Candidates)
+      for (Instruction &I : instructions(F))
+        if (auto *A = AbsoluteAddress(I)) {
+          unsigned Weight = F->getNumUses();
+          ByteCounts[A] += Weight;
+          Counts[A] +=
+              Weight * (isa<LoadInst>(I) ? 4
+                        : isa<ConstantInt>(cast<StoreInst>(I).getValueOperand())
+                            ? 2
+                            : 0);
+        }
+    ConstantInt *HL = nullptr;
+    unsigned HLScore = 7;
+    for (auto [A, U] : Counts)
+      if (U > HLScore) {
+        HL = A;
+        HLScore = U;
+      }
+    if (HL) {
+      Addresses = {HL};
+      ConstantInt *DE = nullptr;
+      unsigned DEScore = 7;
+      for (auto [A, U] : ByteCounts)
+        if (A != HL && U > DEScore) {
+          DE = A;
+          DEScore = U;
+        }
+      if (DE && BankAddressCount > 1)
+        Addresses.push_back(DE);
+    }
+  }
+  std::string AddressText;
+  for (auto *A : Addresses) {
+    if (!AddressText.empty())
+      AddressText += ',';
+    AddressText += std::to_string(A->getZExtValue());
+  }
+
   DenseMap<Function *, Function *> Replacements;
   DenseMap<Function *, AllocaInst *> Slots;
+  DenseMap<Function *, SmallVector<Value *, 2>> AddressValues;
   for (Function *F : Candidates) {
     SmallVector<Type *> Params(F->getFunctionType()->params());
     Params.push_back(Ty);
+    Params.append(Addresses.size(), Ty);
     auto *N =
         Function::Create(FunctionType::get(Ty, Params, false), F->getLinkage(),
                          F->getAddressSpace(), F->getName() + ".state", &M);
@@ -254,8 +324,11 @@ bool Z80StatePromotion::runOnModule(Module &M) {
     SmallVector<ReturnInst *, 8> Returns;
     CloneFunctionInto(N, F, Map, CloneFunctionChangeType::LocalChangesOnly,
                       Returns);
+    if (!Addresses.empty())
+      N->setCallingConv(CallingConv::Z80_BankState);
     N->addRetAttr(Attribute::InReg);
-    N->addParamAttr(Params.size() - 1, Attribute::InReg);
+    for (unsigned I = F->arg_size(); I != Params.size(); ++I)
+      N->addParamAttr(I, Attribute::InReg);
     Replacements[F] = N;
     if (!Versions.contains(F))
       N->takeName(F);
@@ -275,7 +348,7 @@ bool Z80StatePromotion::runOnModule(Module &M) {
         if (U == &G)
           U = Slot;
     Value *Initial = Candidates.contains(F)
-                         ? static_cast<Value *>(N->getArg(N->arg_size() - 1))
+                         ? static_cast<Value *>(N->getArg(F->arg_size()))
                          : B.CreateLoad(Ty, &G, "cached.entry");
     B.CreateStore(Initial, Slot);
     for (BasicBlock &BB : *N)
@@ -288,12 +361,42 @@ bool Z80StatePromotion::runOnModule(Module &M) {
         } else
           Exit.CreateStore(Result, &G);
       }
-    N->addFnAttr("z80-state-bank", "hl");
+    N->addFnAttr("z80-state-bank", Addresses.empty() ? "hl" : "bc");
+    if (!Addresses.empty()) {
+      N->addFnAttr("z80-bank-addresses", AddressText);
+      auto &Values = AddressValues[N];
+      for (unsigned I = 0; I != Addresses.size(); ++I)
+        Values.push_back(
+            Candidates.contains(F)
+                ? static_cast<Value *>(N->getArg(F->arg_size() + 1 + I))
+                : Addresses[I]);
+      /* Leaf bodies can consume the resident addresses directly. In callers,
+         keep literal addresses available to instruction selection; replacing
+         them would tie arbitrary local address uses to the forwarded values. */
+      bool Leaf = llvm::none_of(instructions(N), [](const Instruction &I) {
+        return isa<CallBase>(I);
+      });
+      if (Candidates.contains(F) && Leaf)
+        for (Instruction &I : instructions(N))
+          if (auto *A = AbsoluteAddress(I)) {
+            auto Found = llvm::find(Addresses, A);
+            if (Found != Addresses.end()) {
+              IRBuilder<> At(&I);
+              I.setOperand(
+                  isa<LoadInst>(I) ? 0 : 1,
+                  At.CreateIntToPtr(Values[Found - Addresses.begin()],
+                                    PointerType::getUnqual(M.getContext())));
+            }
+          }
+    }
     N->setMemoryEffects(MemoryEffects::unknown());
   }
   for (Function *F : Protected)
-    if (!Cached.contains(F))
-      F->addFnAttr("z80-preserve-state-bank", "hl");
+    if (!Cached.contains(F)) {
+      F->addFnAttr("z80-preserve-state-bank", Addresses.empty() ? "hl" : "bc");
+      if (!Addresses.empty())
+        F->addFnAttr("z80-bank-addresses", AddressText);
+    }
 
   for (Function &F : M) {
     if (Candidates.contains(&F))
@@ -310,13 +413,17 @@ bool Z80StatePromotion::runOnModule(Module &M) {
         Value *Address = Slot ? static_cast<Value *>(Slot) : &G;
         SmallVector<Value *> Args(C->args());
         Args.push_back(B.CreateLoad(Ty, Address));
+        for (unsigned I = 0; I != Addresses.size(); ++I)
+          Args.push_back(Slot ? AddressValues[&F][I] : Addresses[I]);
         auto *N = B.CreateCall(Replacement, Args);
-        N->setCallingConv(C->getCallingConv());
+        N->setCallingConv(Replacement->getCallingConv());
         N->setAttributes(C->getAttributes());
         N->addRetAttr(Attribute::InReg);
-        N->addParamAttr(Args.size() - 1, Attribute::InReg);
+        for (unsigned I = C->arg_size(); I != Args.size(); ++I)
+          N->addParamAttr(I, Attribute::InReg);
         N->setMemoryEffects(MemoryEffects::unknown());
         N->setDebugLoc(C->getDebugLoc());
+        N->setTailCallKind(C->getTailCallKind());
         B.CreateStore(N, Address);
         C->eraseFromParent();
       } else if (Slot && (!Callee || Barriers.contains(Callee) ||

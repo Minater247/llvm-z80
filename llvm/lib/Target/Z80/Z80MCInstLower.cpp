@@ -222,7 +222,8 @@ void Z80AsmPrinter::emitInstruction(const MachineInstr *MI) {
       Opc == Z80::BANK_LD16mr || Opc == Z80::BANK_INC16 ||
       Opc == Z80::BANK_DEC16 || Opc == Z80::BANK_INCL16 ||
       Opc == Z80::BANK_DECL16 || Opc == Z80::BANK_LD8ap ||
-      Opc == Z80::BANK_LD8pa || Opc == Z80::ALT_COPY16) {
+      Opc == Z80::BANK_LD8pa || Opc == Z80::ALT_COPY16 ||
+      Opc == Z80::BANK_BIT8pb || Opc == Z80::BANK_LD8pi) {
     auto Main = [](MCRegister R) -> MCRegister {
       return R == Z80::HL_ALT ? Z80::HL : R == Z80::DE_ALT ? Z80::DE : Z80::BC;
     };
@@ -256,6 +257,9 @@ void Z80AsmPrinter::emitInstruction(const MachineInstr *MI) {
           Emit(Code, {Pair, Address});
         else
           Emit(Code, {Address, Pair});
+      } else if (Opc == Z80::BANK_BIT8pb || Opc == Z80::BANK_LD8pi) {
+        Emit(Opc == Z80::BANK_BIT8pb ? Z80::BIT8pb : Z80::LD8pi,
+             {Pair, MCOperand::createImm(MI->getOperand(1).getImm())});
       } else if (Opc == Z80::BANK_LD16ri) {
         Z80MCInstLower Lower(*MF, *this);
         Emit(Z80::LD16ri,

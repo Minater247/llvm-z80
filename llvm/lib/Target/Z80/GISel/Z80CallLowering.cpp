@@ -276,7 +276,7 @@ protected:
 
 /// Return true if the calling convention is one that we can guarantee TCO for.
 static bool canGuaranteeTCO(CallingConv::ID CC) {
-  return CC == CallingConv::Fast;
+  return CC == CallingConv::Fast || CC == CallingConv::Z80_BankState;
 }
 
 /// Return true if we might ever do TCO for calls with this calling convention.
@@ -749,7 +749,8 @@ bool Z80CallLowering::lowerFormalArguments(MachineIRBuilder &MIRBuilder,
       continue;
 
     // TODO: handle not simple cases.
-    bool BankState = F.getCallingConv() == CallingConv::Fast &&
+    bool BankState = (F.getCallingConv() == CallingConv::Fast ||
+                      F.getCallingConv() == CallingConv::Z80_BankState) &&
                      MF.getSubtarget<Z80Subtarget>().useAlternateRegs() &&
                      MF.getSubtarget<Z80Subtarget>().is16Bit() &&
                      !MF.getSubtarget<Z80Subtarget>().hasEZ80Ops() &&

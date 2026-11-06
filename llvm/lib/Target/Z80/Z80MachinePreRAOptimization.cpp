@@ -14,6 +14,7 @@
 #include "MCTargetDesc/Z80MCTargetDesc.h"
 #include "Z80.h"
 #include "Z80InstrInfo.h"
+#include "Z80MachineFunctionInfo.h"
 #include "Z80Subtarget.h"
 #include "llvm/ADT/DenseSet.h"
 #include <optional>
@@ -44,15 +45,47 @@ static bool selectBankInstructions(MachineFunction &MF) {
   auto &MRI = MF.getRegInfo();
   const auto *TII = MF.getSubtarget().getInstrInfo();
   const auto &ST = MF.getSubtarget<Z80Subtarget>();
+  if (MF.getFunction().getCallingConv() == CallingConv::Z80_BankState) {
+    auto Text = MF.getFunction()
+                    .getFnAttribute("z80-bank-addresses")
+                    .getValueAsString();
+    SmallVector<StringRef, 2> Addresses;
+    Text.split(Addresses, ',');
+    for (unsigned I = 0; I != Addresses.size() && I != 2; ++I) {
+      uint64_t Value = 0;
+      if (Addresses[I].getAsInteger(10, Value))
+        continue;
+      for (auto &MI : MF.front())
+        if (MI.isCopy() && MI.getOperand(0).getReg().isVirtual() &&
+            !MI.getOperand(0).getSubReg() && !MI.getOperand(1).getSubReg()) {
+          Register Src = MI.getOperand(1).getReg();
+          if (Src == (I ? Z80::DE_ALT : Z80::HL_ALT)) {
+            MI.setDesc(TII->get(Z80::BANK_KNOWN16));
+            MI.addOperand(MF, MachineOperand::CreateImm(Value));
+            changed = true;
+          }
+        }
+    }
+  }
   /* Carry the state channel through helpers that leave it unchanged. These
      physical uses also keep late bank-region scratch out of the channel. */
   if (MF.getFunction().hasFnAttribute("z80-preserve-state-bank")) {
-    MRI.addLiveIn(Z80::HL_ALT);
-    for (auto &MBB : MF) {
-      MBB.addLiveIn(Z80::HL_ALT);
-      for (auto &MI : MBB)
-        if (MI.isReturn())
-          MI.addOperand(MF, MachineOperand::CreateReg(Z80::HL_ALT, false, true));
+    for (MCRegister R : {Z80::HL_ALT, Z80::BC_ALT, Z80::DE_ALT}) {
+      if (R != Z80::HL_ALT &&
+          !MF.getFunction().hasFnAttribute("z80-bank-addresses"))
+        continue;
+      if (R == Z80::DE_ALT && !MF.getFunction()
+                                   .getFnAttribute("z80-bank-addresses")
+                                   .getValueAsString()
+                                   .contains(','))
+        continue;
+      MRI.addLiveIn(R);
+      for (auto &MBB : MF) {
+        MBB.addLiveIn(R);
+        for (auto &MI : MBB)
+          if (MI.isReturn())
+            MI.addOperand(MF, MachineOperand::CreateReg(R, false, true));
+      }
     }
     changed = true;
   }
@@ -69,6 +102,7 @@ static bool selectBankInstructions(MachineFunction &MF) {
   // Whole-pair pointer chains can stay in either bank. Subregister consumers
   // and instructions requiring a primary pair keep their existing classes.
   SmallDenseSet<Register, 32> Bankable;
+  SmallDenseSet<Register, 16> BankAddresses;
   SmallDenseSet<Register, 16> BankArguments;
   SmallVector<Register, 16> Work;
   auto AddBankArgument = [&](Register R) {
@@ -77,8 +111,8 @@ static bool selectBankInstructions(MachineFunction &MF) {
   };
   for (const auto &MBB : MF)
     for (const auto &MI : MBB)
-      if (MI.isCopy() && !MI.getOperand(0).getSubReg() &&
-          !MI.getOperand(1).getSubReg()) {
+      if ((MI.isCopy() || MI.getOpcode() == Z80::BANK_KNOWN16) &&
+          !MI.getOperand(0).getSubReg() && !MI.getOperand(1).getSubReg()) {
         if (Z80::ALT16RegClass.contains(MI.getOperand(0).getReg()))
           AddBankArgument(MI.getOperand(1).getReg());
         if (Z80::ALT16RegClass.contains(MI.getOperand(1).getReg()))
@@ -88,8 +122,8 @@ static bool selectBankInstructions(MachineFunction &MF) {
     Register R = Work.pop_back_val();
     for (const auto &MO : MRI.reg_nodbg_operands(R)) {
       const auto &MI = *MO.getParent();
-      if (MI.isCopy() && !MI.getOperand(0).getSubReg() &&
-          !MI.getOperand(1).getSubReg())
+      if ((MI.isCopy() || MI.getOpcode() == Z80::BANK_KNOWN16) &&
+          !MI.getOperand(0).getSubReg() && !MI.getOperand(1).getSubReg())
         AddBankArgument(MI.getOperand(MO.isDef() ? 1 : 0).getReg());
     }
   }
@@ -152,7 +186,7 @@ static bool selectBankInstructions(MachineFunction &MF) {
         break;
       }
       WholeDef |= MO.isDef();
-      if (MI.isCopy()) {
+      if (MI.isCopy() || Opc == Z80::BANK_KNOWN16) {
         const auto &Other = MI.getOperand(MO.isDef() ? 1 : 0);
         Register CopyReg = Other.getReg();
         WholeCopy |= MO.isUse() && CopyReg.isVirtual();
@@ -179,10 +213,14 @@ static bool selectBankInstructions(MachineFunction &MF) {
          page updates and memory boundaries without widening unrelated
          cursors: their extra bank pressure needs a regional cost estimate. */
       bool BankMemory = BankArguments.contains(R) &&
-                        (Opc == Z80::LD16rm || Opc == Z80::LD16mr);
-      if (Opc != TargetOpcode::COPY && Opc != Z80::LD16ri && !BankMemory &&
-          Opc != Z80::ADD16rr && Opc != Z80::INC16r && Opc != Z80::DEC16r &&
-          Opc != Z80::LD8ap && Opc != Z80::LD8pa && !CanUseAccumulator) {
+                        (Opc == Z80::LD16rm || Opc == Z80::LD16mr ||
+                         Opc == Z80::BIT8pb || Opc == Z80::LD8pi);
+      if (BankMemory && (Opc == Z80::BIT8pb || Opc == Z80::LD8pi))
+        BankAddresses.insert(R);
+      if (Opc != TargetOpcode::COPY && Opc != Z80::BANK_KNOWN16 &&
+          Opc != Z80::LD16ri && !BankMemory && Opc != Z80::ADD16rr &&
+          Opc != Z80::INC16r && Opc != Z80::DEC16r && Opc != Z80::LD8ap &&
+          Opc != Z80::LD8pa && !CanUseAccumulator) {
         Eligible = false;
         break;
       }
@@ -319,7 +357,8 @@ static bool selectBankInstructions(MachineFunction &MF) {
     }
 
   for (Register R : Bankable)
-    MRI.setRegClass(R, &Z80::B16RegClass);
+    MRI.setRegClass(R, BankAddresses.contains(R) ? &Z80::BA16RegClass
+                                                 : &Z80::B16RegClass);
   for (auto &MBB : MF)
     for (auto &MI : MBB) {
       unsigned Opc = MI.getOpcode(), NewOpc = 0, Op = 0;
@@ -336,6 +375,12 @@ static bool selectBankInstructions(MachineFunction &MF) {
         continue;
       }
       switch (Opc) {
+      case Z80::BIT8pb:
+        NewOpc = Z80::BANK_BIT8pb;
+        break;
+      case Z80::LD8pi:
+        NewOpc = Z80::BANK_LD8pi;
+        break;
       case Z80::LD16rm:
         NewOpc = Z80::BANK_LD16rm;
         break;
@@ -386,6 +431,58 @@ static bool selectBankInstructions(MachineFunction &MF) {
       }
     }
   return changed;
+}
+
+/// Price a leaf's bank operations as one activation across its control flow.
+/// Every word operand must admit alternate placement, and byte temporaries
+/// must be accumulator copies. Calls, stack accesses and primary operands
+/// retain the ordinary regional allocation costs.
+static void identifySingleBankRegion(MachineFunction &MF) {
+  if (!MF.getFunction().hasFnAttribute("z80-bank-addresses"))
+    return;
+  auto &MRI = MF.getRegInfo();
+  const auto &TRI = *MF.getSubtarget().getRegisterInfo();
+  SmallDenseSet<Register, 4> Accumulators;
+  bool HasBank = false;
+  for (const auto &MBB : MF)
+    for (const auto &MI : MBB) {
+      unsigned Opc = MI.getOpcode();
+      bool Bank = Opc == Z80::BANK_BIT8pb || Opc == Z80::BANK_LD8pi ||
+                  Opc == Z80::BANK_LD8ap || Opc == Z80::BANK_LD8pa ||
+                  Opc == Z80::BANK_INCL16 || Opc == Z80::BANK_DECL16 ||
+                  Opc == Z80::BANK_INC16 || Opc == Z80::BANK_DEC16 ||
+                  Opc == Z80::BANK_LD16ri || Opc == Z80::BANK_KNOWN16;
+      HasBank |= Bank;
+      if (!Bank && !MI.isCopy() && Opc != Z80::LD8am && Opc != Z80::LD8ma &&
+          Opc != Z80::JQ && Opc != Z80::JQCC && Opc != Z80::RET16 &&
+          !MI.isDebugInstr())
+        return;
+      for (const auto &MO : MI.operands()) {
+        if (!MO.isReg() || !MO.getReg())
+          continue;
+        Register R = MO.getReg();
+        if (MO.getSubReg())
+          return;
+        if (R.isVirtual()) {
+          const auto *RC = MRI.getRegClass(R);
+          if (TRI.getCommonSubClass(RC, &Z80::ALT16RegClass))
+            continue;
+          if (!MI.isCopy())
+            return;
+          const auto &Other = MI.getOperand(MO.isDef() ? 1 : 0);
+          if (Other.getReg() != Z80::A || Other.getSubReg())
+            return;
+          Accumulators.insert(R);
+        } else if (R != Z80::A && R != Z80::F && R != Z80::SPS &&
+                   !Z80::ALT16RegClass.contains(R))
+          return;
+      }
+    }
+  if (!HasBank)
+    return;
+  for (Register R : Accumulators)
+    MRI.constrainRegClass(R, &Z80::A8RegClass);
+  MF.getInfo<Z80MachineFunctionInfo>()->setHasSingleBankRegion();
 }
 
 /// Update copied byte cursors in their address-pair lane within a local group.
@@ -2122,7 +2219,9 @@ bool Z80MachinePreRAOptimization::runOnMachineFunction(MachineFunction &MF) {
   Changed |= separateStableLanes(MF, Z80::sub_high);
   Changed |= separateStableLanes(MF, Z80::sub_low);
   Changed |= sinkIncomingCopies(MF);
-  return selectBankInstructions(MF) || Changed;
+  Changed |= selectBankInstructions(MF);
+  identifySingleBankRegion(MF);
+  return Changed;
 }
 
 char Z80MachinePreRAOptimization::ID = 0;

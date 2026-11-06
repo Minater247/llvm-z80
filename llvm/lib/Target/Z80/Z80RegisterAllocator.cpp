@@ -19,6 +19,7 @@
 #include "MCTargetDesc/Z80MCTargetDesc.h"
 #include "Z80.h"
 #include "Z80InstrInfo.h"
+#include "Z80MachineFunctionInfo.h"
 #include "Z80Subtarget.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
@@ -148,6 +149,9 @@ unsigned copyCost(MCRegister Dst, MCRegister Src, bool KillSrc,
 unsigned extraAccessCost(const MachineInstr &MI, unsigned Operand, MCRegister P,
                          bool Bytes) {
   unsigned Opc = MI.getOpcode();
+  if (Z80::ALT16RegClass.contains(P) &&
+      MI.getMF()->getInfo<Z80MachineFunctionInfo>()->hasSingleBankRegion())
+    return 0;
   if ((Opc == Z80::BANK_LD16rm && Operand == 0) ||
       (Opc == Z80::BANK_LD16mr && Operand == 1)) {
     if (Z80::ALT16RegClass.contains(P))
@@ -165,6 +169,7 @@ unsigned extraAccessCost(const MachineInstr &MI, unsigned Operand, MCRegister P,
       return Bytes ? 6 : 50;
     if ((Opc == Z80::BANK_LD8ap && Operand == 1) ||
         ((Opc == Z80::BANK_LD8pa || Opc == Z80::BANK_LD16ri ||
+          Opc == Z80::BANK_BIT8pb || Opc == Z80::BANK_LD8pi ||
           Opc == Z80::BANK_INC16 || Opc == Z80::BANK_DEC16 ||
           Opc == Z80::BANK_INCL16 || Opc == Z80::BANK_DECL16) &&
          Operand == 0))
@@ -251,6 +256,7 @@ class Z80RegisterAllocator final : public MachineFunctionPass,
   SmallDenseSet<Register, 8> LoopCaches;
   SmallDenseSet<Register, 16> StateValues;
   bool HasStateBank = false;
+  bool HasBankAddresses = false;
   std::priority_queue<std::tuple<unsigned, double, Register>> Queue;
   unsigned RemainingStates = 0;
   bool OptSize = false;
@@ -319,7 +325,8 @@ class Z80RegisterAllocator final : public MachineFunctionPass,
       /* Reserve the coordinated channel for state lifetimes. An unrelated
          local placement can otherwise force transfers at every nested call. */
       if (HasStateBank && !StateValues.contains(R) &&
-          TRI->regsOverlap(P, Z80::HL_ALT))
+          (TRI->regsOverlap(P, HasBankAddresses ? Z80::BC_ALT : Z80::HL_ALT) ||
+           (HasBankAddresses && TRI->regsOverlap(P, Z80::HL_ALT))))
         continue;
       if (!ST->hasIndexHalfRegs()) {
         if (Z80::I8RegClass.contains(P))
@@ -430,7 +437,7 @@ void Z80RegisterAllocator::accessCosts(
       }
       continue;
     }
-    if (MI.isCopy()) {
+    if (MI.isCopy() || MI.getOpcode() == Z80::BANK_KNOWN16) {
       const auto &D = MI.getOperand(0), &S = MI.getOperand(1);
       if (S.isUndef())
         continue;
@@ -653,7 +660,7 @@ bool Z80RegisterAllocator::search(SmallVector<Register, 8> Regs,
   for (const MachineInstr *MI : Instructions) {
     double Weight = frequency(*MI);
     bool BankAdd = MI->getOpcode() == Z80::BANK_ADD16;
-    if (MI->isCopy() || BankAdd) {
+    if (MI->isCopy() || MI->getOpcode() == Z80::BANK_KNOWN16 || BankAdd) {
       const auto &D = MI->getOperand(0), &S = MI->getOperand(BankAdd ? 2 : 1);
       if (S.isUndef())
         continue;
@@ -1848,6 +1855,7 @@ bool Z80RegisterAllocator::runOnMachineFunction(MachineFunction &Func) {
                      getAnalysis<LiveRegMatrixWrapperLegacy>().getLRM());
   StateValues.clear();
   HasStateBank = MF->getFunction().hasFnAttribute("z80-state-bank");
+  HasBankAddresses = MF->getFunction().hasFnAttribute("z80-bank-addresses");
   if (HasStateBank) {
     SmallVector<Register, 16> Work;
     auto Add = [&](Register R) {
@@ -1856,19 +1864,23 @@ bool Z80RegisterAllocator::runOnMachineFunction(MachineFunction &Func) {
     };
     for (const auto &MBB : *MF)
       for (const auto &MI : MBB)
-        if (MI.isCopy() && !MI.getOperand(0).getSubReg() &&
-            !MI.getOperand(1).getSubReg()) {
-          if (MI.getOperand(0).getReg() == Z80::HL_ALT)
+        if ((MI.isCopy() || MI.getOpcode() == Z80::BANK_KNOWN16) &&
+            !MI.getOperand(0).getSubReg() && !MI.getOperand(1).getSubReg()) {
+          if (MI.getOperand(0).getReg() == Z80::HL_ALT ||
+              (HasBankAddresses &&
+               Z80::ALT16RegClass.contains(MI.getOperand(0).getReg())))
             Add(MI.getOperand(1).getReg());
-          if (MI.getOperand(1).getReg() == Z80::HL_ALT)
+          if (MI.getOperand(1).getReg() == Z80::HL_ALT ||
+              (HasBankAddresses &&
+               Z80::ALT16RegClass.contains(MI.getOperand(1).getReg())))
             Add(MI.getOperand(0).getReg());
         }
     while (!Work.empty()) {
       Register R = Work.pop_back_val();
       for (const auto &MO : MRI->reg_nodbg_operands(R)) {
         const auto &MI = *MO.getParent();
-        if (MI.isCopy() && !MI.getOperand(0).getSubReg() &&
-            !MI.getOperand(1).getSubReg())
+        if ((MI.isCopy() || MI.getOpcode() == Z80::BANK_KNOWN16) &&
+            !MI.getOperand(0).getSubReg() && !MI.getOperand(1).getSubReg())
           Add(MI.getOperand(MO.isDef() ? 1 : 0).getReg());
       }
     }

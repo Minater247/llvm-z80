@@ -158,8 +158,19 @@ bool Z80AlternateRegAllocator::runOnMachineFunction(MachineFunction &MF) {
   SmallVector<Slot, 16> Slots(N);
   if (MF.getFunction().hasFnAttribute("z80-state-bank") ||
       MF.getFunction().hasFnAttribute("z80-preserve-state-bank"))
-    for (auto &S : Slots)
-      S.UnavailableBanks |= bankMask(Z80::HL_ALT);
+    for (auto &S : Slots) {
+      bool Addresses = MF.getFunction().hasFnAttribute("z80-bank-addresses");
+      S.UnavailableBanks |= bankMask(Addresses ? Z80::BC_ALT : Z80::HL_ALT);
+      if (Addresses &&
+          MF.getFunction().hasFnAttribute("z80-preserve-state-bank")) {
+        S.UnavailableBanks |= bankMask(Z80::HL_ALT);
+        if (MF.getFunction()
+                .getFnAttribute("z80-bank-addresses")
+                .getValueAsString()
+                .contains(','))
+          S.UnavailableBanks |= bankMask(Z80::DE_ALT);
+      }
+    }
   SmallVector<Access, 32> Accesses;
   DenseMap<const MachineInstr *, unsigned> AccessIndex;
   bool HasCopiedStep = false;

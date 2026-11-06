@@ -545,9 +545,10 @@ static bool useStackArgumentPops(MachineFunction &MF,
   if (!ST.is16Bit() || ST.hasEZ80Ops() || !CSI.empty() ||
       MFI.getObjectIndexBegin() == 0 ||
       (F.getCallingConv() != CallingConv::C &&
-       F.getCallingConv() != CallingConv::Fast) ||
-      F.isVarArg() || F.hasOptNone() ||
-      F.hasFnAttribute(Attribute::Naked) || F.hasFnAttribute("interrupt") ||
+       F.getCallingConv() != CallingConv::Fast &&
+       F.getCallingConv() != CallingConv::Z80_BankState) ||
+      F.isVarArg() || F.hasOptNone() || F.hasFnAttribute(Attribute::Naked) ||
+      F.hasFnAttribute("interrupt") ||
       F.hasFnAttribute("static_stack_needs_ix") || MF.needsFrameMoves() ||
       MFI.hasVarSizedObjects() || MFI.isFrameAddressTaken() ||
       MFI.isReturnAddressTaken() || MFI.hasStackMap() || MFI.hasPatchPoint() ||

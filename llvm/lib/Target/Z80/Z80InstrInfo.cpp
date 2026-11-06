@@ -191,6 +191,8 @@ Z80InstrInfo::getEmissionPseudoSize(const MachineInstr &MI) const {
                             MI.getOperand(2).getReg(), true);
   case Z80::BANK_LD16ri:
     return 5;
+  case Z80::BANK_KNOWN16:
+    return MI.getOperand(0).getReg() == MI.getOperand(1).getReg() ? 0 : 6;
   case Z80::BANK_LD16rm:
   case Z80::BANK_LD16mr:
     return MI.getOperand(MI.getOpcode() == Z80::BANK_LD16rm ? 0 : 1).getReg() ==
@@ -198,6 +200,8 @@ Z80InstrInfo::getEmissionPseudoSize(const MachineInstr &MI) const {
                ? 5
                : 6;
   case Z80::BANK_LD8pg:
+  case Z80::BANK_BIT8pb:
+  case Z80::BANK_LD8pi:
     return 4;
   case Z80::BANK_INC16:
   case Z80::BANK_DEC16:
@@ -1429,6 +1433,12 @@ Register Z80InstrInfo::isStoreToStackSlot(const MachineInstr &MI,
   return Register();
 }
 
+bool Z80InstrInfo::isIgnorableUse(const MachineOperand &MO) const {
+  /* Rematerialization uses the proven constant, independently of the bank's
+     current contents. The original instruction still reads its incoming pair. */
+  return MO.getParent()->getOpcode() == Z80::BANK_KNOWN16;
+}
+
 bool Z80InstrInfo::isReMaterializableImpl(const MachineInstr &MI) const {
   switch (MI.getOpcode()) {
   case Z80::LD8r0:
@@ -1438,6 +1448,7 @@ bool Z80InstrInfo::isReMaterializableImpl(const MachineInstr &MI) const {
   case Z80::LD16ri:
   case Z80::LD24ri:
   case Z80::BANK_LD16ri:
+  case Z80::BANK_KNOWN16:
     return true;
   }
   return false;
@@ -1447,6 +1458,12 @@ void Z80InstrInfo::reMaterialize(MachineBasicBlock &MBB,
                                  MachineBasicBlock::iterator I, Register DstReg,
                                  unsigned SubIdx, const MachineInstr &Orig) const {
   const TargetRegisterInfo &TRI = getRegisterInfo();
+  if (Orig.getOpcode() == Z80::BANK_KNOWN16) {
+    assert(!SubIdx && "known addresses are rematerialized as whole pairs");
+    BuildMI(MBB, I, Orig.getDebugLoc(), get(Z80::BANK_LD16ri), DstReg)
+        .add(Orig.getOperand(2));
+    return;
+  }
   if (!Orig.modifiesRegister(Z80::F, &TRI) ||
       MBB.computeRegisterLiveness(&TRI, Z80::F, I) ==
       MachineBasicBlock::LQR_Dead)
@@ -1577,6 +1594,18 @@ bool Z80InstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
       return expandPostRAPseudo(MI);
     break;
   }
+  case Z80::BANK_BIT8pb:
+  case Z80::BANK_LD8pi:
+    if (MI.getOperand(0).getReg() == Z80::HL_ALT)
+      return false;
+    MI.setDesc(get(Opc == Z80::BANK_BIT8pb ? Z80::BIT8pb : Z80::LD8pi));
+    break;
+  case Z80::BANK_KNOWN16:
+    if (MI.getOperand(0).getReg() != MI.getOperand(1).getReg())
+      copyPhysReg(MBB, MI, DL, MI.getOperand(0).getReg(),
+                  MI.getOperand(1).getReg(), MI.getOperand(1).isKill());
+    MI.eraseFromParent();
+    return true;
   case Z80::ADD16rr: {
     Register Dst = MI.getOperand(0).getReg();
     Register Src = MI.getOperand(2).getReg();
@@ -2392,8 +2421,13 @@ MachineInstr *Z80InstrInfo::optimizeLoadInstr(MachineInstr &MI,
   // Check whether we can move DefMI here.
   DefMI = MRI->getUniqueVRegDef(FoldAsLoadDefReg);
   bool SawStore = false;
-  if (!DefMI || DefMI->getParent() != MI.getParent() ||
-      !DefMI->isSafeToMove(SawStore))
+  if (!DefMI || DefMI->getParent() != MI.getParent())
+    return nullptr;
+  bool AdjacentBit =
+      MI.getOpcode() == Z80::BIT8gb && DefMI->getOpcode() == Z80::LD8gp &&
+      std::next(DefMI->getIterator()) == MI.getIterator() &&
+      DefMI->hasOneMemOperand() && !(*DefMI->memoperands_begin())->isAtomic();
+  if (!AdjacentBit && !DefMI->isSafeToMove(SawStore))
     return nullptr;
 
   // This hook also runs after coalescing, when an address register can have
@@ -2663,15 +2697,20 @@ Z80InstrInfo::foldMemoryOperandImpl(MachineFunction &MF, MachineInstr &MI,
 
   // Fold a rematerialized constant address into an accumulator access. This
   // lets allocation release a shared address when retaining it would spill.
-  if (LoadMI.getOpcode() == Z80::LD16ri) {
-    bool Store = MI.getOpcode() == Z80::LD8pa && Ops[0] == 0 &&
-                 MI.getOperand(1).getReg() == Z80::A;
-    bool Load = MI.getOpcode() == Z80::LD8ap && Ops[0] == 1 &&
-                MI.getOperand(0).getReg() == Z80::A;
+  if (LoadMI.getOpcode() == Z80::LD16ri ||
+      LoadMI.getOpcode() == Z80::BANK_LD16ri ||
+      LoadMI.getOpcode() == Z80::BANK_KNOWN16) {
+    bool Store =
+        (MI.getOpcode() == Z80::LD8pa || MI.getOpcode() == Z80::BANK_LD8pa) &&
+        Ops[0] == 0 && MI.getOperand(1).getReg() == Z80::A;
+    bool Load =
+        (MI.getOpcode() == Z80::LD8ap || MI.getOpcode() == Z80::BANK_LD8ap) &&
+        Ops[0] == 1 && MI.getOperand(0).getReg() == Z80::A;
     if (Store || Load)
       return BuildMI(*MI.getParent(), InsertPt, MI.getDebugLoc(),
                      get(Store ? Z80::LD8ma : Z80::LD8am))
-          .add(LoadMI.getOperand(1));
+          .add(LoadMI.getOperand(LoadMI.getOpcode() == Z80::BANK_KNOWN16 ? 2
+                                                                         : 1));
     return nullptr;
   }
 

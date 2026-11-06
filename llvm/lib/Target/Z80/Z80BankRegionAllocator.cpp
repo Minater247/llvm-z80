@@ -14,10 +14,12 @@
 
 #include "MCTargetDesc/Z80MCTargetDesc.h"
 #include "Z80.h"
+#include "Z80MachineFunctionInfo.h"
 #include "Z80Subtarget.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/CodeGen/LivePhysRegs.h"
 #include "llvm/CodeGen/LiveRegUnits.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
@@ -112,6 +114,12 @@ bool Z80BankRegionAllocator::runOnMachineFunction(MachineFunction &MF) {
     unsigned Opc = MI.getOpcode(), Op = Opc == Z80::BANK_LD8ap ? 1 : 0;
     unsigned MainOpc = 0;
     switch (Opc) {
+    case Z80::BANK_BIT8pb:
+      MainOpc = Z80::BIT8pb;
+      break;
+    case Z80::BANK_LD8pi:
+      MainOpc = Z80::LD8pi;
+      break;
     case Z80::ALT_SAVE8:
     case Z80::ALT_LOAD8:
       Op = Opc == Z80::ALT_LOAD8 ? 1 : 0;
@@ -157,6 +165,78 @@ bool Z80BankRegionAllocator::runOnMachineFunction(MachineFunction &MF) {
     }
     return MainOpc && mainReg(MI.getOperand(Op).getReg()) ? MainOpc : 0;
   };
+
+  /* A leaf whose body uses only resident pairs and unbanked operands can
+     keep one activation through branches and loop backedges. Verify the
+     physical assignment before applying the allocation-time cost estimate. */
+  if (!Wide && MF.getInfo<Z80MachineFunctionInfo>()->hasSingleBankRegion()) {
+    bool Legal = true, HasBank = false;
+    for (const auto &MBB : MF)
+      for (const auto &MI : MBB) {
+        if (BankOpcode(MI)) {
+          HasBank = true;
+          continue;
+        }
+        if (MI.isCall() || MI.isInlineAsm() || MI.isBundled() ||
+            (MI.hasUnmodeledSideEffects() && !MI.isReturn())) {
+          Legal = false;
+          break;
+        }
+        if (MI.isReturn())
+          continue;
+        for (const auto &MO : MI.operands())
+          if (MO.isRegMask() ||
+              (MO.isReg() && MO.getReg() &&
+               (switched(MO.getReg(), TRI) || mainReg(MO.getReg()))))
+            Legal = false;
+      }
+    if (Legal && HasBank) {
+      SmallVector<MachineBasicBlock *, 8> Blocks;
+      for (auto &MBB : MF) {
+        Blocks.push_back(&MBB);
+        for (auto &MI : MBB) {
+          unsigned Opc = BankOpcode(MI);
+          if (!Opc)
+            continue;
+          bool Low = MI.getOpcode() == Z80::BANK_INCL16 ||
+                     MI.getOpcode() == Z80::BANK_DECL16;
+          MI.setDesc(TII.get(Opc));
+          for (auto &MO : MI.operands())
+            if (MO.isReg() && MO.getReg()) {
+              if (MCRegister R = mainReg(MO.getReg()))
+                MO.setReg(Low ? TRI.getSubReg(R, Z80::sub_low) : R);
+              if (MO.isDef())
+                MO.setIsDead(false);
+              else
+                MO.setIsKill(false);
+            }
+        }
+        for (auto &MI : MBB)
+          if (MI.isReturn()) {
+            auto Exit = BuildMI(MBB, MI, MI.getDebugLoc(), TII.get(Z80::EXX16));
+            for (auto &MO : Exit->operands())
+              if (MO.isReg() && MO.isUse())
+                MO.setIsUndef(true);
+            for (const auto &MO : MI.operands())
+              if (MO.isReg() && MO.isUse())
+                if (MCRegister R = mainReg(MO.getReg()))
+                  Exit.addReg(R, RegState::Implicit);
+          }
+      }
+      auto Enter = BuildMI(MF.front(), MF.front().begin(), DebugLoc(),
+                           TII.get(Z80::EXX16));
+      for (auto &MO : Enter->operands())
+        if (MO.isReg() && MO.isUse())
+          MO.setIsUndef(true);
+      for (auto LI : MF.front().liveins())
+        Enter.addReg(LI.PhysReg, RegState::Implicit);
+      for (auto *MBB : Blocks)
+        MBB->clearLiveIns();
+      fullyRecomputeLiveIns(Blocks);
+      ++NumBankRegions;
+      return true;
+    }
+  }
 
   for (auto &MBB : MF) {
     if (llvm::none_of(MBB, [=](const MachineInstr &MI) {

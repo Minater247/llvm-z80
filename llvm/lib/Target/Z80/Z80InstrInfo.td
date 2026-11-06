@@ -1461,6 +1461,9 @@ let Defs = [A, F], Uses = [A], hasSideEffects = 0 in {
 let hasSideEffects = 0 in {
   let isReMaterializable = 1, isMoveImm = 1 in
   def BANK_LD16ri : Pseudo<"", "", "", (outs B16:$dst), (ins i16imm:$src)>;
+  let isReMaterializable = 1, isMoveImm = 1 in
+  def BANK_KNOWN16 : Pseudo<"", "", "", (outs B16:$dst),
+                            (ins ALT16:$src, i16imm:$value)>;
   let Defs = [F] in
   def BANK_ADD16 : Pseudo<"", "", "$dst = $imp", (outs B16:$dst),
                           (ins B16:$imp, BO16:$src)>;
@@ -1472,6 +1475,8 @@ let hasSideEffects = 0 in {
   }
   def ALT_COPY16 : Pseudo<"", "", "", (outs ALT16:$dst), (ins ALT16:$src)>;
   let mayLoad = 1 in {
+    let Defs = [F] in
+    def BANK_BIT8pb : Pseudo<"", "", "", (outs), (ins BA16:$adr, bitimm:$bit)>;
     def BANK_LD16rm : Pseudo<"", "", "", (outs B16:$dst), (ins mem:$src)>;
     def BANK_LD8ap : Pseudo<"", "", "", (outs A8:$dst), (ins B16:$src)>;
     def BANK_LD16ro : Pseudo<"", "", "", (outs B16:$dst), (ins off16:$src)>;
@@ -1483,6 +1488,7 @@ let hasSideEffects = 0 in {
     let Defs = [A] in
     def BANK_LD8pg : Pseudo<"", "", "", (outs), (ins B16:$dst, G8:$src)>;
     def BANK_LD8pa : Pseudo<"", "", "", (outs), (ins B16:$dst, A8:$src)>;
+    def BANK_LD8pi : Pseudo<"", "", "", (outs), (ins BA16:$dst, i8imm:$src)>;
     def BANK_LD16or : Pseudo<"", "", "", (outs), (ins off16:$dst, B16:$src)>;
   }
 }

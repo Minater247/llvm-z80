@@ -156,6 +156,12 @@ void RegAllocBase::allocatePhysRegs() {
 void RegAllocBase::postOptimization() {
   spiller().postOptimization();
   for (auto *DeadInst : DeadRemats) {
+    /* A target may rematerialize a known value independently of an original
+       physical-register input. Removing that input invalidates its cached
+       fixed live range, including endpoints at this instruction. */
+    for (const MachineOperand &MO : DeadInst->uses())
+      if (MO.isReg() && MO.getReg().isPhysical() && MO.readsReg())
+        LIS->removeAllRegUnitsForPhysReg(MO.getReg());
     LIS->RemoveMachineInstrFromMaps(*DeadInst);
     DeadInst->eraseFromParent();
   }

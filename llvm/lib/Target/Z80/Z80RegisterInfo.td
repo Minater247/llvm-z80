@@ -193,3 +193,4 @@ let isAllocatable = 0 in {
 // Whole pairs whose operations can execute with either bank active.
 def B16 : Z80RC16<(add R16, HL_ALT, DE_ALT, BC_ALT)>;
 def BO16 : Z80RC16<(add O16, DE_ALT, BC_ALT)>;
+def BA16 : Z80RC16<(add A16, HL_ALT)>;

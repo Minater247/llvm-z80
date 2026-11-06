@@ -137,6 +137,7 @@ Z80RegisterInfo::getCalleeSavedRegs(const MachineFunction *MF) const {
     llvm_unreachable("Unsupported calling convention");
   case CallingConv::C:
   case CallingConv::Fast:
+  case CallingConv::Z80_BankState:
     return Is24Bit ? CSR_EZ80_C_SaveList : CSR_Z80_C_SaveList;
   case CallingConv::Z80_LibCall:
   case CallingConv::Z80_LibCall_AB:
@@ -164,6 +165,7 @@ Z80RegisterInfo::getCallPreservedMask(const MachineFunction &MF,
   default: llvm_unreachable("Unsupported calling convention");
   case CallingConv::C:
   case CallingConv::Fast:
+  case CallingConv::Z80_BankState:
     return Is24Bit ? CSR_EZ80_C_RegMask : CSR_Z80_C_RegMask;
   case CallingConv::PreserveAll:
   case CallingConv::Z80_LibCall:
@@ -188,8 +190,18 @@ const uint32_t *Z80RegisterInfo::getNoPreservedMask() const {
 BitVector Z80RegisterInfo::getReservedRegs(const MachineFunction &MF) const {
   BitVector Reserved(getNumRegs());
   if (MF.getFunction().hasFnAttribute("z80-preserve-state-bank"))
-    for (MCRegAliasIterator A(Z80::UHL_ALT, this, true); A.isValid(); ++A)
-      Reserved.set(*A);
+    for (MCRegister R : {Z80::UHL_ALT, Z80::UBC_ALT, Z80::UDE_ALT}) {
+      if (R != Z80::UHL_ALT &&
+          !MF.getFunction().hasFnAttribute("z80-bank-addresses"))
+        continue;
+      if (R == Z80::UDE_ALT && !MF.getFunction()
+                                    .getFnAttribute("z80-bank-addresses")
+                                    .getValueAsString()
+                                    .contains(','))
+        continue;
+      for (MCRegAliasIterator A(R, this, true); A.isValid(); ++A)
+        Reserved.set(*A);
+    }
 
   // Only bank-aware whole-pair instructions admit alternate operands.
   // All banks remain reserved unless the compilation explicitly permits them.

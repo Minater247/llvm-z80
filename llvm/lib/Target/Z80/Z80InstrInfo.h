@@ -156,7 +156,8 @@ public:
 
 	bool isReMaterializableImpl(const MachineInstr &MI) const
 			override;
-	void reMaterialize(MachineBasicBlock &MBB, MachineBasicBlock::iterator I,
+        bool isIgnorableUse(const MachineOperand &MO) const override;
+        void reMaterialize(MachineBasicBlock &MBB, MachineBasicBlock::iterator I,
 										 Register DstReg, unsigned SubIdx, const MachineInstr &Orig) const override;
 
 	bool expandPostRAPseudo(MachineInstr &MI) const override;

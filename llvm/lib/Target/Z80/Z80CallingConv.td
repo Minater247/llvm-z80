@@ -46,11 +46,15 @@ def CC_Z80_Reg : CallingConv<[
 
 def CC_Z80_C : CallingConv<[
   CCIfByVal<CCPassByVal<1, 1>>,
+  CCIfCC<"CallingConv::Z80_BankState", CCIfInReg<
+      CCIfType<[ i16 ], CCAssignToReg<[ BC_ALT, HL_ALT, DE_ALT ]>>>>,
   // Internal fast calls can carry a private state word in the alternate bank.
   CCIfCC<"CallingConv::Fast", CCIfSubtarget<"useAlternateRegs()",
       CCIfSubtarget<"is16Bit()", CCIfSubtarget<"hasEZ80Ops() == false",
       CCIfInReg<CCIfType<[ i16 ], CCAssignToReg<[ HL_ALT ]>>>>>>>,
   CCIfCC<"CallingConv::Fast", CCIf<"ArgFlags.isPointer()",
+      CCIfType<[ i16 ], CCAssignToReg<[ IY, DE, BC, HL ]>>>>,
+  CCIfCC<"CallingConv::Z80_BankState", CCIf<"ArgFlags.isPointer()",
       CCIfType<[ i16 ], CCAssignToReg<[ IY, DE, BC, HL ]>>>>,
   CCIfType<[ i1, i8 ], CCAssignToReg<[ E, D, C, B, L, H ]>>,
   CCIfType<[ i16 ], CCAssignToReg<[ DE, BC, HL ]>>,
@@ -121,6 +125,8 @@ def CC_Z80 : CallingConv<[
 // Z80 Return Calling Conventions
 //===----------------------------------------------------------------------===//
 def RetCC_Z80_C : CallingConv<[
+  CCIfCC<"CallingConv::Z80_BankState", CCIfInReg<
+      CCIfType<[ i16 ], CCAssignToReg<[ BC_ALT ]>>>>,
   // Return updated state in the same pair used for its argument.
   CCIfCC<"CallingConv::Fast", CCIfSubtarget<"useAlternateRegs()",
       CCIfSubtarget<"is16Bit()", CCIfSubtarget<"hasEZ80Ops() == false",
