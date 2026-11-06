@@ -244,6 +244,7 @@ void Z80PassConfig::addCodeGenPrepare() {
   TargetPassConfig::addCodeGenPrepare();
   if (getOptLevel() != CodeGenOptLevel::None) {
     addPass(createZ80PrivateMemory());
+    addPass(createZ80PrepareLoops(getZ80TargetMachine()));
     addPass(createZ80PrepareDispatch(getZ80TargetMachine()));
   }
 }
