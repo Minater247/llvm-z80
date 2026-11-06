@@ -9,6 +9,8 @@
 #include "Z80.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/Analysis/BlockFrequencyInfo.h"
+#include "llvm/Analysis/BranchProbabilityInfo.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/IRBuilder.h"
@@ -24,6 +26,10 @@ using namespace llvm;
 static cl::opt<bool> CachePrivateMemory(
     "z80-cache-private-memory", cl::Hidden, cl::init(true),
     cl::desc("Keep private byte state across unrelated calls"));
+
+static cl::opt<bool> CachePrivateLeafLoops(
+    "z80-cache-private-leaf-loops", cl::Hidden, cl::init(true),
+    cl::desc("Keep private byte state in unconditional leaf loops"));
 
 namespace {
 class Z80PrivateMemory : public ModulePass {
@@ -62,6 +68,8 @@ bool Z80PrivateMemory::runOnModule(Module &M) {
   bool Changed = false;
   DenseMap<Function *, std::unique_ptr<DominatorTree>> DTs;
   DenseMap<Function *, std::unique_ptr<LoopInfo>> Loops;
+  DenseMap<Function *, std::unique_ptr<BranchProbabilityInfo>> Probabilities;
+  DenseMap<Function *, std::unique_ptr<BlockFrequencyInfo>> Frequencies;
   for (GlobalVariable &G : M.globals()) {
     if (!G.hasLocalLinkage() || G.isConstant() || G.isThreadLocal() ||
         G.getAddressSpace() || !G.getValueType()->isIntegerTy(8))
@@ -128,7 +136,28 @@ bool Z80PrivateMemory::runOnModule(Module &M) {
         DT = std::make_unique<DominatorTree>(F);
         LI = std::make_unique<LoopInfo>(*DT);
       }
-      if (llvm::none_of(It->second, [&](Instruction *I) {
+      BasicBlock *Header = It->second.front()->getParent();
+      Loop *HeaderLoop = LI->getLoopFor(Header);
+      /* A leaf cursor loop amortizes its entry load and exit store even
+         when its body contains only one load/store pair. Requiring the
+         header on every returning path avoids charging empty-loop exits
+         for this unconditional cache. */
+      bool LeafLoop = CachePrivateLeafLoops && Calls[&F].empty() && HeaderLoop &&
+                      HeaderLoop->getHeader() == Header &&
+                      llvm::all_of(It->second, [&](Instruction *I) {
+                        return I->getParent() == Header;
+                      }) &&
+                      llvm::any_of(It->second, [](Instruction *I) {
+                        return isa<LoadInst>(I);
+                      }) &&
+                      llvm::any_of(It->second, [](Instruction *I) {
+                        return isa<StoreInst>(I);
+                      }) &&
+                      llvm::all_of(F, [&](BasicBlock &BB) {
+                        return !isa<ReturnInst>(BB.getTerminator()) ||
+                               DT->dominates(Header, &BB);
+                      });
+      if (!LeafLoop && llvm::none_of(It->second, [&](Instruction *I) {
             Loop *L = LI->getLoopFor(I->getParent());
             return L && llvm::any_of(Calls[&F], [&](CallInst *C) {
                      return L->contains(C->getParent()) && !CallEffects(C);
@@ -146,20 +175,108 @@ bool Z80PrivateMemory::runOnModule(Module &M) {
       /* An observed global has to be published at every observing call.
          Retaining infrequently changed configuration would add stores at
          those calls instead of removing accesses from the loop. */
-      if (AccessCount <= SyncCount * 2 + 2)
-        continue;
+      if (!LeafLoop && AccessCount <= SyncCount * 2 + 2) {
+        /* A dispatcher can perform many synchronizing calls in one arm and
+           keep state locally in the others. Count their execution frequency
+           before rejecting the cache: adding a helper to one arm must not
+           force every iteration through memory. Build this analysis only
+           for candidates the inexpensive count would otherwise reject. */
+        auto &BFI = Frequencies[&F];
+        if (!BFI) {
+          auto &BPI = Probabilities[&F];
+          BPI = std::make_unique<BranchProbabilityInfo>(F, *LI);
+          BFI = std::make_unique<BlockFrequencyInfo>(F, *BPI, *LI);
+        }
+        auto Frequency = [&](BasicBlock *BB) -> double {
+          return BFI->getBlockFreq(BB).getFrequency();
+        };
+        double AccessCost = 0;
+        double SyncCost = Frequency(&F.getEntryBlock());
+        bool Written = Effects.lookup(&F) & Write;
+        for (Instruction *I : It->second)
+          AccessCost += Frequency(I->getParent());
+        for (CallInst *C : Calls[&F]) {
+          unsigned E = CallEffects(C);
+          if (E)
+            SyncCost += Frequency(C->getParent()) *
+                        (unsigned(Written) + bool(E & Write));
+        }
+        if (Written)
+          for (BasicBlock &BB : F)
+            if (isa<ReturnInst>(BB.getTerminator()))
+              SyncCost += Frequency(&BB);
+        if (AccessCost <= SyncCost)
+          continue;
+      }
+      /* Begin caching where all direct accesses are reachable. Keeping the
+         cache inside this dominated region leaves early exits and unrelated
+         calls outside it untouched. Start outside loops so a backedge keeps
+         the current SSA value instead of reloading unpublished memory. */
+      BasicBlock *Root = It->second.front()->getParent();
+      for (Instruction *I : It->second) {
+        Root = DT->findNearestCommonDominator(Root, I->getParent());
+        if (!Root) {
+          Root = &F.getEntryBlock();
+          break;
+        }
+      }
+      while (LI->getLoopFor(Root))
+        Root = DT->getNode(Root)->getIDom()->getBlock();
+      SmallPtrSet<BasicBlock *, 32> Region;
+      for (BasicBlock &BB : F)
+        if (DT->dominates(Root, &BB))
+          Region.insert(&BB);
       IRBuilder<> B(&*F.getEntryBlock().getFirstInsertionPt());
-      auto *Slot = B.CreateAlloca(G.getValueType(), nullptr, "private.slot");
-      B.CreateStore(B.CreateLoad(G.getValueType(), &G), Slot);
       bool Written = Effects.lookup(&F) & Write;
+      SmallPtrSet<Instruction *, 16> Publish;
+      if (Written) {
+        /* A synchronizing call leaves the cache equal to memory. Another
+           observer in the same block needs a store only after a local
+           write. Keeping this distinction also makes unused reloads dead
+           when several observers execute consecutively. Block entries are
+           conservative because a predecessor may have changed the cache. */
+        SmallPtrSet<Instruction *, 16> Writes;
+        for (Instruction *I : It->second)
+          if (isa<StoreInst>(I))
+            Writes.insert(I);
+        for (BasicBlock &BB : F) {
+          if (!Region.contains(&BB))
+            continue;
+          bool Dirty = &BB != Root;
+          for (Instruction &I : BB) {
+            if (Writes.contains(&I))
+              Dirty = true;
+            else if (auto *C = dyn_cast<CallInst>(&I)) {
+              if (CallEffects(C)) {
+                if (Dirty)
+                  Publish.insert(C);
+                Dirty = false;
+              }
+            } else if (I.isTerminator() && Dirty &&
+                       (isa<ReturnInst>(I) ||
+                        llvm::any_of(successors(&BB), [&](BasicBlock *Succ) {
+                          return !Region.contains(Succ);
+                        }))) {
+              Publish.insert(&I);
+            }
+          }
+        }
+      }
+      auto *Slot = B.CreateAlloca(G.getValueType(), nullptr, "private.slot");
+      B.SetInsertPoint(Root, Root == &F.getEntryBlock()
+                                 ? std::next(Slot->getIterator())
+                                 : Root->getFirstInsertionPt());
+      B.CreateStore(B.CreateLoad(G.getValueType(), &G), Slot);
       for (Instruction *I : It->second)
         I->setOperand(isa<LoadInst>(I) ? 0 : 1, Slot);
       for (CallInst *C : Calls[&F]) {
+        if (!Region.contains(C->getParent()))
+          continue;
         unsigned E = CallEffects(C);
         if (!E)
           continue;
         B.SetInsertPoint(C);
-        if (Written)
+        if (Publish.contains(C))
           B.CreateStore(B.CreateLoad(G.getValueType(), Slot), &G);
         if (E & Write) {
           B.SetInsertPoint(C->getNextNode());
@@ -168,8 +285,8 @@ bool Z80PrivateMemory::runOnModule(Module &M) {
       }
       if (Written)
         for (BasicBlock &BB : F)
-          if (auto *R = dyn_cast<ReturnInst>(BB.getTerminator())) {
-            B.SetInsertPoint(R);
+          if (auto *T = BB.getTerminator(); Publish.contains(T)) {
+            B.SetInsertPoint(T);
             B.CreateStore(B.CreateLoad(G.getValueType(), Slot), &G);
           }
       PromoteMemToReg({Slot}, *DT);
