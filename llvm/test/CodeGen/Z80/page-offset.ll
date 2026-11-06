@@ -12,6 +12,45 @@
 
 target triple = "z80"
 
+; Incoming range information fixes the page without restricting later carries.
+define ptr @argument_page(i16 range(i16 256, 512) %base, i16 %index) {
+  %p = inttoptr i16 %base to ptr
+  %offset = and i16 %index, 31
+  %r = getelementptr i8, ptr %p, i16 %offset
+  ret ptr %r
+}
+
+define ptr @argument_last_page(i16 range(i16 -256, 0) %base, i16 %index) {
+  %p = inttoptr i16 %base to ptr
+  %offset = and i16 %index, 31
+  %r = getelementptr i8, ptr %p, i16 %offset
+  ret ptr %r
+}
+
+define ptr @argument_zero_page(i16 range(i16 0, 256) %base, i16 %index) {
+  %p = inttoptr i16 %base to ptr
+  %offset = and i16 %index, 31
+  %r = getelementptr i8, ptr %p, i16 %offset
+  ret ptr %r
+}
+
+; Observe the original high byte before constructing a replacement page.
+define i16 @observed_argument_high(i16 %base, i16 %index) {
+  %high = lshr i16 %base, 8
+  %low = and i16 %base, 255
+  %address = or i16 %low, 256
+  %sum = add i16 %address, %high
+  ret i16 %sum
+}
+
+; The interval straddles pages, so its high byte remains an incoming value.
+define ptr @argument_crossing_pages(i16 range(i16 255, 513) %base, i16 %index) {
+  %p = inttoptr i16 %base to ptr
+  %offset = and i16 %index, 31
+  %r = getelementptr i8, ptr %p, i16 %offset
+  ret ptr %r
+}
+
 define ptr @page_address(i8 %page, i8 %index) {
 ; CHECK-LABEL: page_address:
 ; CHECK-NOT: add{{[ \t]+}}hl,

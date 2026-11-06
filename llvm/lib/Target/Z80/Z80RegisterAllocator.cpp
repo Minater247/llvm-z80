@@ -149,12 +149,23 @@ unsigned copyCost(MCRegister Dst, MCRegister Src, bool KillSrc,
 unsigned extraAccessCost(const MachineInstr &MI, unsigned Operand, MCRegister P,
                          bool Bytes) {
   unsigned Opc = MI.getOpcode();
-  if ((Opc == Z80::LD8_ADJ && Operand == 1) ||
-      (Opc == Z80::ST8_ADJ && Operand == 0))
-    return Bytes ? 2 : 12;
   if (Z80::ALT16RegClass.contains(P) &&
       MI.getMF()->getInfo<Z80MachineFunctionInfo>()->hasSingleBankRegion())
     return 0;
+  if (Opc == Z80::LD8_POST16 || Opc == Z80::LD8A_POST16 ||
+      Opc == Z80::BANK_LD8A_POST16) {
+    if (Operand == 1)
+      return 0;
+    if (Operand == 2) {
+      if (Z80::ALT16RegClass.contains(P))
+        return Bytes ? 2 : 8;
+      if (isIndex(P))
+        return Bytes ? 2 : 12;
+    }
+  }
+  if ((Opc == Z80::LD8_ADJ && Operand == 1) ||
+      (Opc == Z80::ST8_ADJ && Operand == 0))
+    return Bytes ? 2 : 12;
   if ((Opc == Z80::BANK_LD16rm && Operand == 0) ||
       (Opc == Z80::BANK_LD16mr && Operand == 1)) {
     if (Z80::ALT16RegClass.contains(P))

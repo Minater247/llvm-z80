@@ -1483,6 +1483,10 @@ let hasSideEffects = 0 in {
     def BANK_BIT8pb : Pseudo<"", "", "", (outs), (ins BA16:$adr, bitimm:$bit)>;
     def BANK_LD16rm : Pseudo<"", "", "", (outs B16:$dst), (ins mem:$src)>;
     def BANK_LD8ap : Pseudo<"", "", "", (outs A8:$dst), (ins B16:$src)>;
+    let Constraints = "$next = $src,@earlyclobber $dst",
+        canFoldAsLoad = false in
+    def BANK_LD8A_POST16 : Pseudo<"", "", "",
+        (outs A8:$dst, B16:$next), (ins B16:$src)>;
     def BANK_LD16ro : Pseudo<"", "", "", (outs B16:$dst), (ins off16:$src)>;
   }
   let mayStore = 1 in {

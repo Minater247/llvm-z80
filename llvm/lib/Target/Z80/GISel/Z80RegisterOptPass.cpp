@@ -32,9 +32,7 @@ Z80RegisterOptPass::Z80RegisterOptPass() : MachineFunctionPass(ID) {}
 /// used after the load or by successor blocks. Memory accesses remain in place.
 static bool combinePostIncrementLoads(MachineFunction &MF) {
   const auto &ST = MF.getSubtarget<Z80Subtarget>();
-  /* The fused form currently addresses primary pairs. Separate operations
-     retain alternate-bank choices when those registers are available. */
-  if (!ST.is16Bit() || ST.hasEZ80Ops() || ST.useAlternateRegs())
+  if (!ST.is16Bit() || ST.hasEZ80Ops())
     return false;
   auto &MRI = MF.getRegInfo();
   const auto &TII = *ST.getInstrInfo();
@@ -49,11 +47,19 @@ static bool combinePostIncrementLoads(MachineFunction &MF) {
       Register Ptr = Load.getOperand(1).getReg();
       if (!Ptr.isVirtual() || Load.getOperand(1).getSubReg())
         continue;
+      MachineInstr *AddressCopy = MRI.getVRegDef(Ptr);
+      if (AddressCopy && AddressCopy->isCopy() &&
+          !AddressCopy->getOperand(1).getSubReg() &&
+          AddressCopy->getOperand(1).getReg().isVirtual() &&
+          AddressCopy->getParent() == &MBB && MRI.hasOneNonDBGUse(Ptr))
+        Ptr = AddressCopy->getOperand(1).getReg();
+      else
+        AddressCopy = nullptr;
       MachineInstr *Inc = nullptr;
       bool Eligible = true;
       for (auto &Use : MRI.use_nodbg_operands(Ptr)) {
         auto *MI = Use.getParent();
-        if (MI == &Load)
+        if (MI == (AddressCopy ? AddressCopy : &Load))
           continue;
         if (Inc || MI->getOpcode() != Z80::INC16r || Use.getSubReg() ||
             MI->getParent() != &MBB || MI->isBundled()) {
@@ -64,12 +70,64 @@ static bool combinePostIncrementLoads(MachineFunction &MF) {
       }
       if (!Eligible || !Inc)
         continue;
+      bool Accumulator = Opc == Z80::LD8ap;
+      if (ST.useAlternateRegs() && !Accumulator) {
+        /* Copies and rotates can retain the loaded byte in A. Binary source
+           operands compete with the accumulator's other input, so preserving
+           their independent load placement is usually cheaper. */
+        unsigned Uses = 0;
+        if (llvm::any_of(MRI.use_nodbg_instructions(Load.getOperand(0).getReg()),
+                         [&](const MachineInstr &Use) {
+                           return ++Uses > 16 ||
+                                  (!Use.isCopy() &&
+                                   Use.getOpcode() != Z80::RLC8g &&
+                                   Use.getOpcode() != Z80::RRC8g);
+                         }))
+          continue;
+        /* Alternate pairs address bytes through A. Introduce that bridge only
+           when it replaces a dead accumulator value at the original read. */
+        if (MBB.computeRegisterLiveness(ST.getRegisterInfo(), Z80::A,
+                                       MachineBasicBlock::const_iterator(Load),
+                                       48) !=
+            MachineBasicBlock::LQR_Dead)
+          continue;
+        Accumulator = true;
+      }
       Register Next = Inc->getOperand(0).getReg();
       if (!Next.isVirtual() || Inc->getOperand(0).getSubReg() ||
           MRI.use_nodbg_empty(Next))
         continue;
+      if (ST.useAlternateRegs()) {
+        /* A cursor carried through PHIs can repay the tied bank choice over
+           repeated reads. A one-shot address stored back to memory needs
+           freedom to choose its load and update placements independently. */
+        SmallVector<Register, 8> Work{Next};
+        SmallSet<Register, 16> Seen;
+        bool Recurs = false;
+        unsigned RemainingUses = 64;
+        for (unsigned I = 0;
+             I < Work.size() && I < 16 && !Recurs && RemainingUses; ++I) {
+          Register R = Work[I];
+          if (!Seen.insert(R).second)
+            continue;
+          for (const MachineInstr &Use : MRI.use_nodbg_instructions(R)) {
+            if (!RemainingUses)
+              break;
+            --RemainingUses;
+            Recurs |= Use.isPHI();
+            if (Recurs)
+              break;
+            if (Use.isCopy() && Use.getOperand(0).getReg().isVirtual() &&
+                !Use.getOperand(0).getSubReg() && !Use.getOperand(1).getSubReg() &&
+                Work.size() < 16)
+              Work.push_back(Use.getOperand(0).getReg());
+          }
+        }
+        if (!Recurs)
+          continue;
+      }
       const auto *PtrRC =
-          Opc == Z80::LD8ap ? &Z80::R16RegClass : &Z80::A16RegClass;
+          Accumulator ? &Z80::R16RegClass : &Z80::A16RegClass;
       /* A later arithmetic use can constrain the advanced cursor to BC/DE.
          Preserve separate operations when the fused addressing class cannot
          represent either cursor; a failed constraint must not leave an
@@ -103,15 +161,20 @@ static bool combinePostIncrementLoads(MachineFunction &MF) {
         continue;
       Register Value = Load.getOperand(0).getReg();
       BuildMI(MBB, Load, Load.getDebugLoc(),
-              TII.get(Opc == Z80::LD8ap ? Z80::LD8A_POST16 : Z80::LD8_POST16))
-          .addDef(Value)
+              TII.get(Accumulator ? Z80::LD8A_POST16 : Z80::LD8_POST16))
+          .addDef(Accumulator ? Register(Z80::A) : Value)
           .addDef(Next)
           .addReg(Ptr)
           .cloneMemRefs(Load);
+      if (Accumulator && Value != Z80::A)
+        BuildMI(MBB, Load, Load.getDebugLoc(), TII.get(TargetOpcode::COPY), Value)
+            .addReg(Z80::A);
       if (It != MBB.end() && &*It == Inc)
         ++It;
       Load.eraseFromParent();
       Inc->eraseFromParent();
+      if (AddressCopy)
+        AddressCopy->eraseFromParent();
       MRI.recomputeRegClass(Ptr);
       MRI.recomputeRegClass(Next);
       MRI.constrainRegClass(Ptr, PtrRC);

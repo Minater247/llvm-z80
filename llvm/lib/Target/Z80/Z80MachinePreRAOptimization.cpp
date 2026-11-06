@@ -205,10 +205,10 @@ static bool selectBankInstructions(MachineFunction &MF) {
       GenericStore |= CanUseAccumulator;
       AccumulatorStore |= Opc == Z80::LD8pa;
       MemoryAddress |= Opc == Z80::LD8ap || Opc == Z80::LD8pa ||
-                       CanUseAccumulator;
+                       Opc == Z80::LD8A_POST16 || CanUseAccumulator;
       HasBankOperation |= Opc == Z80::ADD16rr || Opc == Z80::INC16r ||
                           Opc == Z80::DEC16r || Opc == Z80::LD8ap ||
-                          Opc == Z80::LD8pa;
+                          Opc == Z80::LD8pa || Opc == Z80::LD8A_POST16;
       /* A fixed bank argument has already paid for residency. Expose its
          page updates and memory boundaries without widening unrelated
          cursors: their extra bank pressure needs a regional cost estimate. */
@@ -220,7 +220,7 @@ static bool selectBankInstructions(MachineFunction &MF) {
       if (Opc != TargetOpcode::COPY && Opc != Z80::BANK_KNOWN16 &&
           Opc != Z80::LD16ri && !BankMemory && Opc != Z80::ADD16rr &&
           Opc != Z80::INC16r && Opc != Z80::DEC16r && Opc != Z80::LD8ap &&
-          Opc != Z80::LD8pa && !CanUseAccumulator) {
+          Opc != Z80::LD8pa && Opc != Z80::LD8A_POST16 && !CanUseAccumulator) {
         Eligible = false;
         break;
       }
@@ -280,6 +280,17 @@ static bool selectBankInstructions(MachineFunction &MF) {
   }
   // A tied update must admit the same bank on both sides. Propagate rejected
   // endpoints through the chain before widening any register class.
+  auto UpdateOperand = [](const MachineInstr &MI) -> std::optional<unsigned> {
+    switch (MI.getOpcode()) {
+    case Z80::INC16r:
+    case Z80::DEC16r:
+      return 0;
+    case Z80::LD8A_POST16:
+      return 1;
+    default:
+      return std::nullopt;
+    }
+  };
   SmallVector<Register, 16> Rejected;
   auto Reject = [&](Register R) {
     if (Bankable.erase(R))
@@ -287,9 +298,9 @@ static bool selectBankInstructions(MachineFunction &MF) {
   };
   for (auto &MBB : MF)
     for (auto &MI : MBB)
-      if (MI.getOpcode() == Z80::INC16r || MI.getOpcode() == Z80::DEC16r) {
-        Register Dst = MI.getOperand(0).getReg(),
-                 Src = MI.getOperand(1).getReg();
+      if (auto Op = UpdateOperand(MI)) {
+        Register Dst = MI.getOperand(*Op).getReg(),
+                 Src = MI.getOperand(*Op + 1).getReg();
         if (!Bankable.contains(Dst) || !Bankable.contains(Src)) {
           Reject(Dst);
           Reject(Src);
@@ -298,9 +309,9 @@ static bool selectBankInstructions(MachineFunction &MF) {
   while (!Rejected.empty()) {
     Register R = Rejected.pop_back_val();
     for (const auto &MI : MRI.reg_nodbg_instructions(R))
-      if (MI.getOpcode() == Z80::INC16r || MI.getOpcode() == Z80::DEC16r) {
-        Reject(MI.getOperand(0).getReg());
-        Reject(MI.getOperand(1).getReg());
+      if (auto Op = UpdateOperand(MI)) {
+        Reject(MI.getOperand(*Op).getReg());
+        Reject(MI.getOperand(*Op + 1).getReg());
       }
   }
   // A value used only as the right input of primary-only adds would need
@@ -418,6 +429,10 @@ static bool selectBankInstructions(MachineFunction &MF) {
         NewOpc = Z80::BANK_LD8ap;
         Op = 1;
         break;
+      case Z80::LD8A_POST16:
+        NewOpc = Z80::BANK_LD8A_POST16;
+        Op = 1;
+        break;
       case Z80::LD8pa:
         NewOpc = Z80::BANK_LD8pa;
         break;
@@ -451,7 +466,8 @@ static void identifySingleBankRegion(MachineFunction &MF) {
                   Opc == Z80::BANK_LD8ap || Opc == Z80::BANK_LD8pa ||
                   Opc == Z80::BANK_INCL16 || Opc == Z80::BANK_DECL16 ||
                   Opc == Z80::BANK_INC16 || Opc == Z80::BANK_DEC16 ||
-                  Opc == Z80::BANK_LD16ri || Opc == Z80::BANK_KNOWN16;
+                  Opc == Z80::BANK_LD16ri || Opc == Z80::BANK_KNOWN16 ||
+                  Opc == Z80::BANK_LD8A_POST16;
       HasBank |= Bank;
       if (!Bank && !MI.isCopy() && Opc != Z80::LD8am && Opc != Z80::LD8ma &&
           Opc != Z80::JQ && Opc != Z80::JQCC && Opc != Z80::RET16 &&
@@ -588,6 +604,66 @@ static bool coalesceCursorUpdates(MachineFunction &MF) {
       Changed = true;
     }
   }
+  return Changed;
+}
+
+/// Copy only the observed byte when the other lane is overwritten locally.
+/// A whole-word use or a use of the old lane ends the bounded search.
+static bool trimOverwrittenCopyLanes(MachineFunction &MF) {
+  const auto &ST = MF.getSubtarget<Z80Subtarget>();
+  if (!ST.is16Bit())
+    return false;
+  auto &MRI = MF.getRegInfo();
+  const auto &TRI = *ST.getRegisterInfo();
+  bool Changed = false;
+  for (auto &MBB : MF)
+    for (auto &MI : MBB) {
+      if (!MI.isCopy() || MI.isBundled() || MI.getOperand(0).getSubReg() ||
+          MI.getOperand(1).getSubReg() || MI.getOperand(1).isUndef())
+        continue;
+      Register Dst = MI.getOperand(0).getReg();
+      Register Src = MI.getOperand(1).getReg();
+      if (!Dst.isVirtual() ||
+          !Z80::R16RegClass.hasSubClassEq(MRI.getRegClass(Dst)) ||
+          (Src.isPhysical() ? !Z80::R16RegClass.contains(Src)
+                            : !Z80::R16RegClass.hasSubClassEq(MRI.getRegClass(Src))))
+        continue;
+      for (unsigned DeadSub : {Z80::sub_high, Z80::sub_low}) {
+        bool Overwritten = false, Observed = false;
+        unsigned Remaining = 32;
+        for (auto It = std::next(MI.getIterator());
+             It != MBB.end() && Remaining--; ++It) {
+          if (It->isDebugInstr())
+            continue;
+          if (It->isBundled() || It->isInlineAsm())
+            break;
+          for (const auto &MO : It->operands()) {
+            if (!MO.isReg() || MO.getReg() != Dst)
+              continue;
+            if (MO.isUse() && !MO.isUndef() &&
+                (!MO.getSubReg() || MO.getSubReg() == DeadSub))
+              Observed = true;
+            if (MO.isDef() && MO.getSubReg() == DeadSub)
+              Overwritten = true;
+            if (MO.isDef() && !MO.getSubReg())
+              Observed = true;
+          }
+          if (Overwritten || Observed)
+            break;
+        }
+        if (!Overwritten || Observed)
+          continue;
+        unsigned LiveSub = DeadSub == Z80::sub_high ? Z80::sub_low : Z80::sub_high;
+        MI.getOperand(0).setSubReg(LiveSub);
+        MI.getOperand(0).setIsUndef(true);
+        if (Src.isPhysical())
+          MI.getOperand(1).setReg(TRI.getSubReg(Src, LiveSub));
+        else
+          MI.getOperand(1).setSubReg(LiveSub);
+        Changed = true;
+        break;
+      }
+    }
   return Changed;
 }
 
@@ -2223,6 +2299,7 @@ bool Z80MachinePreRAOptimization::runOnMachineFunction(MachineFunction &MF) {
   }
 
   Changed |= coalesceCursorUpdates(MF);
+  Changed |= trimOverwrittenCopyLanes(MF);
   Changed |= separateStableLanes(MF, Z80::sub_high);
   Changed |= separateStableLanes(MF, Z80::sub_low);
   Changed |= sinkIncomingCopies(MF);

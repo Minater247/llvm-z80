@@ -114,6 +114,10 @@ bool Z80BankRegionAllocator::runOnMachineFunction(MachineFunction &MF) {
     unsigned Opc = MI.getOpcode(), Op = Opc == Z80::BANK_LD8ap ? 1 : 0;
     unsigned MainOpc = 0;
     switch (Opc) {
+    case Z80::BANK_LD8A_POST16:
+      MainOpc = Z80::LD8A_POST16;
+      Op = 1;
+      break;
     case Z80::BANK_BIT8pb:
       MainOpc = Z80::BIT8pb;
       break;

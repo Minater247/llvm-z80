@@ -218,6 +218,28 @@ void Z80AsmPrinter::emitInstruction(const MachineInstr *MI) {
       Add(Dst, Src);
     return;
   }
+  if (Opc == Z80::BANK_LD8A_POST16 || Opc == Z80::LD8A_POST16) {
+    MCRegister Pair = MI->getOperand(1).getReg();
+    bool Alternate = Z80::ALT16RegClass.contains(Pair);
+    if (Alternate)
+      Pair = Pair == Z80::HL_ALT ? Z80::HL
+             : Pair == Z80::DE_ALT ? Z80::DE : Z80::BC;
+    auto Emit = [&](unsigned Code, ArrayRef<MCOperand> Ops = {}) {
+      MCInst Inst;
+      Inst.setOpcode(Code);
+      for (const auto &Op : Ops)
+        Inst.addOperand(Op);
+      EmitToStreamer(*OutStreamer, Inst);
+    };
+    auto P = MCOperand::createReg(Pair);
+    if (Alternate)
+      Emit(Z80::EXX16);
+    Emit(Z80::LD8ap, {MCOperand::createReg(Z80::A), P});
+    Emit(Z80::INC16r, {P, P});
+    if (Alternate)
+      Emit(Z80::EXX16);
+    return;
+  }
   if (Opc == Z80::BANK_LD16ri || Opc == Z80::BANK_LD16rm ||
       Opc == Z80::BANK_LD16mr || Opc == Z80::BANK_INC16 ||
       Opc == Z80::BANK_DEC16 || Opc == Z80::BANK_INCL16 ||

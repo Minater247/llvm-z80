@@ -172,6 +172,12 @@ Z80InstrInfo::getEmissionPseudoSize(const MachineInstr &MI) const {
   // scheduling and liveness-based optimizations. Branch relaxation needs their
   // exact encoded size, including an index prefix on the main-bank operand.
   switch (MI.getOpcode()) {
+  case Z80::LD8A_POST16:
+  case Z80::BANK_LD8A_POST16: {
+    Register R = MI.getOperand(1).getReg();
+    return Z80::ALT16RegClass.contains(R) ? 4
+           : Z80::I16RegClass.contains(R) ? 5 : 2;
+  }
   case Z80::ALT_SWAP_SAVE8:
   case Z80::ALT_SWAP_LOAD8: {
     Register R = MI.getOperand(MI.getOpcode() == Z80::ALT_SWAP_LOAD8 ? 0 : 1)
@@ -1749,6 +1755,10 @@ bool Z80InstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
     }
     break;
   }
+  case Z80::BANK_LD8A_POST16:
+    if (Z80::ALT16RegClass.contains(MI.getOperand(1).getReg()))
+      return false;
+    [[fallthrough]];
   case Z80::LD8_POST16:
   case Z80::LD8A_POST16: {
     Register Value = MI.getOperand(0).getReg();

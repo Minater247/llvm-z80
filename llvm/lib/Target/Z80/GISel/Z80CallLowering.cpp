@@ -26,6 +26,7 @@
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/KnownBits.h"
 #include "llvm/Target/TargetMachine.h"
 using namespace llvm;
 using namespace MIPatternMatch;
@@ -743,6 +744,12 @@ bool Z80CallLowering::lowerFormalArguments(MachineIRBuilder &MIRBuilder,
   const DataLayout &DL = MF.getDataLayout();
   auto &FuncInfo = *MF.getInfo<Z80MachineFunctionInfo>();
   SmallVector<ArgInfo, 8> SplitArgs;
+  struct ConstantPageArgument {
+    Register Result;
+    Register Incoming;
+    uint8_t Page;
+  };
+  SmallVector<ConstantPageArgument, 4> ConstantPages;
   unsigned Idx = 0;
   for (auto &Arg : F.args()) {
     if (!DL.getTypeStoreSize(Arg.getType()))
@@ -764,7 +771,21 @@ bool Z80CallLowering::lowerFormalArguments(MachineIRBuilder &MIRBuilder,
     if (Arg.hasAttribute(Attribute::StructRet) && ReturnSRet)
       FuncInfo.setSRetReturnReg(VRegs[Idx][0]);
 
-    ArgInfo OrigArg(VRegs[Idx], Arg.getType(), Idx);
+    SmallVector<Register, 1> ArgRegs(VRegs[Idx]);
+    if (Arg.getType()->isIntegerTy(16) && !F.hasOptNone() &&
+        MF.getSubtarget<Z80Subtarget>().is16Bit() &&
+        !MF.getSubtarget<Z80Subtarget>().hasEZ80Ops()) {
+      if (auto Range = Arg.getRange()) {
+        KnownBits Bits = Range->toKnownBits();
+        if ((Bits.Zero | Bits.One).countLeadingOnes() >= 8) {
+          Register Incoming = MRI.createGenericVirtualRegister(LLT::scalar(16));
+          ConstantPages.push_back(
+              {ArgRegs[0], Incoming, uint8_t(Bits.One.getZExtValue() >> 8)});
+          ArgRegs[0] = Incoming;
+        }
+      }
+    }
+    ArgInfo OrigArg(ArgRegs, Arg.getType(), Idx);
     setArgFlags(OrigArg, Idx + AttributeList::FirstArgIndex, DL, F);
     splitToValueTypes(OrigArg, SplitArgs, DL, F.getCallingConv());
     Idx++;
@@ -784,6 +805,19 @@ bool Z80CallLowering::lowerFormalArguments(MachineIRBuilder &MIRBuilder,
 
   // Move back to the end of the basic block.
   MIRBuilder.setMBB(MBB);
+
+  /* Argument ranges are part of the IR contract. Represent a proven page
+     explicitly so that address arithmetic and allocation can use its byte
+     lanes independently, while retaining the existing incoming ABI. */
+  for (auto [Result, Incoming, Page] : ConstantPages) {
+    if (!Page) {
+      MIRBuilder.buildAssertZExt(Result, Incoming, 8);
+      continue;
+    }
+    auto Low = MIRBuilder.buildTrunc(LLT::scalar(8), Incoming);
+    auto High = MIRBuilder.buildConstant(LLT::scalar(8), Page);
+    MIRBuilder.buildMergeValues(Result, {Low.getReg(0), High.getReg(0)});
+  }
 
   return true;
 }

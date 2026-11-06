@@ -54,10 +54,18 @@ for index in range(0, 65536, 37):
     run('constant_byte_base', 0, index, 65504+(index&31))
     run('constant_carry_base', 0, index, 65505+(index&31))
 for base in range(256):
+    for index in range(32):
+        run('argument_page', 256 + base, index, 256 + base + index)
+        run('argument_last_page', 65280 + base, index, 65280 + base + index)
+        run('argument_zero_page', base, index, base + index)
+        run('observed_argument_high', base * 256 + index, 0, 256 + index + base)
     for index in [0, 1, 15, 16, 31, 32, 63, 64, 110, 111, 112, 127, 255]:
         run('bounded_byte_base', base, index, 65296+(base&128)+(index&111))
         run('bounded_carry_base', base, index, 65297+(base&128)+(index&111))
         high = rng.randrange(256)*256
         run('variable_page_base', high+base, index,
             high+(base&128)+(index&127))
+for base in range(255, 513):
+    for index in (0, 1, 15, 31):
+        run('argument_crossing_pages', base, index, base + index)
 print(f'{checks} page-address executions passed')
