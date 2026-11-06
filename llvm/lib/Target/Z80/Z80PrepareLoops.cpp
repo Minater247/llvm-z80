@@ -10,21 +10,29 @@
 #include "Z80Subtarget.h"
 #include "Z80TargetMachine.h"
 #include "llvm/Analysis/AssumptionCache.h"
+#include "llvm/Analysis/InstructionSimplify.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
+#include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Transforms/Utils/LoopRotationUtils.h"
+#include "llvm/Transforms/Utils/LoopUtils.h"
 
 using namespace llvm;
 
 static cl::opt<bool> PrepareLoopMasks(
     "z80-prepare-loop-masks", cl::Hidden, cl::init(true),
     cl::desc("Advance bounded loop masks with single-bit shifts"));
+
+static cl::opt<bool> RotateCountedLoops(
+    "z80-rotate-counted-loops", cl::Hidden, cl::init(true),
+    cl::desc("Test nonempty countdown loops after their bodies"));
 
 namespace {
 class Z80PrepareLoops : public FunctionPass {
@@ -35,20 +43,18 @@ public:
   explicit Z80PrepareLoops(const Z80TargetMachine &TM)
       : FunctionPass(ID), TM(TM) {}
   StringRef getPassName() const override { return "Z80 loop arithmetic"; }
-  void getAnalysisUsage(AnalysisUsage &AU) const override {
-    AU.setPreservesCFG();
-  }
   bool runOnFunction(Function &F) override;
 };
 } // namespace
 
-/// Advance constant masks whose shift count increases by one per iteration.
-/// A proven count range keeps shifts within their original width and permits
-/// byte-sized masks when every result fits. Conditional uses and empty loops
-/// retain their behavior; loops with multiple latches keep their original form.
+/// Reduce repeated mask construction and countdown-loop control.
+/// Proven nonempty countdowns test at the end of each iteration. Bounded shift
+/// counts admit incremental masks, using bytes when every mask fits. Empty
+/// loops and conditional memory accesses retain their execution conditions.
 bool Z80PrepareLoops::runOnFunction(Function &F) {
   const auto &ST = *TM.getSubtargetImpl(F);
-  if (!PrepareLoopMasks || skipFunction(F) || !ST.is16Bit() || ST.hasEZ80Ops())
+  if ((!PrepareLoopMasks && !RotateCountedLoops) || skipFunction(F) ||
+      !ST.is16Bit() || ST.hasEZ80Ops())
     return false;
   SmallVector<BinaryOperator *, 8> Shifts;
   for (Instruction &I : instructions(F))
@@ -61,7 +67,11 @@ bool Z80PrepareLoops::runOnFunction(Function &F) {
           return false;
         Shifts.push_back(B);
       }
-  if (Shifts.empty())
+  bool MayRotate = RotateCountedLoops && llvm::any_of(F, [](BasicBlock &BB) {
+    return !BB.phis().empty() && isa<ICmpInst>(BB.getFirstNonPHIIt()) &&
+           std::next(BB.getFirstNonPHIIt()) == BB.getTerminator()->getIterator();
+  });
+  if ((!PrepareLoopMasks || Shifts.empty()) && !MayRotate)
     return false;
   DominatorTree DT(F);
   LoopInfo LI(DT);
@@ -70,6 +80,56 @@ bool Z80PrepareLoops::runOnFunction(Function &F) {
   TargetLibraryInfo TLI(TLII, &F);
   ScalarEvolution SE(F, TLI, AC, DT, LI);
   bool Changed = false;
+  if (MayRotate) {
+    auto TTI = TM.getTargetTransformInfo(F);
+    const SimplifyQuery SQ(F.getDataLayout(), &TLI, &DT, &AC);
+    unsigned Budget = 32;
+    for (Loop *L : LI.getLoopsInPreorder()) {
+      if (!Budget--)
+        break;
+      BasicBlock *Header = L->getHeader();
+      auto *Branch = dyn_cast<BranchInst>(Header->getTerminator());
+      if (!L->getLoopPreheader() || !L->getLoopLatch() || !Branch ||
+          !Branch->isConditional() ||
+          std::next(Header->getFirstNonPHIIt()) !=
+              Header->getTerminator()->getIterator())
+        continue;
+      auto *Cmp = dyn_cast<ICmpInst>(Branch->getCondition());
+      if (!Cmp || !Cmp->isEquality() || Cmp->getParent() != Header ||
+          !Cmp->hasOneUse())
+        continue;
+      auto *Counter = dyn_cast<PHINode>(Cmp->getOperand(0));
+      auto *Zero = dyn_cast<ConstantInt>(Cmp->getOperand(1));
+      if (!Counter || Counter->getParent() != Header || !Zero ||
+          !Zero->isZero() || Counter->getNumIncomingValues() != 2 ||
+          (!Counter->getType()->isIntegerTy(8) &&
+           !Counter->getType()->isIntegerTy(16)))
+        continue;
+      unsigned Body = Cmp->getPredicate() == ICmpInst::ICMP_EQ ? 1 : 0;
+      if (!L->contains(Branch->getSuccessor(Body)) ||
+          L->contains(Branch->getSuccessor(1 - Body)))
+        continue;
+      Value *Initial = Counter->getIncomingValueForBlock(L->getLoopPreheader());
+      auto *Step = dyn_cast<BinaryOperator>(
+          Counter->getIncomingValueForBlock(L->getLoopLatch()));
+      auto *Amount = Step ? dyn_cast<ConstantInt>(Step->getOperand(1)) : nullptr;
+      if (!Step || Step->getOpcode() != Instruction::Add ||
+          Step->getOperand(0) != Counter || !Amount ||
+          !Amount->isMinusOne() || !SE.isKnownNonZero(SE.getSCEV(Initial)))
+        continue;
+      /* The first test is known to enter the body. Rotating this two-
+         instruction header removes its repeated jump and exposes the
+         decrement flags, without duplicating body work or memory accesses. */
+      if (formDedicatedExitBlocks(L, &DT, &LI, nullptr, false)) {
+        SE.forgetTopmostLoop(L);
+        Changed = true;
+      }
+      Changed |= LoopRotation(L, &LI, &TTI, &AC, &DT, &SE, nullptr, SQ, true, 2,
+                              true);
+    }
+  }
+  if (!PrepareLoopMasks)
+    return Changed;
   for (BinaryOperator *Shift : Shifts) {
     const SCEV *Count = SE.getSCEV(Shift->getOperand(1));
     auto *AR = dyn_cast<SCEVAddRecExpr>(Count);
