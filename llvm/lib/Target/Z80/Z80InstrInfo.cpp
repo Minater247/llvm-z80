@@ -1594,6 +1594,27 @@ bool Z80InstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
       return expandPostRAPseudo(MI);
     break;
   }
+  case Z80::LD8_ADJ:
+  case Z80::ST8_ADJ: {
+    bool Load = Opc == Z80::LD8_ADJ;
+    unsigned Op = Load ? 1 : 0;
+    Register Base = MI.getOperand(Op).getReg();
+    int64_t Offset = MI.getOperand(Op + 1).getImm();
+    assert((Offset == 1 || Offset == -1) && "expected adjacent byte");
+    BuildMI(MBB, MI, DL, get(Offset > 0 ? Z80::INC16r : Z80::DEC16r), Base)
+        .addReg(Base);
+    auto Access = BuildMI(MBB, MI, DL, get(Load ? Z80::LD8ap : Z80::LD8pa));
+    if (Load)
+      Access.addDef(Z80::A);
+    Access.addReg(Base);
+    if (!Load)
+      Access.addReg(Z80::A);
+    Access.cloneMemRefs(MI);
+    BuildMI(MBB, MI, DL, get(Offset > 0 ? Z80::DEC16r : Z80::INC16r), Base)
+        .addReg(Base);
+    MI.eraseFromParent();
+    return true;
+  }
   case Z80::BANK_BIT8pb:
   case Z80::BANK_LD8pi:
     if (MI.getOperand(0).getReg() == Z80::HL_ALT)

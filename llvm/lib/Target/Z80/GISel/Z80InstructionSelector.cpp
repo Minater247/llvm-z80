@@ -1152,6 +1152,52 @@ bool Z80InstructionSelector::selectLoadStore(MachineInstr &I,
     }
     SharedAccumulatorByte = Compatible && AccumulatorUses > 1;
   }
+  /* Repeated adjacent accesses can share a primary pair through a temporary
+     increment and restore. Keep established indexed bases on their ordinary
+     displacement path; both forms preserve the base and flags. */
+  if (!STI.hasEZ80Ops() && STI.is16Bit() && Ty == LLT::scalar(8) &&
+      PtrMI && PtrMI->getOpcode() == TargetOpcode::G_PTR_ADD) {
+    auto Offset = getIConstantVRegVal(PtrMI->getOperand(2).getReg(), MRI);
+    Register Base = PtrMI->getOperand(1).getReg();
+    unsigned MemoryUses = 0, Budget = 32;
+    for (const MachineInstr &Use : MRI.use_nodbg_instructions(PtrReg)) {
+      if (!Budget--)
+        break;
+      MemoryUses += Use.mayLoadOrStore();
+    }
+    bool Shared = MemoryUses > 1;
+    if (!Shared) {
+      Budget = 32;
+      for (const MachineInstr &Use : MRI.use_nodbg_instructions(Base)) {
+        if (!Budget--)
+          break;
+        Shared |= Use.getOpcode() == Z80::LD8_ADJ ||
+                  Use.getOpcode() == Z80::ST8_ADJ;
+      }
+    }
+    if (Offset && (Offset->isOne() || Offset->isAllOnes()) &&
+        Shared && !MRI.hasOneNonDBGUse(Base) &&
+        !needsIndexedBase(Base, *I.getParent(), MRI)) {
+      MachineIRBuilder Builder(I);
+      MachineInstrBuilder Copy;
+      if (IsLoad) {
+        Builder.setInsertPt(Builder.getMBB(), std::next(Builder.getInsertPt()));
+        Copy = Builder.buildCopy(ValReg, Register(Z80::A));
+      } else
+        Copy = Builder.buildCopy(Register(Z80::A), ValReg);
+      I.removeOperand(1);
+      I.removeOperand(0);
+      I.setDesc(TII.get(IsLoad ? Z80::LD8_ADJ : Z80::ST8_ADJ));
+      MachineInstrBuilder Adj(MF, I);
+      if (IsLoad)
+        Adj.addDef(Z80::A);
+      Adj.addReg(Base).addImm(Offset->getSExtValue());
+      if (!IsLoad)
+        Adj.addReg(Z80::A);
+      return selectCopy(*Copy, MRI) &&
+             constrainSelectedInstRegOperands(I, TII, TRI, RBI);
+    }
+  }
   bool UnitStep = false;
   if ((AddressByte || CopyByte || AccumulatorByte) && PtrMI &&
       PtrMI->getOpcode() == TargetOpcode::G_PTR_ADD)

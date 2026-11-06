@@ -513,6 +513,8 @@ let mayLoad = true, canFoldAsLoad = true, isReMaterializable = true in {
   def LD8ap  : I     <Idx1Pre, 0x46, "ld", "\t$dst, $src", "",
                       (outs A8:$dst), (ins rptr:$src),
                       [(set A8:$dst, (load iPTR:$src))]>;
+  def LD8_ADJ : Pseudo<"", "", "", (outs A8:$dst),
+                       (ins G16:$base, i8imm:$offset)>;
   def LD16rp : I16   <Pre<Idx1Pre, EDPre>, 0x07, "ld", "\t$dst, $src", "",
                       (outs R16:$dst), (ins aptr:$src),
                       [(set R16:$dst, (load iPTR:$src))]>,
@@ -587,6 +589,8 @@ let mayStore = true in {
   def LD8pa  : I     <Idx0Pre, 0x70, "ld", "\t$dst, $src", "",
                       (outs), (ins rptr:$dst, A8:$src),
                       [(store A8 :$src, iPTR:$dst)]>;
+  def ST8_ADJ : Pseudo<"", "", "", (outs),
+                       (ins G16:$base, i8imm:$offset, A8:$src)>;
   def LD16pr : I16   <Pre<Idx0Pre, EDPre>, 0x0F, "ld", "\t$dst, $src", "",
                       (outs), (ins aptr:$dst, R16:$src),
                       [(store R16:$src, iPTR:$dst)]>,

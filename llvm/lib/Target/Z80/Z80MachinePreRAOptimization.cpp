@@ -659,7 +659,7 @@ static bool separateStableLanes(MachineFunction &MF, unsigned StableSub) {
     bool StableUses = false, MultipleUseBlocks = false;
     const MachineBasicBlock *UseBlock = nullptr;
     const MachineBasicBlock *StableBlock = nullptr;
-    unsigned VariableDefs = 0, StableDefs = 0, FullUses = 0;
+    unsigned VariableDefs = 0, StableDefs = 0, FullUses = 0, AdjacentUses = 0;
     for (const auto &MO : MRI.def_operands(R)) {
       if (MO.getSubReg() == VariableSub)
         ++VariableDefs;
@@ -681,6 +681,8 @@ static bool separateStableLanes(MachineFunction &MF, unsigned StableSub) {
         continue;
       StableUses |= MO.getSubReg() == StableSub;
       if (!MO.getSubReg()) {
+        AdjacentUses += MO.getParent()->getOpcode() == Z80::LD8_ADJ ||
+                        MO.getParent()->getOpcode() == Z80::ST8_ADJ;
         Eligible &= !MO.isUndef();
         ++FullUses;
         if (UseBlock && UseBlock != MO.getParent()->getParent())
@@ -721,6 +723,11 @@ static bool separateStableLanes(MachineFunction &MF, unsigned StableSub) {
             ? ((!ShortUses || MultipleUseBlocks || StableUses) &&
                !(VariableDefs > 1 && FullUses == 1 && !StableUses))
             : (StableDefs == 1 && VariableDefs > 1 && FullUses > 1 && CrossBlock);
+    /* Repeated neighboring accesses deliberately share one stable address.
+       Rebuilding it at every branch and call defeats that representation;
+       leave its whole-pair lifetime for allocation to place or spill. */
+    if (VariableDefs == 1 && AdjacentUses > 1)
+      Profitable = false;
     if (Eligible && VariableDefs && FullUses && Profitable)
       Candidates.emplace_back(R, StableValue);
   }

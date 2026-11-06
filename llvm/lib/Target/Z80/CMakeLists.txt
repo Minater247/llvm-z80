@@ -39,6 +39,7 @@ set(sources
   Z80StatePromotion.cpp
   Z80PrepareDispatch.cpp
   Z80PrepareLoops.cpp
+  Z80PrepareAddresses.cpp
   Z80PrivateMemory.cpp
   Z80BankRegionAllocator.cpp
   Z80LateCopyPropagation.cpp
