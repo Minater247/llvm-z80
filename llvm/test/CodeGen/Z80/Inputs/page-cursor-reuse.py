@@ -30,7 +30,8 @@ program = execution.Program(Path(sys.argv[1]).read_text())
 rng = random.Random(24739)
 checks = 0
 for name, step in [('forward', 1), ('backward', -1), ('ordered', 1),
-                   ('different_pages', 1), ('wide_base', 1)]:
+                   ('different_pages', 1), ('wide_base', 1),
+                   ('positive_backward', -1), ('negative_forward', 1)]:
     for start in range(256):
         for displacement in [-3, -1, 0, 1, 3, 0x4000]:
             source = (0x3100 + start + displacement) & 65535
@@ -43,7 +44,8 @@ for name, step in [('forward', 1), ('backward', -1), ('ordered', 1),
             for i in range(4):
                 src = (source + step*i) & 65535
                 page = 0x3100 + (256*(i%2) if name == 'different_pages' else 0)
-                dst = page | ((start + step*i) & 255)
+                bias = {'positive_backward': 5, 'negative_forward': -5}.get(name, 0)
+                dst = page | ((start + bias + step*i) & 255)
                 expected[dst] = expected[src]
                 destinations.add(dst)
                 trace.extend([('read', src, 1), ('write', dst, 1)])
@@ -53,7 +55,7 @@ for name, step in [('forward', 1), ('backward', -1), ('ordered', 1),
             assert cpu.mem[0xf002:] == expected[0xf002:], (name, start, displacement)
             assert cpu.writes <= destinations | set(range(0xef00, 0xf000))
             assert cpu.sp == 0xf002 and cpu.get('ix') == ix
-            if name in ('ordered', 'different_pages'):
+            if name in ('ordered', 'different_pages', 'positive_backward', 'negative_forward'):
                 assert cpu.trace == trace, (name, start, displacement, cpu.trace)
             checks += 1
 for start in range(256):

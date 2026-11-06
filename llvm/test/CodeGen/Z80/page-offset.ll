@@ -223,3 +223,36 @@ define ptr @bounded_carry_base(i16 %base, i16 %index) {
   %r = getelementptr i8, ptr %p, i16 %offset
   ret ptr %r
 }
+
+; Integer address arithmetic retains a proven constant high byte through
+; successive sums. The second sum depends on the first sum's byte bounds.
+define i16 @integer_page_offset(i16 %base, i16 %index) {
+; CHECK-LABEL: integer_page_offset:
+; CHECK-NOT: add{{[ \t]+}}hl,
+; CHECK: ret
+  %bank = and i16 %base, 128
+  %address = add i16 %bank, 65296
+  %offset = and i16 %index, 111
+  %result = add i16 %address, %offset
+  ret i16 %result
+}
+
+; One extra byte makes a carry possible, including wrapping the last page.
+define i16 @integer_page_carry(i16 %base, i16 %index) {
+  %bank = and i16 %base, 128
+  %address = add i16 %bank, 65297
+  %offset = and i16 %index, 111
+  %result = add i16 %address, %offset
+  ret i16 %result
+}
+
+; A constant addend can supply the page in the opposite operand order.
+define ptr @reversed_constant_page(i16 %unused, i16 %index) {
+; CHECK-LABEL: reversed_constant_page:
+; CHECK-NOT: add{{[ \t]+}}hl,
+; CHECK: ret
+  %offset = and i16 %index, 31
+  %p = inttoptr i16 %offset to ptr
+  %result = getelementptr i8, ptr %p, i16 -32
+  ret ptr %result
+}

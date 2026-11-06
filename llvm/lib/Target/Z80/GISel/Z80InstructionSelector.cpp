@@ -2260,7 +2260,9 @@ bool Z80InstructionSelector::selectMergeValues(MachineInstr &I,
              (Original && CandidateOriginal == Original) ||
              (PageConstant &&
               PageConstant == getIConstantVRegVal(CandidatePage, MRI))) &&
-            CandidateStep == Step - Direction) {
+            (uint8_t(Step - CandidateStep) == 1 ||
+             uint8_t(Step - CandidateStep) == 255)) {
+          Direction = uint8_t(Step - CandidateStep) == 1 ? 1 : -1;
           if (CandidateAdd)
             CandidateAdd->setFlags(0);
           Previous = Candidate.getOperand(0).getReg();

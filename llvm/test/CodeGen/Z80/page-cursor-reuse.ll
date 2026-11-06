@@ -295,3 +295,73 @@ define void @fill_value(ptr %unused, i8 %start) {
   store volatile i8 173, ptr %d7
   ret void
 }
+
+; Reuse follows the adjacent address, independently of the offset sign.
+define void @positive_backward(ptr %source, i8 %start) {
+; CHECK-LABEL: name: positive_backward
+; CHECK-COUNT-3: DEC8r
+  %b0 = add i8 %start, 5
+  %z0 = zext i8 %b0 to i16
+  %a0 = or i16 %z0, 12544
+  %d0 = inttoptr i16 %a0 to ptr
+  %s0 = getelementptr i8, ptr %source, i16 0
+  %v0 = load volatile i8, ptr %s0
+  store volatile i8 %v0, ptr %d0
+  %b1 = add i8 %start, 4
+  %z1 = zext i8 %b1 to i16
+  %a1 = or i16 %z1, 12544
+  %d1 = inttoptr i16 %a1 to ptr
+  %s1 = getelementptr i8, ptr %source, i16 -1
+  %v1 = load volatile i8, ptr %s1
+  store volatile i8 %v1, ptr %d1
+  %b2 = add i8 %start, 3
+  %z2 = zext i8 %b2 to i16
+  %a2 = or i16 %z2, 12544
+  %d2 = inttoptr i16 %a2 to ptr
+  %s2 = getelementptr i8, ptr %source, i16 -2
+  %v2 = load volatile i8, ptr %s2
+  store volatile i8 %v2, ptr %d2
+  %b3 = add i8 %start, 2
+  %z3 = zext i8 %b3 to i16
+  %a3 = or i16 %z3, 12544
+  %d3 = inttoptr i16 %a3 to ptr
+  %s3 = getelementptr i8, ptr %source, i16 -3
+  %v3 = load volatile i8, ptr %s3
+  store volatile i8 %v3, ptr %d3
+  ret void
+}
+
+; Reuse follows the adjacent address, independently of the offset sign.
+define void @negative_forward(ptr %source, i8 %start) {
+; CHECK-LABEL: name: negative_forward
+; CHECK-COUNT-3: INC8r
+  %b0 = add i8 %start, -5
+  %z0 = zext i8 %b0 to i16
+  %a0 = or i16 %z0, 12544
+  %d0 = inttoptr i16 %a0 to ptr
+  %s0 = getelementptr i8, ptr %source, i16 0
+  %v0 = load volatile i8, ptr %s0
+  store volatile i8 %v0, ptr %d0
+  %b1 = add i8 %start, -4
+  %z1 = zext i8 %b1 to i16
+  %a1 = or i16 %z1, 12544
+  %d1 = inttoptr i16 %a1 to ptr
+  %s1 = getelementptr i8, ptr %source, i16 1
+  %v1 = load volatile i8, ptr %s1
+  store volatile i8 %v1, ptr %d1
+  %b2 = add i8 %start, -3
+  %z2 = zext i8 %b2 to i16
+  %a2 = or i16 %z2, 12544
+  %d2 = inttoptr i16 %a2 to ptr
+  %s2 = getelementptr i8, ptr %source, i16 2
+  %v2 = load volatile i8, ptr %s2
+  store volatile i8 %v2, ptr %d2
+  %b3 = add i8 %start, -2
+  %z3 = zext i8 %b3 to i16
+  %a3 = or i16 %z3, 12544
+  %d3 = inttoptr i16 %a3 to ptr
+  %s3 = getelementptr i8, ptr %source, i16 3
+  %v3 = load volatile i8, ptr %s3
+  store volatile i8 %v3, ptr %d3
+  ret void
+}

@@ -51,6 +51,7 @@ for index in range(256):
     run('lookup', 0x40 + (index & 15), index, rng.randrange(256), True)
     run('lookup_reversed', 0x40 + (index & 15), index, rng.randrange(256), True)
 for index in range(0, 65536, 37):
+    run('reversed_constant_page', 0, index, 65504+(index&31))
     run('constant_byte_base', 0, index, 65504+(index&31))
     run('constant_carry_base', 0, index, 65505+(index&31))
 for base in range(256):
@@ -60,6 +61,8 @@ for base in range(256):
         run('argument_zero_page', base, index, base + index)
         run('observed_argument_high', base * 256 + index, 0, 256 + index + base)
     for index in [0, 1, 15, 16, 31, 32, 63, 64, 110, 111, 112, 127, 255]:
+        run('integer_page_offset', base, index, 65296+(base&128)+(index&111))
+        run('integer_page_carry', base, index, 65297+(base&128)+(index&111))
         run('bounded_byte_base', base, index, 65296+(base&128)+(index&111))
         run('bounded_carry_base', base, index, 65297+(base&128)+(index&111))
         high = rng.randrange(256)*256

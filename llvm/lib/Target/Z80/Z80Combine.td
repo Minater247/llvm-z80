@@ -41,7 +41,7 @@ def constant_multiply : GICombineRule<
 def page_offset_matchdata : GIDefMatchData<"PageOffset">;
 def page_offset : GICombineRule<
   (defs root:$mi, page_offset_matchdata:$matchinfo),
-  (match (wip_match_opcode G_PTR_ADD):$mi,
+  (match (wip_match_opcode G_PTR_ADD, G_ADD):$mi,
          [{ return matchPageOffset(*${mi}, MRI, VT, ${matchinfo}); }]),
   (apply [{ applyPageOffset(*${mi}, B, Observer, ${matchinfo}); }])>;
 

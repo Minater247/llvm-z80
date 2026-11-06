@@ -408,13 +408,13 @@ static void applyConstantMultiply(MachineInstr &MI, MachineIRBuilder &Builder,
   MI.eraseFromParent();
 }
 
-/// Recognize disjoint high and low bytes in a 16-bit pointer sum in either
-/// order. Bases with a known high byte use byte arithmetic when the offset
-/// cannot carry into it. Constant offsets retain existing immediate forms.
+/// Recognize 16-bit sums whose high byte is independent of the low-byte sum.
+/// Either operand can supply the page. Byte bounds must prove that adding the
+/// low parts preserves that page; sums that can carry retain word arithmetic.
 static bool matchPageOffset(MachineInstr &MI, MachineRegisterInfo &MRI,
                             GISelValueTracking *VT, PageOffset &Match) {
   LLT Ty = MRI.getType(MI.getOperand(0).getReg());
-  if (!VT || !Ty.isPointer() || Ty.getSizeInBits() != 16)
+  if (!VT || (!Ty.isPointer() && !Ty.isScalar()) || Ty.getSizeInBits() != 16)
     return false;
   Match = {};
   Register Base = MI.getOperand(1).getReg();
@@ -422,9 +422,32 @@ static bool matchPageOffset(MachineInstr &MI, MachineRegisterInfo &MRI,
   auto OffsetBits = VT->getKnownBits(Offset);
   bool ByteOffset = OffsetBits.countMinLeadingZeros() >= 8;
   bool AlignedOffset = OffsetBits.countMinTrailingZeros() >= 8;
+  auto BaseBits = VT->getKnownBits(Base);
+  /* Rebuilt page pointers introduce casts and a byte merge. Query their
+     independent bytes directly so those representation nodes do not hide the
+     low-byte range at the value tracker's bounded recursion limit. */
+  auto *BaseDef = getDefIgnoringCopies(Base, MRI);
+  if (BaseDef && BaseDef->getOpcode() == TargetOpcode::G_INTTOPTR)
+    BaseDef = getDefIgnoringCopies(BaseDef->getOperand(1).getReg(), MRI);
+  if (BaseDef && BaseDef->getOpcode() == TargetOpcode::G_MERGE_VALUES &&
+      BaseDef->getNumOperands() == 3 &&
+      MRI.getType(BaseDef->getOperand(1).getReg()) == LLT::scalar(8)) {
+    auto Lo = VT->getKnownBits(BaseDef->getOperand(1).getReg());
+    auto Hi = VT->getKnownBits(BaseDef->getOperand(2).getReg());
+    BaseBits.Zero |= Lo.Zero.zext(16) | Hi.Zero.zext(16).shl(8);
+    BaseBits.One |= Lo.One.zext(16) | Hi.One.zext(16).shl(8);
+  }
+  if (OffsetBits.isConstant() && BaseBits.countMinLeadingZeros() >= 8 &&
+      !getIConstantVRegValWithLookThrough(Base, MRI)) {
+    unsigned Low = OffsetBits.getConstant().getZExtValue() & 255;
+    if (BaseBits.getMaxValue().getZExtValue() + Low <= 255) {
+      Match.Reverse = true;
+      Match.LowOffset = Low;
+      return true;
+    }
+  }
   if (!ByteOffset && !AlignedOffset)
     return false;
-  auto BaseBits = VT->getKnownBits(Base);
   if (ByteOffset && !getIConstantVRegValWithLookThrough(Offset, MRI) &&
       BaseBits.countMinTrailingZeros() >= 8) {
     Match.Reverse = false;
@@ -459,10 +482,11 @@ static void applyPageOffset(MachineInstr &MI, MachineIRBuilder &Builder,
                             const PageOffset &Match) {
   Builder.setInstrAndDebugLoc(MI);
   LLT Byte = LLT::scalar(8), Word = LLT::scalar(16);
-  auto Base = Builder.buildPtrToInt(Word, MI.getOperand(1).getReg());
-  Register HighWord =
-      Match.Reverse ? MI.getOperand(2).getReg() : Base.getReg(0);
-  Register LowWord = Match.Reverse ? Base.getReg(0) : MI.getOperand(2).getReg();
+  Register Base = MI.getOperand(1).getReg();
+  if (Builder.getMRI()->getType(Base).isPointer())
+    Base = Builder.buildPtrToInt(Word, Base).getReg(0);
+  Register HighWord = Match.Reverse ? MI.getOperand(2).getReg() : Base;
+  Register LowWord = Match.Reverse ? Base : MI.getOperand(2).getReg();
   auto Shift = Builder.buildConstant(Byte, 8);
   auto High = Builder.buildTrunc(Byte, Builder.buildLShr(Word, HighWord, Shift));
   Register Low = Builder.buildTrunc(Byte, LowWord).getReg(0);
@@ -475,7 +499,10 @@ static void applyPageOffset(MachineInstr &MI, MachineIRBuilder &Builder,
   /* Proven absence of a carry lets the high byte stay unchanged. Only the
      low byte needs arithmetic when the base has a nonzero page offset. */
   auto Address = Builder.buildMergeValues(Word, {Low, High.getReg(0)});
-  Builder.buildIntToPtr(MI.getOperand(0).getReg(), Address);
+  if (Builder.getMRI()->getType(MI.getOperand(0).getReg()).isPointer())
+    Builder.buildIntToPtr(MI.getOperand(0).getReg(), Address);
+  else
+    Builder.buildCopy(MI.getOperand(0).getReg(), Address);
   Observer.erasingInstr(MI);
   MI.eraseFromParent();
 }
