@@ -3,8 +3,8 @@
 # RUN: %python %S/Inputs/small-jump-table.py %t.s
 # RUN: llc -start-before=instruction-select -mattr=+alternate-regs -verify-machineinstrs %s -o %t.bank.s
 # RUN: %python %S/Inputs/small-jump-table.py %t.bank.s
-# Scale byte-sized table offsets before widening; retain word scaling when
-# the last valid offset exceeds a byte. Inputs may already be bytes.
+# Keep byte-sized table offsets in A and load the target in place in HL.
+# Larger offsets retain word scaling. Inputs may already be bytes.
 --- |
   target triple = "z80"
   define void @byte_index() { ret void }
@@ -19,8 +19,15 @@ regBankSelected: true
 tracksRegLiveness: true
 # CHECK-LABEL: name: byte_index
 # CHECK: ADD8ar
-# CHECK: ADD16ao
 # CHECK-NOT: ADD16ao
+# CHECK: ADD8ar $l
+# CHECK: ADC8ar $h
+# CHECK: SUB8ar $l
+# CHECK: $hl = COPY
+# CHECK-NEXT: $a = LD8ap $hl
+# CHECK-NEXT: $hl = INC16r $hl
+# CHECK-NEXT: $h = LD8gp $hl
+# CHECK-NEXT: $l = COPY $a
 # CHECK: JP16r
 jumpTable:
   kind: block-address
@@ -54,8 +61,10 @@ regBankSelected: true
 tracksRegLiveness: true
 # CHECK-LABEL: name: word_index
 # CHECK: ADD8ar
-# CHECK: ADD16ao
 # CHECK-NOT: ADD16ao
+# CHECK: ADD8ar $l
+# CHECK: ADC8ar $h
+# CHECK: SUB8ar $l
 # CHECK: JP16r
 jumpTable:
   kind: block-address
@@ -89,8 +98,10 @@ regBankSelected: true
 tracksRegLiveness: true
 # CHECK-LABEL: name: last_byte_offset
 # CHECK: ADD8ar
-# CHECK: ADD16ao
 # CHECK-NOT: ADD16ao
+# CHECK: ADD8ar $l
+# CHECK: ADC8ar $h
+# CHECK: SUB8ar $l
 # CHECK: JP16r
 jumpTable:
   kind: block-address

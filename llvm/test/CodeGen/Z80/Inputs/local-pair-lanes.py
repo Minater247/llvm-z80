@@ -46,7 +46,7 @@ ret
         rng = random.Random(724)
         for name in ('low_cursor', 'high_cursor', 'fixed_ports',
                      'runtime_high', 'runtime_low', 'runtime_stores',
-                     'runtime_reads'):
+                     'runtime_reads', 'immutable_index'):
             for value in range(256):
                 cpu = execution.CPU(rng)
                 cpu.put('e', value)
@@ -57,7 +57,12 @@ ret
                 cpu.run(program, entry=name)
                 expected = bytearray(before)
                 destinations = set()
-                if name in ('low_cursor', 'runtime_stores'):
+                if name == 'immutable_index':
+                    result = 0x3100 | value
+                    assert cpu.get('a') == before[result + 3] ^ before[result + 7]
+                    assert cpu.reads.count(result + 3) == 1
+                    assert cpu.reads.count(result + 7) == 1
+                elif name in ('low_cursor', 'runtime_stores'):
                     page = (value ^ 90) << 8 if name == 'runtime_stores' else 0x3100
                     for step in range(4):
                         address = page | ((value + step) & 255)

@@ -10,6 +10,7 @@
 #include "Z80Subtarget.h"
 #include "Z80TargetMachine.h"
 #include "llvm/ADT/SetVector.h"
+#include "llvm/Analysis/LoopInfo.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/Pass.h"
@@ -21,7 +22,7 @@ using namespace llvm;
 
 static cl::opt<bool> PrepareDispatch(
     "z80-prepare-dispatch", cl::Hidden, cl::init(true),
-    cl::desc("Compute shared byte fields in their switch handlers"));
+    cl::desc("Compute shared byte fields in their dispatch handlers"));
 
 namespace {
 class Z80PrepareDispatch : public FunctionPass {
@@ -32,7 +33,7 @@ public:
   explicit Z80PrepareDispatch(const Z80TargetMachine &TM)
       : FunctionPass(ID), TM(TM) {}
   StringRef getPassName() const override {
-    return "Z80 switch field placement";
+    return "Z80 dispatch field placement";
   }
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.setPreservesCFG();
@@ -41,23 +42,22 @@ public:
 };
 } // namespace
 
-/// Compute byte fields inside the switch handlers that consume them. A field
-/// may contain up to two constant masks or shifts. Each destination has the
-/// dispatch as its sole predecessor, and dominates every replaced use.
+/// Compute byte fields in the branch or switch handlers that consume them.
+/// Each destination dominates its replaced uses and shares the input byte
+/// with the dispatch. Fields contain up to two constant masks or shifts and
+/// remain outside loops deeper than their original block.
 bool Z80PrepareDispatch::runOnFunction(Function &F) {
   const auto &ST = *TM.getSubtargetImpl(F);
   if (!PrepareDispatch || skipFunction(F) || !ST.is16Bit() || ST.hasEZ80Ops())
     return false;
   std::unique_ptr<DominatorTree> DT;
+  std::unique_ptr<LoopInfo> Loops;
   bool Changed = false;
+  unsigned RemainingClones = 128;
   for (BasicBlock &BB : F) {
     auto *Switch = dyn_cast<SwitchInst>(BB.getTerminator());
-    if (!Switch)
-      continue;
-    SmallSetVector<BasicBlock *, 16> Roots;
-    for (BasicBlock *Succ : successors(&BB))
-      Roots.insert(Succ);
-    if (Roots.size() < 4 || Roots.size() > 16)
+    auto *Branch = dyn_cast<BranchInst>(BB.getTerminator());
+    if (!Switch && (!Branch || !Branch->isConditional()))
       continue;
     auto IsField = [&](Value *V) {
       auto *I = dyn_cast<BinaryOperator>(V);
@@ -70,7 +70,25 @@ bool Z80PrepareDispatch::runOnFunction(Function &F) {
     for (Instruction &I : BB)
       if (IsField(&I))
         Fields.push_back(&I);
+    if (Fields.empty())
+      continue;
+    SmallSetVector<BasicBlock *, 16> Roots;
+    if (!DT) {
+      DT = std::make_unique<DominatorTree>(F);
+      Loops = std::make_unique<LoopInfo>(*DT);
+    }
+    if (auto *Node = DT->getNode(&BB))
+      for (auto *Child : *Node)
+        if (Loops->getLoopDepth(Child->getBlock()) <= Loops->getLoopDepth(&BB))
+          Roots.insert(Child->getBlock());
+    if (Roots.size() < 2 || Roots.size() > 16)
+      continue;
     for (Instruction *I : llvm::reverse(Fields)) {
+      if (isInstructionTriviallyDead(I)) {
+        I->eraseFromParent();
+        Changed = true;
+        continue;
+      }
       SmallVector<Instruction *, 2> Chain{I};
       Value *Input = I->getOperand(0);
       if (IsField(Input)) {
@@ -85,14 +103,12 @@ bool Z80PrepareDispatch::runOnFunction(Function &F) {
       });
       if (!InputLive)
         continue;
-      if (!DT)
-        DT = std::make_unique<DominatorTree>(F);
       SmallVector<std::pair<Use *, BasicBlock *>, 16> Uses;
       SmallSetVector<BasicBlock *, 8> Destinations;
       bool Valid = true;
       for (Use &U : I->uses()) {
         auto *User = dyn_cast<Instruction>(U.getUser());
-        if (User == Switch)
+        if (User == BB.getTerminator())
           continue;
         if (!User || isa<PHINode>(User) || User->getParent() == &BB) {
           Valid = false;
@@ -100,8 +116,7 @@ bool Z80PrepareDispatch::runOnFunction(Function &F) {
         }
         BasicBlock *Root = nullptr;
         for (BasicBlock *R : Roots)
-          if (R != &BB && R->getUniquePredecessor() == &BB &&
-              DT->dominates(R, User->getParent())) {
+          if (DT->dominates(R, User->getParent())) {
             Root = R;
             break;
           }
@@ -112,8 +127,9 @@ bool Z80PrepareDispatch::runOnFunction(Function &F) {
         Destinations.insert(Root);
         Uses.push_back({&U, Root});
       }
-      if (!Valid || Destinations.size() < 2 ||
-          Destinations.size() * Chain.size() > 16)
+      unsigned Clones = Destinations.size() * Chain.size();
+      if (!Valid || Destinations.empty() || Clones > 16 ||
+          Clones > RemainingClones)
         continue;
       /* An input consumed in a destination is already live at the dispatch.
          Sharing it between handlers can release several decoded fields at
@@ -126,6 +142,7 @@ bool Z80PrepareDispatch::runOnFunction(Function &F) {
             });
           }))
         continue;
+      RemainingClones -= Clones;
       for (BasicBlock *Root : Destinations) {
         Value *V = Input;
         auto Insert = Root->getFirstInsertionPt();
@@ -141,13 +158,11 @@ bool Z80PrepareDispatch::runOnFunction(Function &F) {
             U->set(V);
       }
       Changed = true;
-    }
-    // Delay erasure until all saved field pointers have been examined.
-    for (Instruction *I : llvm::reverse(Fields))
-      if (isInstructionTriviallyDead(I)) {
+      /* Drop the replaced child before examining its input. A dead mask
+         would otherwise pin the shared shift in the original block. */
+      if (isInstructionTriviallyDead(I))
         I->eraseFromParent();
-        Changed = true;
-      }
+    }
   }
   return Changed;
 }

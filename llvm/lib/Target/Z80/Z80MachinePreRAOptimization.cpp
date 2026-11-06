@@ -27,6 +27,7 @@
 #include "llvm/CodeGen/LiveRegUnits.h"
 #include "llvm/CodeGen/LiveIntervals.h"
 #include "llvm/CodeGen/MachineDominators.h"
+#include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
@@ -808,7 +809,8 @@ static bool separateStableLanes(MachineFunction &MF, unsigned StableSub) {
     bool StableUses = false, MultipleUseBlocks = false;
     const MachineBasicBlock *UseBlock = nullptr;
     const MachineBasicBlock *StableBlock = nullptr;
-    unsigned VariableDefs = 0, StableDefs = 0, FullUses = 0, AdjacentUses = 0;
+    unsigned VariableDefs = 0, StableDefs = 0, WholeDefs = 0;
+    unsigned FullUses = 0, AdjacentUses = 0;
     for (const auto &MO : MRI.def_operands(R)) {
       if (MO.getSubReg() == VariableSub)
         ++VariableDefs;
@@ -817,6 +819,8 @@ static bool separateStableLanes(MachineFunction &MF, unsigned StableSub) {
         StableBlock = MO.getParent()->getParent();
       } else if (MO.getSubReg())
         Eligible = false;
+      else
+        ++WholeDefs;
     }
     if (!Eligible || !VariableDefs ||
         (!StableValue && (StableDefs != 1 || VariableDefs < 2)))
@@ -875,7 +879,10 @@ static bool separateStableLanes(MachineFunction &MF, unsigned StableSub) {
     /* Repeated neighboring accesses deliberately share one stable address.
        Rebuilding it at every branch and call defeats that representation;
        leave its whole-pair lifetime for allocation to place or spill. */
-    if (VariableDefs == 1 && AdjacentUses > 1)
+    if (VariableDefs == 1 &&
+        (AdjacentUses > 1 ||
+         (!WholeDefs && FullUses > 1 && !MF.getFrameInfo().hasCalls() &&
+          Z80::I16RegClass.hasSubClassEq(MRI.getRegClass(R)))))
       Profitable = false;
     if (Eligible && VariableDefs && FullUses && Profitable)
       Candidates.emplace_back(R, StableValue);

@@ -20,3 +20,8 @@
 ; CHECK: srl
 ; CHECK-NOT: rrca
 ; CHECK: ret
+; CHECK-LABEL: branch_shifts:
+; CHECK-NOT: srl
+; CHECK: rrca
+; CHECK-NOT: srl
+; CHECK: ret

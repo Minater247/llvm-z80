@@ -27,6 +27,19 @@ define i8 @shared(i8 %x, ptr %out) {
   %r = xor i8 %m, %x
   ret i8 %r
 }
+define i8 @branch_shifts(i8 %x, i8 %mode) {
+  %test = icmp eq i8 %mode, 0
+  br i1 %test, label %a, label %b
+a:
+  %s = lshr i8 %x, 2
+  %m = and i8 %s, 1
+  ret i8 %m
+b:
+  %t = lshr i8 %x, 4
+  %n = and i8 %t, 3
+  ret i8 %n
+}
+
 """
     Path(sys.argv[2]).write_text(ir)
     sys.exit()
@@ -61,4 +74,11 @@ for x in range(256):
     cpu.run(program, entry='overlap')
     assert cpu.mem[0x6000] == x >> 3
     assert cpu.get('a') == (x >> 2) & 1
-print(f'{256 * (len(cases) + 2)} masked shift executions passed')
+for x in range(256):
+    for mode in (0, 1):
+        cpu = execution.CPU(rng)
+        cpu.put('e', x)
+        cpu.put('d', mode)
+        cpu.run(program, entry='branch_shifts')
+        assert cpu.get('a') == ((x >> 2) & 1 if mode == 0 else (x >> 4) & 3)
+print(f'{256 * (len(cases) + 4)} masked shift executions passed')

@@ -1,4 +1,4 @@
-"""Execute all byte values through shared and distinct switch destinations."""
+"""Execute all byte values through switch and branch-tree destinations."""
 import importlib.util
 from pathlib import Path
 import random
@@ -27,6 +27,9 @@ for allocator in ('z80', 'greedy'):
                 ir = out.with_suffix('.mir')
                 subprocess.run([*flags, '-stop-before=irtranslator', '-o', str(ir)], check=True)
                 assert ('dispatch.field' in ir.read_text()) == enabled
+                branch = ir.read_text().split('@branch_dispatch(', 1)[1]
+                entry = branch.split('br i1', 1)[0]
+                assert ('lshr i8' in entry) != enabled
             assembly = out.read_text()
             tables = {}
             for line in assembly.splitlines():
@@ -55,6 +58,20 @@ for allocator in ('z80', 'greedy'):
                             command^low, command+port, command-port,
                             command^port, command][group] & 255
                 assert cpu.get('a') == expected, (allocator, bank, enabled, command)
+                assert cpu.sp == sp + 2 and cpu.get('ix') == ix
+                checks += 1
+                cpu = x.CPU(random.Random(command))
+                cpu.put('e', command)
+                sp, ix = cpu.sp, cpu.get('ix')
+                cpu.run(program, entry='branch_dispatch')
+                channel, low = (command >> 4) & 3, command & 7
+                expected = (command if command < 16 else
+                            command + channel if command < 64 else
+                            command - channel if command < 128 else
+                            command + low if command < 192 else
+                            command ^ low) & 255
+                assert cpu.get('a') == expected, (
+                    allocator, bank, enabled, command, 'branch')
                 assert cpu.sp == sp + 2 and cpu.get('ix') == ix
                 checks += 1
 print(f'{checks} dispatch executions passed')

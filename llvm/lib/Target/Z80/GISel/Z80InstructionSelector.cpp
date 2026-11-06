@@ -20,6 +20,7 @@
 #include "Z80TargetMachine.h"
 #include <optional>
 
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/Sequence.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/CodeGen/GlobalISel/GIMatchTableExecutorImpl.h"
@@ -53,6 +54,7 @@ public:
                ProfileSummaryInfo *PSI = nullptr,
                BlockFrequencyInfo *BFI = nullptr) override {
     PageDominators.reset();
+    RecordBases.clear();
     HasCalls = llvm::any_of(MF, [](const MachineBasicBlock &MBB) {
       return llvm::any_of(MBB,
                           [](const MachineInstr &MI) { return MI.isCall(); });
@@ -68,6 +70,9 @@ public:
 
 private:
   mutable std::optional<MachineDominatorTree> PageDominators;
+  mutable DenseMap<Register, std::pair<Register, int64_t>> RecordBases;
+  Register sharedRecordBase(MachineInstr &Pointer, MachineRegisterInfo &MRI,
+                            int64_t &Delta) const;
   bool HasCalls = false;
   Register createGenericVirtualRegister(MachineRegisterInfo &MRI, LLT Ty,
                                         StringRef Name = "") const;
@@ -1077,6 +1082,66 @@ static bool reuseConstantByteAddress(Register Ptr, MachineRegisterInfo &MRI) {
   return true;
 }
 
+/// Find a common base for neighboring fields accessed in distinct
+/// blocks. Return the dominating address and a signed-byte displacement;
+/// memory accesses retain their positions. A zero register denotes that the
+/// bounded search found no shared base.
+Register Z80InstructionSelector::sharedRecordBase(
+    MachineInstr &Pointer, MachineRegisterInfo &MRI, int64_t &Delta) const {
+  if (Pointer.getOpcode() != TargetOpcode::G_PTR_ADD)
+    return Register();
+  auto Offset = getIConstantVRegVal(Pointer.getOperand(2).getReg(), MRI);
+  if (!Offset || !Offset->isSignedIntN(16))
+    return Register();
+  Register Ptr = Pointer.getOperand(0).getReg();
+  if (auto It = RecordBases.find(Ptr); It != RecordBases.end()) {
+    Delta = It->second.second;
+    return It->second.first;
+  }
+  const MachineBasicBlock *UseBlock = nullptr;
+  bool CrossBlock = false;
+  unsigned Budget = 32;
+  for (const MachineInstr &Use : MRI.use_nodbg_instructions(Ptr)) {
+    if (!Budget--)
+      return Register();
+    if (!Use.mayLoadOrStore())
+      continue;
+    CrossBlock |= UseBlock && UseBlock != Use.getParent();
+    UseBlock = Use.getParent();
+  }
+  if (!CrossBlock)
+    return Register();
+  Register Base = Pointer.getOperand(1).getReg(), Found;
+  if (!PageDominators)
+    PageDominators.emplace(*Pointer.getMF());
+  MachineInstr *First = &Pointer;
+  Budget = 64;
+  for (auto &Candidate : MRI.use_nodbg_instructions(Base)) {
+    if (!Budget--)
+      break;
+    if (&Candidate == &Pointer ||
+        Candidate.getOpcode() != TargetOpcode::G_PTR_ADD ||
+        Candidate.getOperand(1).getReg() != Base ||
+        !PageDominators->dominates(&Candidate, First))
+      continue;
+    auto Other = getIConstantVRegVal(Candidate.getOperand(2).getReg(), MRI);
+    if (!Other)
+      continue;
+    int64_t Difference = (*Offset - *Other).getSExtValue();
+    if (!Difference || !isInt<8>(Difference))
+      continue;
+    Found = Candidate.getOperand(0).getReg();
+    Delta = Difference;
+    First = &Candidate;
+  }
+  if (Found) {
+    /* The new use can be valid when the earlier address was out of bounds. */
+    First->setFlags(0);
+    RecordBases[Ptr] = {Found, Delta};
+  }
+  return Found;
+}
+
 bool Z80InstructionSelector::selectLoadStore(MachineInstr &I,
                                              MachineRegisterInfo &MRI,
                                              MachineFunction &MF) const {
@@ -1406,12 +1471,23 @@ bool Z80InstructionSelector::selectLoadStore(MachineInstr &I,
       llvm::hasNItems(MRI.use_nodbg_operands(PtrReg), 2))
     PreferRegPtrFor8 = false;
 
+  int64_t RecordOffset = 0;
+  Register RecordBase;
+  if (STI.is16Bit() && !STI.hasEZ80Ops() && Ty == LLT::scalar(8) && PtrMI)
+    RecordBase = sharedRecordBase(*PtrMI, MRI, RecordOffset);
+
   bool RetainsAddress = IsLoad && !MRI.hasOneNonDBGUse(PtrReg);
   I.removeOperand(1);
   I.removeOperand(0);
   MachineInstrBuilder MIB(MF, I);
   SmallVector<MachineOperand, 2> MOs;
   int32_t Off = 0;
+  if (RecordBase) {
+    MOs.push_back(MachineOperand::CreateReg(RecordBase, false));
+    MOs.push_back(MachineOperand::CreateImm(RecordOffset));
+    PtrMI = nullptr;
+    PreferRegPtrFor8 = false;
+  }
   while (PtrMI) {
     switch (PtrMI->getOpcode()) {
     case TargetOpcode::G_INTTOPTR:
@@ -1950,15 +2026,22 @@ bool Z80InstructionSelector::selectALU8(MachineInstr &I,
       Folded.insert(Shift);
       Source = Shift->getOperand(1).getReg();
     }
-    /* Other shifts can share this chain after selection. Keep that common
-       work instead of introducing independent accumulator rotations. */
+    /* Shifts in this block can share a selected prefix. Separate handlers
+       need their own computations; a shift in an unrelated block does not
+       make an accumulator rotation more expensive here. */
     bool Shared = false;
     if (Count) {
       unsigned Budget = 16;
       for (const auto &Use : MRI.use_nodbg_instructions(Source)) {
         if (Folded.contains(&Use))
           continue;
-        if (!Budget-- || Use.getOpcode() == ShiftOpc ||
+        if (!Budget--) {
+          Shared = true;
+          break;
+        }
+        if (Use.getParent() != I.getParent())
+          continue;
+        if (Use.getOpcode() == ShiftOpc ||
             Use.getOpcode() ==
                 (ShiftOpc == TargetOpcode::G_SHL ? Z80::SLA8g : Z80::SRL8g)) {
           Shared = true;
@@ -2985,7 +3068,13 @@ bool Z80InstructionSelector::selectShift(MachineInstr &I,
       Amt->Value == 4) {
     unsigned Remaining = 16;
     for (const MachineInstr &Use : MRI.use_nodbg_instructions(SrcReg)) {
-      if (!Remaining-- || Use.getOpcode() == Z80::SRL8g) {
+      if (!Remaining--) {
+        ShareShorterShift = true;
+        break;
+      }
+      if (Use.getParent() != I.getParent())
+        continue;
+      if (Use.getOpcode() == Z80::SRL8g) {
         ShareShorterShift = true;
         break;
       }
@@ -3359,9 +3448,10 @@ bool Z80InstructionSelector::selectBrJT(MachineInstr &I,
       MF.getJumpTableInfo()
               ->getJumpTables()[I.getOperand(1).getIndex()]
               .MBBs.size() <= 128) {
-    /* Every valid entry's byte offset fits in a byte. Scale before widening
-       so dispatch needs one address addition and can release the unscaled
-       word index. Scaling a valid table index cannot overflow this byte. */
+    /* Every valid entry's byte offset fits in a byte. Scale it before
+       adding to the table address, so a second register pair stays free.
+       After writing the low-byte sum to L, ADC A,H followed by SUB L leaves
+       H plus the low-byte carry in A, including address-space wrapping. */
     Register ByteReg = IndexReg;
     if (MRI.getType(IndexReg) != LLT::scalar(8)) {
       ByteReg = createGenericVirtualRegister(MRI, LLT::scalar(8));
@@ -3369,13 +3459,22 @@ bool Z80InstructionSelector::selectBrJT(MachineInstr &I,
         return false;
     }
     Register ScaledReg = createGenericVirtualRegister(MRI, LLT::scalar(8));
-    Register WideReg = createGenericVirtualRegister(MRI, LLT::scalar(16));
     auto Scaled = MIB.buildAdd(ScaledReg, ByteReg, ByteReg);
-    auto Wide = MIB.buildZExt(WideReg, Scaled);
-    if (!select(*Wide) || !select(*Scaled))
+    if (!select(*Scaled))
       return false;
-    IndexReg = WideReg;
-    AddressAdds = 1;
+    MIB.buildCopy(Z80::HL, AddrReg);
+    MIB.buildCopy(Z80::A, ScaledReg);
+    auto Low = MIB.buildInstr(Z80::ADD8ar, {}, {Register(Z80::L)});
+    MIB.buildCopy(Z80::L, Register(Z80::A));
+    auto Carry = MIB.buildInstr(Z80::ADC8ar, {}, {Register(Z80::H)});
+    auto High = MIB.buildInstr(Z80::SUB8ar, {}, {Register(Z80::L)});
+    MIB.buildCopy(Z80::H, Register(Z80::A));
+    if (!constrainSelectedInstRegOperands(*Low, TII, TRI, RBI) ||
+        !constrainSelectedInstRegOperands(*Carry, TII, TRI, RBI) ||
+        !constrainSelectedInstRegOperands(*High, TII, TRI, RBI))
+      return false;
+    AddrReg = Z80::HL;
+    AddressAdds = 0;
   }
 
   for (unsigned Factor = 0; Factor != AddressAdds; ++Factor) {
@@ -3384,6 +3483,29 @@ bool Z80InstructionSelector::selectBrJT(MachineInstr &I,
     if (!constrainSelectedInstRegOperands(*Add, TII, TRI, RBI))
       return false;
     AddrReg = Add.getReg(0);
+  }
+
+  if (STI.is16Bit() && !STI.hasEZ80Ops()) {
+    /* An indirect jump consumes its address. Load the low target byte into
+       A, then replace H and L in place. Making the scratch byte explicit
+       before allocation avoids a hidden pair save when expanding a word
+       load whose source and destination both occupy HL. */
+    MIB.buildCopy(Z80::HL, AddrReg);
+    auto Low = MIB.buildInstr(Z80::LD8ap, {Register(Z80::A)},
+                             {Register(Z80::HL)});
+    auto Step = MIB.buildInstr(Z80::INC16r, {Register(Z80::HL)},
+                              {Register(Z80::HL)});
+    auto High = MIB.buildInstr(Z80::LD8gp, {Register(Z80::H)},
+                              {Register(Z80::HL)});
+    MIB.buildCopy(Z80::L, Register(Z80::A));
+    auto Jump = MIB.buildInstr(Z80::JP16r, {}, {Register(Z80::HL)});
+    if (!constrainSelectedInstRegOperands(*Low, TII, TRI, RBI) ||
+        !constrainSelectedInstRegOperands(*Step, TII, TRI, RBI) ||
+        !constrainSelectedInstRegOperands(*High, TII, TRI, RBI) ||
+        !constrainSelectedInstRegOperands(*Jump, TII, TRI, RBI))
+      return false;
+    I.eraseFromParent();
+    return true;
   }
 
   auto Load = MIB.buildInstr(STI.is24Bit()

@@ -13,6 +13,7 @@
   define void @runtime_low() { ret void }
   define void @runtime_stores() { ret void }
   define void @runtime_reads() { ret void }
+  define void @immutable_index() { ret void }
 ...
 ---
 name: low_cursor
@@ -253,6 +254,30 @@ body: |
     $a = LD8ap %0 :: (volatile load (s8))
     %0.sub_low:r16 = INC8r %0.sub_low, implicit-def dead $f
     $a = LD8ap %0 :: (volatile load (s8))
+    $de = COPY %0
+    RET16 implicit-def $sps, implicit $sps, implicit $de, implicit $a
+...
+---
+name: immutable_index
+tracksRegLiveness: true
+# CHECK-LABEL: name: immutable_index
+# CHECK: undef %0.sub_low:i16 = COPY $e
+# CHECK-NEXT: %0.sub_high:i16 = LD8ri 49
+# CHECK: bb.1:
+# CHECK-NOT: sub_low
+# CHECK-NOT: sub_high
+# CHECK: $a = LD8ro %0, 7
+body: |
+  bb.0:
+    liveins: $e
+    successors: %bb.1
+    undef %0.sub_low:i16 = COPY $e
+    %0.sub_high:i16 = LD8ri 49
+    %1:g8 = LD8go %0, 3 :: (volatile load (s8))
+    JQ %bb.1
+  bb.1:
+    $a = LD8ro %0, 7 :: (volatile load (s8))
+    XOR8ar %1, implicit-def $a, implicit-def $f, implicit $a
     $de = COPY %0
     RET16 implicit-def $sps, implicit $sps, implicit $de, implicit $a
 ...
