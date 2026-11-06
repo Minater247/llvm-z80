@@ -1,0 +1,97 @@
+# RUN: llc -mattr=+alternate-regs -run-pass=z80-alternate-regalloc -verify-machineinstrs %s -o - | FileCheck %s
+# RUN: llc -mattr=+alternate-regs -start-before=z80-alternate-regalloc -verify-machineinstrs %s -o %t.s
+# RUN: %python %S/Inputs/alternate-af-exchange.py %t.s
+# RUN: llc -mattr=-alternate-regs -start-before=z80-alternate-regalloc -verify-machineinstrs %s -o %t.off.s
+# RUN: %python %S/Inputs/alternate-af-exchange.py %t.off.s
+--- |
+  target triple = "z80"
+  define i8 @consume() minsize optsize { ret i8 0 }
+  define i8 @flags_live() minsize optsize { ret i8 0 }
+  define i8 @alternate_flags_live() minsize optsize { ret i8 0 }
+  define i8 @multiple_reads() minsize optsize { ret i8 0 }
+  define i8 @primary_live() minsize optsize { ret i8 0 }
+...
+---
+name: consume
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 1, alignment: 1 }
+# CHECK-LABEL: name: consume
+# CHECK: $a_alt = ALT_SWAP_SAVE8 $a
+# CHECK: $a = ALT_SWAP_LOAD8 $a_alt
+body: |
+  bb.0:
+    liveins: $a
+    LD8or %stack.0, 0, $a
+    $a = LD8ri 0
+    $a = LD8ro %stack.0, 0
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...
+---
+name: flags_live
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 1, alignment: 1 }
+# CHECK-LABEL: name: flags_live
+# CHECK-NOT: ALT_SWAP
+# CHECK: RET16
+body: |
+  bb.0:
+    liveins: $a
+    CP8ai 128, implicit-def $f, implicit $a
+    LD8or %stack.0, 0, $a
+    $a = LD8ri 0
+    $a = LD8ro %stack.0, 0
+    RET16 implicit-def $sps, implicit $sps, implicit $a, implicit $f
+...
+---
+name: alternate_flags_live
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 1, alignment: 1 }
+# CHECK-LABEL: name: alternate_flags_live
+# CHECK-NOT: ALT_SWAP
+# CHECK: RET16
+body: |
+  bb.0:
+    liveins: $a, $f_alt
+    LD8or %stack.0, 0, $a
+    $a = LD8ri 0
+    $a = LD8ro %stack.0, 0
+    RET16 implicit-def $sps, implicit $sps, implicit $a, implicit $f_alt
+...
+---
+name: multiple_reads
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 1, alignment: 1 }
+# CHECK-LABEL: name: multiple_reads
+# CHECK-NOT: ALT_SWAP
+# CHECK: RET16
+body: |
+  bb.0:
+    liveins: $a
+    LD8or %stack.0, 0, $a
+    $a = LD8ri 0
+    $a = LD8ro %stack.0, 0
+    LD8ma 16384, implicit $a :: (volatile store (s8))
+    $a = LD8ri 0
+    $a = LD8ro %stack.0, 0
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...
+---
+name: primary_live
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 1, alignment: 1 }
+# CHECK-LABEL: name: primary_live
+# CHECK-NOT: ALT_SWAP
+# CHECK: RET16
+body: |
+  bb.0:
+    liveins: $a, $b
+    LD8or %stack.0, 0, $b
+    $b = LD8ri 0
+    $c = LD8ro %stack.0, 0
+    RET16 implicit-def $sps, implicit $sps, implicit $a, implicit $c
+...

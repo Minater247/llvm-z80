@@ -1435,6 +1435,12 @@ def : Pat<(bswap R16:$src),
 let hasSideEffects = 1 in {
   def ALT_SAVE8 : Pseudo<"", "", "", (outs ALT8:$dst), (ins R8:$src)>;
   def ALT_LOAD8 : Pseudo<"", "", "", (outs R8:$dst), (ins ALT8:$src)>;
+  // Exchanges transfer ownership when the discarded accumulator and both
+  // flag values are dead. Allocation restricts these forms to AF'.
+  let Defs = [A, F, F_ALT] in
+  def ALT_SWAP_SAVE8 : Pseudo<"", "", "", (outs ALT8:$dst), (ins R8:$src)>;
+  let Defs = [A, A_ALT, F, F_ALT] in
+  def ALT_SWAP_LOAD8 : Pseudo<"", "", "", (outs R8:$dst), (ins ALT8:$src)>;
   def ALT_SAVE16 : Pseudo<"", "", "", (outs ALT16:$dst), (ins R16:$src)>;
   def ALT_LOAD16 : Pseudo<"", "", "", (outs R16:$dst), (ins ALT16:$src)>;
   def ALT_SAVE24 : Pseudo<"", "", "", (outs ALT24:$dst), (ins R24:$src)>;

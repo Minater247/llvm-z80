@@ -18,7 +18,7 @@ tracksRegLiveness: true
 # CHECK: $[[WORD:bc_alt|de_alt|hl_alt]] = ALT_SAVE16
 # CHECK: CALL16
 # CHECK: ALT_LOAD16 {{.*}}$[[WORD]]
-# CHECK: $a_alt = ALT_SAVE8
+# CHECK: $a_alt = ALT_SWAP_SAVE8
 # CHECK: CALL16
 # CHECK: ALT_LOAD8 $a_alt
 body: |

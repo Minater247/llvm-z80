@@ -34,8 +34,8 @@ tracksRegLiveness: true
 stack:
   - { id: 0, type: spill-slot, size: 1, alignment: 1 }
 # CHECK-LABEL: name: repeated_byte
-# CHECK: $a_alt = ALT_SAVE8 $b
-# CHECK: $c = ALT_LOAD8 $a_alt
+# CHECK: $a_alt = ALT_SWAP_SAVE8 $b
+# CHECK: $c = ALT_SWAP_LOAD8 $a_alt
 # CHECK-NEXT: $d = COPY $c
 body: |
   bb.0:

@@ -469,9 +469,13 @@ bool Z80BranchSelector::runOnMachineFunction(MachineFunction &MF) {
           break;
         }
         default:
-          // Assume worst case.
-          Tracker.advance(128);
-          LLVM_DEBUG(dbgs() << "(Unknown Instruction) ");
+          if (auto Size = TII.getEmissionPseudoSize(MI))
+            Tracker.advance(*Size);
+          else {
+            // Unknown expansions retain the conservative displacement bound.
+            Tracker.advance(128);
+            LLVM_DEBUG(dbgs() << "(Unknown Instruction) ");
+          }
           break;
         }
       else

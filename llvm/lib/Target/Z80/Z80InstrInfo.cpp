@@ -166,11 +166,18 @@ unsigned llvm::Z80::bankAddCost(MCRegister Dst, MCRegister Src, bool Bytes) {
   return (Bytes ? 1 : 11) + Extra;
 }
 
-unsigned Z80InstrInfo::getInstSizeInBytes(const MachineInstr &MI) const {
+std::optional<unsigned>
+Z80InstrInfo::getEmissionPseudoSize(const MachineInstr &MI) const {
   // These atomic pseudos are expanded by the assembly printer, after
   // scheduling and liveness-based optimizations. Branch relaxation needs their
   // exact encoded size, including an index prefix on the main-bank operand.
   switch (MI.getOpcode()) {
+  case Z80::ALT_SWAP_SAVE8:
+  case Z80::ALT_SWAP_LOAD8: {
+    Register R = MI.getOperand(MI.getOpcode() == Z80::ALT_SWAP_LOAD8 ? 0 : 1)
+                     .getReg();
+    return 1 + unsigned(R != Z80::A) + unsigned(Z80::I8RegClass.contains(R));
+  }
   case Z80::SADDSAT8ar:
     return 7 + unsigned(Subtarget.is24Bit()) +
            unsigned(Z80::I8RegClass.contains(MI.getOperand(0).getReg()));
@@ -221,8 +228,13 @@ unsigned Z80InstrInfo::getInstSizeInBytes(const MachineInstr &MI) const {
                        : 3 + unsigned(Z80::I8RegClass.contains(R));
   }
   default:
-    break;
+    return std::nullopt;
   }
+}
+
+unsigned Z80InstrInfo::getInstSizeInBytes(const MachineInstr &MI) const {
+  if (auto Size = getEmissionPseudoSize(MI))
+    return *Size;
   unsigned Size = 0;
   const MCInstrDesc &Desc = MI.getDesc();
   auto TSFlags = Desc.TSFlags;

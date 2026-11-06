@@ -275,6 +275,30 @@ void Z80AsmPrinter::emitInstruction(const MachineInstr *MI) {
     Emit(Z80::EXX16);
     return;
   }
+  if (Opc == Z80::ALT_SWAP_SAVE8 || Opc == Z80::ALT_SWAP_LOAD8) {
+    bool Load = Opc == Z80::ALT_SWAP_LOAD8;
+    MCRegister Main = MI->getOperand(Load ? 0 : 1).getReg();
+    auto Exchange = [&] {
+      MCInst Inst;
+      Inst.setOpcode(Z80::EXAF);
+      EmitToStreamer(*OutStreamer, Inst);
+    };
+    if (Load)
+      Exchange();
+    if (Main != Z80::A) {
+      MCInst Inst;
+      Inst.setOpcode(Z80::I8RegClass.contains(Main)
+                         ? (Z80::X8RegClass.contains(Main) ? Z80::LD8xx
+                                                         : Z80::LD8yy)
+                         : Z80::LD8gg);
+      Inst.addOperand(MCOperand::createReg(Load ? Main : MCRegister(Z80::A)));
+      Inst.addOperand(MCOperand::createReg(Load ? MCRegister(Z80::A) : Main));
+      EmitToStreamer(*OutStreamer, Inst);
+    }
+    if (!Load)
+      Exchange();
+    return;
+  }
   bool Save = Opc == Z80::ALT_SAVE8 || Opc == Z80::ALT_SAVE16 || Opc == Z80::ALT_SAVE24;
   bool Load = Opc == Z80::ALT_LOAD8 || Opc == Z80::ALT_LOAD16 || Opc == Z80::ALT_LOAD24;
   if (Save || Load) {

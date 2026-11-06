@@ -5,6 +5,7 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/IR/InstrTypes.h"
+#include <optional>
 
 #define GET_INSTRINFO_HEADER
 #include "Z80GenInstrInfo.inc"
@@ -104,6 +105,10 @@ public:
 	}
 
 	unsigned getInstSizeInBytes(const MachineInstr &MI) const override;
+
+  /// Return the encoded size of a pseudo expanded during assembly emission.
+  /// Other instructions have no size supplied by this query.
+  std::optional<unsigned> getEmissionPseudoSize(const MachineInstr &MI) const;
 
 	// Branch analysis.
 	bool analyzeBranch(MachineBasicBlock &MBB, MachineBasicBlock *&TBB,

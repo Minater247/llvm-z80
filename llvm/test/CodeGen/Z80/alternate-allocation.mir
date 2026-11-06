@@ -28,8 +28,8 @@
 # CHECK: CALL16
 # CHECK: JP16 %bb.1
 # CHECK-LABEL: name: byte_bank
-# CHECK: $a_alt = ALT_SAVE8 $b
-# CHECK: $c = ALT_LOAD8 $a_alt
+# CHECK: $a_alt = ALT_SWAP_SAVE8 $b
+# CHECK: $c = ALT_SWAP_LOAD8 $a_alt
 # CHECK-LABEL: name: loop_bank
 # CHECK: $hl_alt = ALT_SAVE16 $hl
 # CHECK: bb.1:
