@@ -92,6 +92,7 @@ private:
                              MachineFunction &MF) const;
   bool selectMask(MachineInstr &I, MachineRegisterInfo &MRI,
                   MachineFunction &MF) const;
+  bool selectBitfieldMerge(MachineInstr &I, MachineRegisterInfo &MRI) const;
   bool selectALU8(MachineInstr &I, MachineRegisterInfo &MRI, unsigned OpcReg,
                   unsigned OpcImm, bool IsCommutative) const;
 
@@ -452,6 +453,8 @@ bool Z80InstructionSelector::select(MachineInstr &I) const {
           return true;
         break;
       case TargetOpcode::G_OR:
+        if (selectBitfieldMerge(I, MRI))
+          return true;
         if (selectALU8(I, MRI, Z80::OR8ar, Z80::OR8ai, true))
           return true;
         break;
@@ -1829,6 +1832,67 @@ bool Z80InstructionSelector::selectMask(MachineInstr &I,
   Builder.setInsertPt(Builder.getMBB(), std::next(Builder.getInsertPt()));
   return selectCopy(*Builder.buildCopy(DstReg, Register(Z80::A)), MRI) &&
          constrainSelectedInstRegOperands(I, TII, TRI, RBI);
+}
+
+/// Merge complementary byte fields while retaining the computed value in A.
+/// Each single-use mask contributes disjoint bits; XOR differences followed by
+/// one mask replace the two masked temporaries and their final OR.
+bool Z80InstructionSelector::selectBitfieldMerge(
+    MachineInstr &I, MachineRegisterInfo &MRI) const {
+  Register Sources[2];
+  uint8_t Masks[2];
+  for (unsigned N = 0; N != 2; ++N) {
+    Register R = I.getOperand(N + 1).getReg();
+    auto *And = getDefIgnoringCopies(R, MRI);
+    if (!And || And->getOpcode() != TargetOpcode::G_AND ||
+        !MRI.hasOneNonDBGUse(R) ||
+        !MRI.hasOneNonDBGUse(And->getOperand(0).getReg()))
+      return false;
+    auto Mask =
+        getIConstantVRegValWithLookThrough(And->getOperand(2).getReg(), MRI);
+    Sources[N] = And->getOperand(1).getReg();
+    if (!Mask) {
+      Mask =
+          getIConstantVRegValWithLookThrough(And->getOperand(1).getReg(), MRI);
+      Sources[N] = And->getOperand(2).getReg();
+    }
+    if (!Mask || Mask->Value.getBitWidth() != 8 || Mask->Value.isZero() ||
+        Mask->Value.isAllOnes())
+      return false;
+    Masks[N] = Mask->Value.getZExtValue();
+  }
+  if (uint8_t(Masks[0] ^ Masks[1]) != 255)
+    return false;
+  /* Start with the more recently produced operand. This often keeps its
+     arithmetic result in A while the older field occupies one byte register.
+     Bound the scan independently of the containing function's size. */
+  unsigned Recent = 0, Budget = 64;
+  for (auto It = I.getIterator(); It != I.getParent()->begin() && Budget--;) {
+    const auto &MI = *--It;
+    bool Found = false;
+    for (unsigned N = 0; N != 2; ++N)
+      if (&MI == MRI.getVRegDef(Sources[N])) {
+        Recent = N;
+        Found = true;
+        break;
+      }
+    if (Found)
+      break;
+  }
+  MachineIRBuilder B(I);
+  if (!selectCopy(*B.buildCopy(Z80::A, Sources[Recent]), MRI))
+    return false;
+  auto First = B.buildInstr(Z80::XOR8ar, {}, {Sources[1 - Recent]});
+  auto Mask = B.buildInstr(Z80::AND8ai, {}, {int64_t(Masks[Recent])});
+  auto Last = B.buildInstr(Z80::XOR8ar, {}, {Sources[1 - Recent]});
+  if (!constrainSelectedInstRegOperands(*First, TII, TRI, RBI) ||
+      !constrainSelectedInstRegOperands(*Mask, TII, TRI, RBI) ||
+      !constrainSelectedInstRegOperands(*Last, TII, TRI, RBI) ||
+      !selectCopy(*B.buildCopy(I.getOperand(0).getReg(), Register(Z80::A)),
+                  MRI))
+    return false;
+  I.eraseFromParent();
+  return true;
 }
 
 bool Z80InstructionSelector::selectALU8(MachineInstr &I,
