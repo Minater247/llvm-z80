@@ -1255,6 +1255,21 @@ static Register createIfVirtual(Register Reg, MachineRegisterInfo &MRI) {
   return Reg.isPhysical() ? Reg
                           : MRI.createVirtualRegister(MRI.getRegClass(Reg));
 }
+
+bool Z80InstrInfo::isSchedulingBoundary(const MachineInstr &MI,
+                                       const MachineBasicBlock *MBB,
+                                       const MachineFunction &MF) const {
+  /* Import ABI inputs before computing addresses. Keeping two incoming byte
+     pairs live across an address addition can occupy every legal source pair;
+     spilling a virtual value cannot release these fixed physical lifetimes. */
+  if (MBB == &MF.front() && MI.isCopy() &&
+      MI.getOperand(0).getReg().isVirtual() &&
+      MI.getOperand(1).getReg().isPhysical() &&
+      MF.getRegInfo().isLiveIn(MI.getOperand(1).getReg()))
+    return true;
+  return TargetInstrInfo::isSchedulingBoundary(MI, MBB, MF);
+}
+
 void Z80InstrInfo::rewriteFrameIndex(MachineInstr &MI, unsigned FIOperandNum,
                                      Register BaseReg, int64_t Offset,
                                      RegScavenger *RS, int SPAdj) const {
@@ -2223,6 +2238,7 @@ inline static bool isSZSettingInstr(MachineInstr &MI) {
   case Z80::ADD8ar:  case Z80::ADD8ai:  case Z80::ADD8ap:  case Z80::ADD8ao:
   case Z80::ADC8ar:  case Z80::ADC8ai:  case Z80::ADC8ap:  case Z80::ADC8ao:
   case Z80::SUB8ar:  case Z80::SUB8ai:  case Z80::SUB8ap:  case Z80::SUB8ao:
+  case Z80::SBC8aa:
   case Z80::SBC8ar:  case Z80::SBC8ai:  case Z80::SBC8ap:  case Z80::SBC8ao:
   case Z80::AND8ar:  case Z80::AND8ai:  case Z80::AND8ap:  case Z80::AND8ao:
   case Z80::XOR8ar:  case Z80::XOR8ai:  case Z80::XOR8ap:  case Z80::XOR8ao:
@@ -2419,6 +2435,7 @@ bool Z80InstrInfo::optimizeCompareInstr(MachineInstr &CmpInstr, Register SrcReg,
         OldCC = Z80::CondCode(Instr.getOperand(1).getImm());
         break;
       case Z80::ADC8ar: case Z80::ADC8ai: case Z80::ADC8ap: case Z80::ADC8ao:
+      case Z80::SBC8aa:
       case Z80::SBC8ar: case Z80::SBC8ai: case Z80::SBC8ap: case Z80::SBC8ao:
       case Z80::SBC16ao:case Z80::ADC16ao:
         OldCC = Z80::COND_C;

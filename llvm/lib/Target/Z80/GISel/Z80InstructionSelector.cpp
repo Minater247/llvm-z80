@@ -817,7 +817,7 @@ bool Z80InstructionSelector::selectSExt(MachineInstr &I,
   const TargetRegisterClass *FillRC;
   switch (DstTy.getSizeInBits()) {
   case 8:
-    FillOpc = Z80::SBC8ar;
+    FillOpc = Z80::SBC8aa;
     FillReg = Z80::A;
     FillRC = &Z80::R8RegClass;
     break;
@@ -840,9 +840,8 @@ bool Z80InstructionSelector::selectSExt(MachineInstr &I,
   if (!constrainSelectedInstRegOperands(*Rotate, TII, TRI, RBI))
     return false;
   auto Fill = MIB.buildInstr(FillOpc);
-  Fill->findRegisterUseOperand(FillReg, &TRI)->setIsUndef();
-  if (FillOpc == Z80::SBC8ar)
-    Fill.addReg(FillReg, RegState::Undef);
+  if (auto *Use = Fill->findRegisterUseOperand(FillReg, &TRI))
+    Use->setIsUndef();
   if (!constrainSelectedInstRegOperands(*Fill, TII, TRI, RBI))
     return false;
   auto CopyFromReg = MIB.buildCopy(DstReg, FillReg);
@@ -3064,7 +3063,7 @@ bool Z80InstructionSelector::selectShift(MachineInstr &I,
     case 8:
       Reg = Z80::A;
       AddOpc = Z80::RLC8g;
-      SbcOpc = Z80::SBC8ar;
+      SbcOpc = Z80::SBC8aa;
       RC = &Z80::R8RegClass;
       break;
     case 16:
@@ -3088,10 +3087,6 @@ bool Z80InstructionSelector::selectShift(MachineInstr &I,
     }
     auto AddI = MIB.buildInstr(AddOpc, {Ty}, {SrcReg});
     auto SbcI = MIB.buildInstr(SbcOpc);
-    if (Ty == LLT::scalar(8)) {
-      SbcI->findRegisterUseOperand(Reg, &TRI)->setIsUndef();
-      SbcI.addReg(Reg, RegState::Undef);
-    }
     MIB.buildCopy(DstReg, Reg);
     I.eraseFromParent();
     return constrainSelectedInstRegOperands(*AddI, TII, TRI, RBI) &&
@@ -3160,7 +3155,7 @@ bool Z80InstructionSelector::selectSetCond(unsigned ExtOpc, Register DstReg,
     SetOpc = Z80::LD8ri;
     SelectOpc = Z80::Select8;
     IncOpc = Z80::INC8r;
-    FillOpc = Z80::SBC8ar;
+    FillOpc = Z80::SBC8aa;
     FillReg = Z80::A;
     DstRC = &Z80::R8RegClass;
     break;
@@ -3209,18 +3204,9 @@ bool Z80InstructionSelector::selectSetCond(unsigned ExtOpc, Register DstReg,
         !constrainSelectedInstRegOperands(*SelectI, TII, TRI, RBI))
       return false;
   } else {
-    Register UndefReg = Z80::NoRegister;
-    if (FillOpc == Z80::SBC8ar) {
-      auto CopyUndefI = MIB.buildCopy(DstTy, FillReg);
-      CopyUndefI->findRegisterUseOperand(FillReg, &TRI)->setIsUndef();
-      UndefReg = CopyUndefI.getReg(0);
-      if (!RBI.constrainGenericRegister(UndefReg, *DstRC, MRI))
-        return false;
-    }
     auto FillI = MIB.buildInstr(FillOpc);
-    FillI->findRegisterUseOperand(FillReg, &TRI)->setIsUndef();
-    if (UndefReg)
-      FillI.addReg(UndefReg, RegState::Undef);
+    if (auto *Use = FillI->findRegisterUseOperand(FillReg, &TRI))
+      Use->setIsUndef();
     if (!constrainSelectedInstRegOperands(*FillI, TII, TRI, RBI))
       return false;
     if (ExtOpc == TargetOpcode::G_ZEXT) {

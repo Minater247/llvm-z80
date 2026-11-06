@@ -957,6 +957,10 @@ defm ADD : BinOp8RF <         0, "add">;
 defm ADC : BinOp8RFF<         1, "adc", adde>;
 defm SUB : BinOp8RF <         2, "sub", true, "\t$src">;
 defm SBC : BinOp8RFF<         3, "sbc", sube>;
+// The accumulator cancels itself: only carry supplies an input value.
+let Defs = [A, F], Uses = [F], isCodeGenOnly = 1 in
+  def SBC8aa : I<NoPre, 0x9F, "sbc", "\ta, a", "", (outs), (ins)>;
+
 multiclass ANDInstr<bits<3> opcode, string mnemonic> {
   let isCompare = false, Defs = [A, F], Uses = [A] in {
     def 8ar  : I <Idx0Pre, {0b10, opcode, 0b000}, mnemonic, "\t$src", "",

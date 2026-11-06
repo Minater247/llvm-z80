@@ -93,6 +93,11 @@ public:
 	///
 	const Z80RegisterInfo &getRegisterInfo() const { return RI; }
 
+  /// Preserve the entry ordering of copies from physical ABI inputs.
+  bool isSchedulingBoundary(const MachineInstr &MI,
+                            const MachineBasicBlock *MBB,
+                            const MachineFunction &MF) const override;
+
 	int getSPAdjust(const MachineInstr &MI) const override;
 
 	MachineInstr &applySPAdjust(MachineInstr &MI) const;

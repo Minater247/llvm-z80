@@ -258,7 +258,7 @@ Z80MachineLateOptimization::getKnownVal(const MachineInstr &MI) const {
     break;
   case Z80:: LD8ai: case Z80::LD16ai: case Z80::LD24ai:
   case Z80:: LD8ar: case Z80::LD8amb: case Z80:: LD8am: case Z80:: LD8ap:
-  case Z80::SExt8: case Z80::CPL: case Z80::NEG: case Z80::DAA:
+  case Z80::SExt8: case Z80::SBC8aa: case Z80::CPL: case Z80::NEG: case Z80::DAA:
   case Z80::RLCA: case Z80::RRCA: case Z80::RLA: case Z80::RRA:
   case Z80::RRD16: case Z80::RLD16: case Z80::RRD24: case Z80::RLD24:
   case Z80::ADD8ar: case Z80::ADD8ai: case Z80::ADD8ap: case Z80::ADD8ao:
@@ -377,6 +377,8 @@ Z80MachineLateOptimization::getKnownFlags(const MachineInstr &MI,
   case Z80::SBC8ao:
     if (Opc != Z80::SBC8ar || MI.getOperand(0).getReg() != Z80::A)
       return {SubtractFlag};
+    LLVM_FALLTHROUGH;
+  case Z80::SBC8aa:
     if (!(KnownFlagsMask & CarryFlag))
       return {SubtractFlag, ParityOverflowFlag};
     if (KnownFlagsVal & CarryFlag)

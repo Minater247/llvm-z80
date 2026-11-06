@@ -359,7 +359,7 @@ MachineBasicBlock *Z80TargetLowering::EmitLoweredSExt(
   switch (MI.getOpcode()) {
   default: llvm_unreachable("Unexpected opcode");
   case Z80::SExt8:
-    Opc = Z80::SBC8ar;
+    Opc = Z80::SBC8aa;
     Reg = Z80::A;
     break;
   case Z80::SExt16:
@@ -375,8 +375,6 @@ MachineBasicBlock *Z80TargetLowering::EmitLoweredSExt(
   if (MachineOperand *MO =
           MIB->findRegisterUseOperand(Reg, Subtarget.getRegisterInfo()))
     MO->setIsUndef();
-  if (Reg == Z80::A)
-    MIB.addReg(Reg, RegState::Undef);
   MI.eraseFromParent();
   return BB;
 }
