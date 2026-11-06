@@ -597,6 +597,21 @@ bool Z80StatePromotion::runOnModule(Module &M) {
     DominatorTree DT(*F);
     PromoteMemToReg({Slots.lookup(F)}, DT);
   }
+  /* Specialization can leave the memory-based leaf with a single caller.
+     Fold that remaining call into its caller after the banked calls have
+     moved to their new version. This also exposes accesses between inline
+     assembly memory barriers without carrying cached state across them. */
+  for (Function *F : Versions) {
+    if (!F->hasOneUse() || F->hasFnAttribute(Attribute::NoInline))
+      continue;
+    auto *C = dyn_cast<CallInst>(*F->user_begin());
+    if (!C || C->getCalledFunction() != F ||
+        C->hasFnAttr(Attribute::NoInline) || C->getFunction()->hasOptNone())
+      continue;
+    InlineFunctionInfo IFI;
+    if (InlineFunction(*C, IFI).isSuccess() && F->use_empty())
+      F->eraseFromParent();
+  }
   specializeAddressRegions(M);
   return true;
 }

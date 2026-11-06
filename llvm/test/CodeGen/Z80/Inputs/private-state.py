@@ -30,9 +30,27 @@ checks = 0
 for allocator in ('z80', 'greedy'):
     for bank in (False, True):
         for variant in ('ordinary', 'backward', 'word', 'disabled', 'volatile',
-                        'escaped', 'unsupported'):
+                        'escaped', 'unsupported', 'inline-leaf', 'barriers',
+                        'noinline-call', 'multiple-callers', 'optnone-caller'):
             text = Path(source).read_text()
-            if variant == 'backward':
+            if variant in ('inline-leaf', 'barriers', 'noinline-call',
+                           'multiple-callers', 'optnone-caller'):
+                text = text.replace('@advance() noinline', '@advance()')
+                prefix, outside = text.split('define i16 @outside()', 1)
+                if variant == 'barriers':
+                    outside = outside.replace('  call fastcc void @advance()',
+                        '  call void asm sideeffect "di", "~{memory}"()\n'
+                        '  call fastcc void @advance()\n'
+                        '  call void asm sideeffect "ei", "~{memory}"()')
+                elif variant == 'noinline-call':
+                    outside = outside.replace('call fastcc void @advance()',
+                                              'call fastcc void @advance() noinline')
+                elif variant == 'multiple-callers':
+                    outside += '\ndefine i16 @another() ' + outside
+                elif variant == 'optnone-caller':
+                    outside = ' noinline optnone' + outside
+                text = prefix + 'define i16 @outside()' + outside
+            elif variant == 'backward':
                 text = text.replace('add i16 %p, 1', 'add i16 %p, -1')
             elif variant == 'word':
                 text = text.replace('%next = or i16 %hi, %lo',
@@ -56,7 +74,16 @@ for allocator in ('z80', 'greedy'):
                             '-regalloc='+allocator, '-verify-machineinstrs',
                             str(ir), '-o', str(path)], check=True)
             assembly = path.read_text()
-            assert ('advance.state:' in assembly) == (bank and variant in ('ordinary', 'backward', 'word'))
+            promoted = bank and variant not in ('disabled', 'volatile', 'escaped', 'unsupported', 'optnone-caller')
+            assert ('advance.state:' in assembly) == promoted
+            inlined = bank and variant in ('inline-leaf', 'barriers')
+            assert ('\nadvance:' not in assembly) == inlined
+            if inlined:
+                body = assembly.split('\noutside:', 1)[1].split('.Lfunc_end', 1)[0]
+                assert 'call' not in body and 'cursor' not in body
+                assert 'private_word' in body
+                if variant == 'barriers':
+                    assert body.index('di') < body.index('private_word') < body.index('ei')
             assembly = re.sub(r'\bprivate_word\b', '8192', assembly)
             # The observer checks flushed memory, changes it, and destroys
             # volatile alternate registers, as an external callee may do.
