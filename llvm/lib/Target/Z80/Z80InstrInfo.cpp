@@ -1522,6 +1522,13 @@ bool Z80InstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
   switch (unsigned Opc = MI.getOpcode()) {
   default:
     return false;
+  case Z80::INCL16:
+  case Z80::DECL16:
+    MI.setDesc(get(Opc == Z80::INCL16 ? Z80::INC8r : Z80::DEC8r));
+    for (unsigned Op : {0u, 1u})
+      MI.getOperand(Op).setReg(
+          TRI.getSubReg(MI.getOperand(Op).getReg(), Z80::sub_low));
+    break;
   case Z80::BANK_ADD16:
     if (Z80::ALT16RegClass.contains(MI.getOperand(0).getReg()) ||
         Z80::ALT16RegClass.contains(MI.getOperand(2).getReg()))
@@ -1620,8 +1627,15 @@ bool Z80InstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
     if (!Load)
       Access.addReg(Z80::A);
     Access.cloneMemRefs(MI);
-    BuildMI(MBB, MI, DL, get(Offset > 0 ? Z80::DEC16r : Z80::INC16r), Base)
-        .addReg(Base);
+    bool Restore = !MI.getOperand(Op).isKill();
+    /* Prologue insertion has already processed the pseudo's preserved base.
+       Keep that contract for callee-saved pairs even when its local value dies. */
+    for (const MCPhysReg *Saved = TRI.getCalleeSavedRegs(&MF);
+         !Restore && Saved && *Saved; ++Saved)
+      Restore = TRI.regsOverlap(Base, *Saved);
+    if (Restore)
+      BuildMI(MBB, MI, DL, get(Offset > 0 ? Z80::DEC16r : Z80::INC16r), Base)
+          .addReg(Base);
     MI.eraseFromParent();
     return true;
   }

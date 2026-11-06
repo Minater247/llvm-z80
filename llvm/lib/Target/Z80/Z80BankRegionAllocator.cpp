@@ -170,6 +170,37 @@ bool Z80BankRegionAllocator::runOnMachineFunction(MachineFunction &MF) {
     return MainOpc && mainReg(MI.getOperand(Op).getReg()) ? MainOpc : 0;
   };
 
+  /* Import an accumulator value before activating its consumers' bank.
+     Register moves commute with bank operations that leave A and the source
+     untouched; keeping the import outside avoids an exchange round trip. */
+  for (auto &MBB : MF)
+    for (auto It = MBB.begin(); It != MBB.end();) {
+      auto &MI = *It++;
+      unsigned Opc = MI.getOpcode();
+      if ((Opc != Z80::LD8gg && Opc != Z80::LD8xx && Opc != Z80::LD8yy &&
+           Opc != Z80::LD8ri) ||
+          MI.isBundled() || MI.getOperand(0).getReg() != Z80::A ||
+          It == MBB.end() || !BankOpcode(*It))
+        continue;
+      Register Source =
+          MI.getOperand(1).isReg() ? MI.getOperand(1).getReg() : Register();
+      auto First = MI.getIterator();
+      unsigned Budget = 16;
+      while (First != MBB.begin() && Budget--) {
+        auto Before = std::prev(First);
+        if (!BankOpcode(*Before) || Before->isBundled() ||
+            Before->readsRegister(Z80::A, &TRI) ||
+            Before->modifiesRegister(Z80::A, &TRI) ||
+            (Source && Before->modifiesRegister(Source, &TRI)))
+          break;
+        First = Before;
+      }
+      if (First != MI.getIterator()) {
+        MBB.splice(First, &MBB, MI.getIterator());
+        Changed = true;
+      }
+    }
+
   /* A leaf whose body uses only resident pairs and unbanked operands can
      keep one activation through branches and loop backedges. Verify the
      physical assignment before applying the allocation-time cost estimate. */
@@ -647,6 +678,74 @@ bool Z80BankRegionAllocator::runOnMachineFunction(MachineFunction &MF) {
         Changed = true;
       }
     }
+  bool MovedAcrossBlocks = false;
+  if (!Wide)
+    for (auto &MBB : MF) {
+      if (MBB.succ_size() != 2 || MBB.pred_size() != 2 || MBB.empty() ||
+          !MBB.isSuccessor(&MBB) || !Entries.contains(&MBB.front()))
+        continue;
+      auto *Before = *llvm::find_if(MBB.predecessors(),
+                                    [&](auto *B) { return B != &MBB; });
+      auto *After =
+          *llvm::find_if(MBB.successors(), [&](auto *B) { return B != &MBB; });
+      if (Before->succ_size() != 1 || After->pred_size() != 1)
+        continue;
+      auto Branch = MBB.getFirstTerminator();
+      if (Branch == MBB.begin())
+        continue;
+      auto Exit = std::prev(Branch);
+      if (!Exits.contains(&*Exit))
+        continue;
+      bool Legal = true, UsesA = false;
+      for (auto I = std::next(MBB.begin()); I != Exit; ++I) {
+        Legal &= !I->isBundled() && !I->isCall() && !I->isInlineAsm() &&
+                 !I->isCFIInstruction() && !I->isDebugInstr() &&
+                 !I->hasUnmodeledSideEffects() &&
+                 I->getOpcode() != Z80::EXX16 && I->getOpcode() != Z80::EXX24 &&
+                 !Entries.contains(&*I) && !Exits.contains(&*I);
+        UsesA |=
+            I->readsRegister(Z80::A, &TRI) || I->modifiesRegister(Z80::A, &TRI);
+      }
+      for (auto I = Branch; I != MBB.end(); ++I)
+        Legal &=
+            I->isBranch() && llvm::none_of(I->operands(), [&](auto &MO) {
+              return MO.isRegMask() ||
+                     (MO.isReg() && MO.getReg() &&
+                      (switched(MO.getReg(), TRI) || mainReg(MO.getReg())));
+            });
+      if (!Legal)
+        continue;
+      /* A single-entry polling loop can keep the active bank around its
+         backedge. Move activation to the incoming edge and restoration to
+         the outgoing edge; both edges have dedicated blocks, so their other
+         successors and predecessors retain their original bank. */
+      if (!UsesA && !After->empty()) {
+        auto &Import = After->front();
+        unsigned Opc = Import.getOpcode();
+        if ((Opc == Z80::LD8gg || Opc == Z80::LD8xx || Opc == Z80::LD8yy ||
+             Opc == Z80::LD8ri) &&
+            !Import.isBundled() && Import.getOperand(0).getReg() == Z80::A) {
+          Register Source = Import.getOperand(1).isReg()
+                                ? Import.getOperand(1).getReg()
+                                : Register();
+          bool Stable =
+              !Source ||
+              llvm::none_of(
+                  make_range(std::next(MBB.begin()), Exit),
+                  [&](auto &MI) { return MI.modifiesRegister(Source, &TRI); });
+          /* This pure import is executed on every loop exit, and neither A
+             nor its source changes while waiting. Loading it before entry
+             also lets the following bank operation share the activation. */
+          if (Stable)
+            Before->splice(Before->getFirstTerminator(), After,
+                           Import.getIterator());
+        }
+      }
+      Before->splice(Before->getFirstTerminator(), &MBB, MBB.begin());
+      After->splice(After->begin(), &MBB, Exit);
+      MovedAcrossBlocks = true;
+      Changed = true;
+    }
   if (!Changed)
     return false;
   for (auto &MBB : MF) {
@@ -663,6 +762,8 @@ bool Z80BankRegionAllocator::runOnMachineFunction(MachineFunction &MF) {
                               MI.getOpcode() == Z80::SADDSAT8ai ||
                               MI.getOpcode() == Z80::SADDSAT8ap;
       if (Entries.contains(&MI) && LastExit) {
+        Exits.erase(LastExit);
+        Entries.erase(&MI);
         LastExit->eraseFromParent();
         MI.eraseFromParent();
         LastExit = nullptr;
@@ -684,6 +785,22 @@ bool Z80BankRegionAllocator::runOnMachineFunction(MachineFunction &MF) {
         LastExit = nullptr;
       }
     }
+  }
+  if (MovedAcrossBlocks) {
+    SmallVector<MachineBasicBlock *, 16> Blocks;
+    for (auto &MBB : MF) {
+      MBB.clearLiveIns();
+      Blocks.push_back(&MBB);
+      for (auto &MI : MBB)
+        for (auto &MO : MI.operands())
+          if (MO.isReg()) {
+            if (MO.isUse())
+              MO.setIsKill(false);
+            else
+              MO.setIsDead(false);
+          }
+    }
+    fullyRecomputeLiveIns(Blocks);
   }
   return Changed;
 }

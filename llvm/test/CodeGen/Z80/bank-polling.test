@@ -1,0 +1,1 @@
+# RUN: %python %S/Inputs/bank-polling.py --llc llc --work %t

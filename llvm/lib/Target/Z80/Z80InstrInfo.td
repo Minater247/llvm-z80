@@ -1460,6 +1460,12 @@ let Defs = [A, F], Uses = [A], hasSideEffects = 0 in {
   def SADDSAT8ap : Pseudo<"", "", "", (outs), (ins aptr:$src)>;
 }
 
+// Byte-wrapping cursor updates retain the unchanged page in their pair.
+let Defs = [F], hasSideEffects = 0 in {
+  def INCL16 : Pseudo<"", "", "$dst = $src", (outs R16:$dst), (ins R16:$src)>;
+  def DECL16 : Pseudo<"", "", "$dst = $src", (outs R16:$dst), (ins R16:$src)>;
+}
+
 // Bank-aware whole-pair operations preserve the inactive bank and flags.
 // They remain atomic until emission; ordinary byte operands still name A.
 let Defs = [SPS], Uses = [SPS], hasSideEffects = 0 in {

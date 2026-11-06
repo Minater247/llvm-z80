@@ -1,0 +1,33 @@
+# RUN: llc -mtriple=z80 -run-pass=postrapseudos -verify-machineinstrs %s -o - | FileCheck %s
+--- |
+  target triple = "z80"
+  define void @temporary() { ret void }
+  define preserve_allcc void @saved() { ret void }
+...
+---
+name: temporary
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $bc, $a
+    ST8_ADJ killed $bc, 1, $a
+    RET16 implicit-def $sps, implicit $sps
+...
+# CHECK-LABEL: name: temporary
+# CHECK: $bc = INC16r $bc
+# CHECK-NEXT: LD8pa $bc, $a
+# CHECK-NEXT: RET16
+---
+name: saved
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $bc, $a
+    ST8_ADJ killed $bc, 1, $a
+    RET16 implicit-def $sps, implicit $sps
+...
+# CHECK-LABEL: name: saved
+# CHECK: $bc = INC16r $bc
+# CHECK-NEXT: LD8pa $bc, $a
+# CHECK-NEXT: $bc = DEC16r $bc
+# CHECK-NEXT: RET16

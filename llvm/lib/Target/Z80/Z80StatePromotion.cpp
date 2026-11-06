@@ -229,6 +229,36 @@ static bool specializeAddressRegions(Module &M) {
         C->eraseFromParent();
       }
   }
+  /* Repeated calls to one small leaf can share its address and cursor ranges
+     throughout a region. Bound duplication to eight calls into the already
+     limited 32-instruction leaf, and retain explicit inlining restrictions.
+     The surrounding region still preserves its borrowed bank at the boundary.
+   */
+  for (auto [Leaf, Version] : Versions) {
+    SmallVector<CallInst *, 8> Calls;
+    Function *Caller = nullptr;
+    bool Local = true;
+    for (User *U : Version->users()) {
+      auto *C = dyn_cast<CallInst>(U);
+      if (!C || C->getCalledFunction() != Version ||
+          C->hasFnAttr(Attribute::NoInline) || C->getFunction()->hasOptNone() ||
+          (Caller && C->getFunction() != Caller)) {
+        Local = false;
+        break;
+      }
+      Caller = C->getFunction();
+      Calls.push_back(C);
+    }
+    if (!Local || Calls.size() < 3 || Calls.size() > 8 ||
+        Version->hasFnAttribute(Attribute::NoInline))
+      continue;
+    for (CallInst *C : Calls) {
+      InlineFunctionInfo IFI;
+      InlineFunction(*C, IFI);
+    }
+    if (Version->use_empty())
+      Version->eraseFromParent();
+  }
   return !Regions.empty();
 }
 

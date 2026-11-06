@@ -26,6 +26,7 @@
 #include "llvm/CodeGen/GlobalISel/InstructionSelector.h"
 #include "llvm/CodeGen/GlobalISel/MIPatternMatch.h"
 #include "llvm/CodeGen/GlobalISel/MachineIRBuilder.h"
+#include "llvm/CodeGen/MachineDominators.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineJumpTableInfo.h"
 #include "llvm/Support/Debug.h"
@@ -47,6 +48,18 @@ public:
   Z80InstructionSelector(const Z80TargetMachine &TM, const Z80Subtarget &STI,
                          const Z80RegisterBankInfo &RBI);
 
+  void setupMF(MachineFunction &MF, GISelValueTracking *VT,
+               CodeGenCoverage *Coverage = nullptr,
+               ProfileSummaryInfo *PSI = nullptr,
+               BlockFrequencyInfo *BFI = nullptr) override {
+    PageDominators.reset();
+    HasCalls = llvm::any_of(MF, [](const MachineBasicBlock &MBB) {
+      return llvm::any_of(MBB,
+                          [](const MachineInstr &MI) { return MI.isCall(); });
+    });
+    InstructionSelector::setupMF(MF, VT, Coverage, PSI, BFI);
+  }
+
   bool select(MachineInstr &I) const;
   bool select(MachineInstr &I) override {
     return static_cast<const Z80InstructionSelector *>(this)->select(I);
@@ -54,6 +67,8 @@ public:
   static const char *getName() { return DEBUG_TYPE; }
 
 private:
+  mutable std::optional<MachineDominatorTree> PageDominators;
+  bool HasCalls = false;
   Register createGenericVirtualRegister(MachineRegisterInfo &MRI, LLT Ty,
                                         StringRef Name = "") const;
 
@@ -1166,13 +1181,29 @@ bool Z80InstructionSelector::selectLoadStore(MachineInstr &I,
       MemoryUses += Use.mayLoadOrStore();
     }
     bool Shared = MemoryUses > 1;
+    /* A constructed page address can profit from one neighboring access.
+       Ordinary pointer streams retain their advancing cursor form: restoring
+       their base after each access would add work inside the stream loop. */
+    bool ConstantPage = false;
+    if (auto *Def = MRI.getVRegDef(Base))
+      if (Def->getOpcode() == TargetOpcode::G_INTTOPTR)
+        if (auto *Pair = MRI.getVRegDef(Def->getOperand(1).getReg()))
+          ConstantPage = Pair->getOpcode() == TargetOpcode::G_MERGE_VALUES &&
+                         Pair->getNumOperands() == 3 &&
+                         getIConstantVRegVal(Pair->getOperand(2).getReg(), MRI)
+                             .has_value();
     if (!Shared) {
       Budget = 32;
       for (const MachineInstr &Use : MRI.use_nodbg_instructions(Base)) {
         if (!Budget--)
           break;
         Shared |= Use.getOpcode() == Z80::LD8_ADJ ||
-                  Use.getOpcode() == Z80::ST8_ADJ;
+                  Use.getOpcode() == Z80::ST8_ADJ ||
+                  (ConstantPage && Use.hasOneMemOperand() &&
+                   (*Use.memoperands_begin())->getSize() == 1 &&
+                   (Use.getOpcode() == TargetOpcode::G_LOAD ||
+                    Use.getOpcode() == TargetOpcode::G_STORE) &&
+                   Use.getOperand(1).getReg() == Base);
       }
     }
     if (Offset && (Offset->isOne() || Offset->isAllOnes()) &&
@@ -2173,19 +2204,59 @@ bool Z80InstructionSelector::selectMergeValues(MachineInstr &I,
           break;
         }
       }
+      /* The preceding cursor can dominate through conditionals or polling
+         loops. Reuse its value without moving any memory operation, retaining
+         a single pair through the sequence instead of reconstructing each
+         low-byte offset from the original cursor. */
+      if (!Previous && Original && !HasCalls && std::abs(Step) <= 16) {
+        if (!PageDominators)
+          PageDominators.emplace(MF);
+        auto *Node = PageDominators->getNode(I.getParent());
+        Node = Node ? Node->getIDom() : nullptr;
+        unsigned Budget = 256;
+        for (; Node && !Previous && Budget; Node = Node->getIDom()) {
+          for (auto &Candidate : llvm::reverse(*Node->getBlock())) {
+            if (!Budget)
+              break;
+            --Budget;
+            Register CandidateBase, CandidatePage, CandidateOriginal;
+            int64_t CandidateStep;
+            MachineInstr *CandidateAdd;
+            if (pageCursor(Candidate, MRI, CandidateBase, CandidatePage,
+                           CandidateOriginal, CandidateStep, CandidateAdd) &&
+                CandidateOriginal == Original &&
+                CandidateStep == Step - Direction) {
+              if (CandidateAdd)
+                CandidateAdd->setFlags(0);
+              Previous = Candidate.getOperand(0).getReg();
+              break;
+            }
+          }
+        }
+      }
       if (Previous) {
-        Register Byte = MRI.createVirtualRegister(&Z80::R8RegClass);
-        auto Copy = MIB.buildInstr(TargetOpcode::COPY, {Byte}, {})
-                        .addReg(Previous, 0, Z80::sub_low);
-        if (!selectCopy(*Copy, MRI))
-          return false;
-        auto Inc = MIB.buildInstr(Direction > 0 ? Z80::INC8r : Z80::DEC8r,
-                                  {&Z80::R8RegClass}, {Byte});
-        auto Insert = MIB.buildInstr(TargetOpcode::INSERT_SUBREG, {DstReg},
-                                    {Previous, Inc, int64_t(Z80::sub_low)});
-        if (!constrainSelectedInstRegOperands(*Inc, TII, TRI, RBI) ||
-            !constrainSelectedInstRegOperands(*Insert, TII, TRI, RBI))
-          return false;
+        if (Original && !HasCalls) {
+          auto Inc = MIB.buildInstr(Direction > 0 ? Z80::INCL16 : Z80::DECL16,
+                                    {DstReg}, {Previous});
+          if (!constrainSelectedInstRegOperands(*Inc, TII, TRI, RBI))
+            return false;
+        } else {
+          /* Independent lanes let allocation rematerialize a constant page
+             and preserve either byte across calls. Use the whole-pair form
+             for leaf regions, where updates can retain bank residency. */
+          Register Byte = MRI.createVirtualRegister(&Z80::R8RegClass);
+          auto Copy = MIB.buildInstr(TargetOpcode::COPY, {Byte}, {})
+                          .addReg(Previous, 0, Z80::sub_low);
+          if (!selectCopy(*Copy, MRI))
+            return false;
+          auto Inc = MIB.buildInstr(Direction > 0 ? Z80::INC8r : Z80::DEC8r,
+                                    {&Z80::R8RegClass}, {Byte});
+          auto Insert = MIB.buildInstr(TargetOpcode::INSERT_SUBREG, {DstReg},
+                                       {Previous, Inc, int64_t(Z80::sub_low)});
+          if (!constrainSelectedInstRegOperands(*Inc, TII, TRI, RBI) ||
+              !constrainSelectedInstRegOperands(*Insert, TII, TRI, RBI))
+            return false;
+        }
         I.eraseFromParent();
         return RBI.constrainGenericRegister(DstReg, *RC, MRI);
       }

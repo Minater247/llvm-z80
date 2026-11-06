@@ -136,6 +136,31 @@ bool Z80PrivateMemory::runOnModule(Module &M) {
         DT = std::make_unique<DominatorTree>(F);
         LI = std::make_unique<LoopInfo>(*DT);
       }
+      /* A nonescaping byte cannot change within a read-only leaf. Late
+         specialization can expose repeated reads after the ordinary scalar
+         optimizations have run; share their value at their common dominator. */
+      if (Effects.lookup(&F) == Read &&
+          llvm::all_of(Calls[&F], [](CallInst *C) {
+            return C->doesNotAccessMemory() &&
+                   C->hasFnAttr(Attribute::NoCallback);
+          })) {
+        BasicBlock *Block = It->second.front()->getParent();
+        for (Instruction *I : drop_begin(It->second)) {
+          Block = DT->findNearestCommonDominator(Block, I->getParent());
+          if (!Block)
+            break;
+        }
+        if (Block) {
+          IRBuilder<> B(&*Block->getFirstInsertionPt());
+          auto *Value = B.CreateLoad(G.getValueType(), &G, "private.value");
+          for (Instruction *I : It->second) {
+            I->replaceAllUsesWith(Value);
+            I->eraseFromParent();
+          }
+          Changed = true;
+          continue;
+        }
+      }
       BasicBlock *Header = It->second.front()->getParent();
       Loop *HeaderLoop = LI->getLoopFor(Header);
       /* A leaf cursor loop amortizes its entry load and exit store even

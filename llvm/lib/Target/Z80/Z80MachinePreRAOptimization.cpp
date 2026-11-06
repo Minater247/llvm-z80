@@ -17,6 +17,7 @@
 #include "Z80MachineFunctionInfo.h"
 #include "Z80Subtarget.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/MapVector.h"
 #include <optional>
 #include <tuple>
 
@@ -38,6 +39,68 @@
 using namespace llvm;
 
 namespace {
+/// Offer a shared pointer for repeated absolute accumulator accesses.
+/// Memory operations retain their position and metadata. Allocation can keep
+/// the pointer in either bank or rematerialize its direct-address accesses.
+static bool shareAbsoluteByteAddresses(MachineFunction &MF) {
+  const auto &ST = MF.getSubtarget<Z80Subtarget>();
+  if (!ST.useAlternateRegs() || !ST.is16Bit() || ST.hasEZ80Ops())
+    return false;
+  if (MF.getFunction().getCallingConv() != CallingConv::Z80_BankState)
+    return false;
+  for (const auto &MBB : MF)
+    for (const auto &MI : MBB)
+      if (MI.isCall() || MI.isInlineAsm())
+        return false;
+  MapVector<int64_t, SmallVector<MachineInstr *, 8>> Accesses;
+  for (auto &MBB : MF)
+    for (auto &MI : MBB)
+      if ((MI.getOpcode() == Z80::LD8am || MI.getOpcode() == Z80::LD8ma) &&
+          !MI.isBundled() && MI.getOperand(0).isImm())
+        Accesses[MI.getOperand(0).getImm()].push_back(&MI);
+  if (llvm::none_of(Accesses,
+                    [](const auto &Entry) { return Entry.second.size() >= 3; }))
+    return false;
+  const auto &TII = *ST.getInstrInfo();
+  auto &MRI = MF.getRegInfo();
+  MachineDominatorTree DT(MF);
+  bool Changed = false;
+  for (auto &[Address, Uses] : Accesses) {
+    if (Uses.size() < 3)
+      continue;
+    MachineBasicBlock *Block = Uses.front()->getParent();
+    for (auto *MI : drop_begin(Uses)) {
+      Block = DT.findNearestCommonDominator(Block, MI->getParent());
+      if (!Block)
+        break;
+    }
+    if (!Block)
+      continue;
+    Register Pointer = MRI.createVirtualRegister(&Z80::R16RegClass);
+    BuildMI(*Block, Block->getFirstNonPHI(), DebugLoc(), TII.get(Z80::LD16ri),
+            Pointer)
+        .addImm(Address);
+    for (auto *MI : Uses) {
+      bool Load = MI->getOpcode() == Z80::LD8am;
+      auto Access =
+          BuildMI(*MI->getParent(), MI->getIterator(), MI->getDebugLoc(),
+                  TII.get(Load ? Z80::LD8ap : Z80::LD8pa));
+      MachineOperand Acc =
+          Load ? *MI->findRegisterDefOperand(Z80::A, ST.getRegisterInfo())
+               : *MI->findRegisterUseOperand(Z80::A, ST.getRegisterInfo());
+      Acc.setImplicit(false);
+      if (Load)
+        Access.add(Acc).addReg(Pointer);
+      else
+        Access.addReg(Pointer).add(Acc);
+      Access.cloneMemRefs(*MI).setMIFlags(MI->getFlags());
+      MI->eraseFromParent();
+    }
+    Changed = true;
+  }
+  return Changed;
+}
+
 /// Expose whole-pair bank choices after copy coalescing and before allocation.
 /// Byte accesses retain primary operands; completed pairs can move to a bank.
 static bool selectBankInstructions(MachineFunction &MF) {
@@ -206,7 +269,8 @@ static bool selectBankInstructions(MachineFunction &MF) {
       AccumulatorStore |= Opc == Z80::LD8pa;
       MemoryAddress |= Opc == Z80::LD8ap || Opc == Z80::LD8pa ||
                        Opc == Z80::LD8A_POST16 || CanUseAccumulator;
-      HasBankOperation |= Opc == Z80::ADD16rr || Opc == Z80::INC16r ||
+      HasBankOperation |= Opc == Z80::INCL16 || Opc == Z80::DECL16 ||
+                          Opc == Z80::ADD16rr || Opc == Z80::INC16r ||
                           Opc == Z80::DEC16r || Opc == Z80::LD8ap ||
                           Opc == Z80::LD8pa || Opc == Z80::LD8A_POST16;
       /* A fixed bank argument has already paid for residency. Expose its
@@ -219,8 +283,9 @@ static bool selectBankInstructions(MachineFunction &MF) {
         BankAddresses.insert(R);
       if (Opc != TargetOpcode::COPY && Opc != Z80::BANK_KNOWN16 &&
           Opc != Z80::LD16ri && !BankMemory && Opc != Z80::ADD16rr &&
-          Opc != Z80::INC16r && Opc != Z80::DEC16r && Opc != Z80::LD8ap &&
-          Opc != Z80::LD8pa && Opc != Z80::LD8A_POST16 && !CanUseAccumulator) {
+          Opc != Z80::INCL16 && Opc != Z80::DECL16 && Opc != Z80::INC16r &&
+          Opc != Z80::DEC16r && Opc != Z80::LD8ap && Opc != Z80::LD8pa &&
+          Opc != Z80::LD8A_POST16 && !CanUseAccumulator) {
         Eligible = false;
         break;
       }
@@ -282,6 +347,8 @@ static bool selectBankInstructions(MachineFunction &MF) {
   // endpoints through the chain before widening any register class.
   auto UpdateOperand = [](const MachineInstr &MI) -> std::optional<unsigned> {
     switch (MI.getOpcode()) {
+    case Z80::INCL16:
+    case Z80::DECL16:
     case Z80::INC16r:
     case Z80::DEC16r:
       return 0;
@@ -418,6 +485,12 @@ static bool selectBankInstructions(MachineFunction &MF) {
         break;
       case Z80::LD16ri:
         NewOpc = Z80::BANK_LD16ri;
+        break;
+      case Z80::INCL16:
+        NewOpc = Z80::BANK_INCL16;
+        break;
+      case Z80::DECL16:
+        NewOpc = Z80::BANK_DECL16;
         break;
       case Z80::INC16r:
         NewOpc = Z80::BANK_INC16;
@@ -2398,6 +2471,7 @@ bool Z80MachinePreRAOptimization::runOnMachineFunction(MachineFunction &MF) {
   Changed |= separateStableLanes(MF, Z80::sub_low);
   Changed |= sinkIncomingCopies(MF);
   Changed |= sinkAccumulatorCaptures(MF);
+  Changed |= shareAbsoluteByteAddresses(MF);
   Changed |= selectBankInstructions(MF);
   identifySingleBankRegion(MF);
   return Changed;

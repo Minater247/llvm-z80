@@ -9,6 +9,7 @@
 #include "Z80.h"
 #include "Z80Subtarget.h"
 #include "Z80TargetMachine.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/Dominators.h"
@@ -41,7 +42,7 @@ public:
 };
 } // namespace
 
-/// Express repeated neighboring byte addresses relative to one live base.
+/// Express neighboring byte addresses relative to one live base.
 /// Disjoint constant bits prove that their difference is a fixed displacement.
 /// The base must dominate its neighbor, whose uses are byte loads and stores.
 bool Z80PrepareAddresses::runOnFunction(Function &F) {
@@ -58,7 +59,7 @@ bool Z80PrepareAddresses::runOnFunction(Function &F) {
   for (Instruction &I : instructions(F)) {
     auto *P = dyn_cast<IntToPtrInst>(&I);
     if (!P || P->getAddressSpace() ||
-        !P->getOperand(0)->getType()->isIntegerTy(16) || !P->hasNUsesOrMore(2))
+        !P->getOperand(0)->getType()->isIntegerTy(16))
       continue;
     auto *B = dyn_cast<BinaryOperator>(P->getOperand(0));
     if (!B || B->getOpcode() != Instruction::Or)
@@ -84,6 +85,7 @@ bool Z80PrepareAddresses::runOnFunction(Function &F) {
     return false;
   DominatorTree DT(F);
   SmallPtrSet<IntToPtrInst *, 8> Replaced;
+  DenseMap<Value *, SmallVector<Instruction *, 2>> Shared;
   bool Changed = false;
   for (const auto &A : Addresses)
     for (const auto &B : Addresses) {
@@ -93,10 +95,23 @@ bool Z80PrepareAddresses::runOnFunction(Function &F) {
           Replaced.contains(A.Pointer) || Replaced.contains(B.Pointer) ||
           !DT.dominates(B.Pointer, A.Pointer))
         continue;
-      IRBuilder<> At(A.Pointer);
-      Value *P = At.CreateGEP(At.getInt8Ty(), B.Pointer,
-                              ConstantInt::get(F.getContext(), Difference),
-                              "adjacent.address");
+      /* CodeGenPrepare can sink separate casts of the same integer into
+         several blocks. Keep a dominating displacement shared so selection
+         sees the complete address lifetime, including single-use casts. */
+      auto &Earlier = Shared[A.Pointer->getOperand(0)];
+      Instruction *P = nullptr;
+      for (auto *Candidate : Earlier)
+        if (DT.dominates(Candidate, A.Pointer)) {
+          P = Candidate;
+          break;
+        }
+      if (!P) {
+        IRBuilder<> At(A.Pointer);
+        P = cast<Instruction>(At.CreateGEP(
+            At.getInt8Ty(), B.Pointer,
+            ConstantInt::get(F.getContext(), Difference), "adjacent.address"));
+        Earlier.push_back(P);
+      }
       A.Pointer->replaceAllUsesWith(P);
       Replaced.insert(A.Pointer);
       Changed = true;
