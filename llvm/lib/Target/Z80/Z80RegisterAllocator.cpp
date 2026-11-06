@@ -366,6 +366,7 @@ class Z80RegisterAllocator final : public MachineFunctionPass,
   bool split(const LiveInterval &LI, SmallVectorImpl<Register> &NewRegs,
              bool MainBank = false);
   void refine();
+  void refinePlacementRegions();
   void refineSpillAccesses();
   void refineSpillTransfers();
   void reuseSpillValues();
@@ -1684,6 +1685,108 @@ void Z80RegisterAllocator::refine() {
       search(std::move(Region), 16384);
 }
 
+/// Reassign costly pairs with the ranges needed to relocate their blockers.
+/// Each search retains all outside assignments and accepts only a lower-cost
+/// feasible arrangement. Bounded neighborhoods also cover large interference
+/// components that cannot be searched as a whole.
+void Z80RegisterAllocator::refinePlacementRegions() {
+  struct Proposal {
+    Register R;
+    MCRegister Target;
+    double Saving;
+  };
+  SmallVector<Proposal, 32> Proposals;
+  for (unsigned I = 0; I != MRI->getNumVirtRegs(); ++I) {
+    Register R = Register::index2VirtReg(I);
+    if (!VRM->hasPhys(R) || !LIS->hasInterval(R) ||
+        LIS->getInterval(R).empty())
+      continue;
+    MCRegister Current = VRM->getPhys(R);
+    if (!Z80::I16RegClass.contains(Current) &&
+        !Z80::ALT16RegClass.contains(Current))
+      continue;
+    const auto &LI = LIS->getInterval(R);
+    SmallVector<std::pair<double, MCRegister>, 12> Costs;
+    for (MCRegister P : domain(R))
+      if (!Matrix->checkRegMaskInterference(LI, P) &&
+          !Matrix->checkRegUnitInterference(LI, P))
+        Costs.emplace_back(0, P);
+    if (Costs.size() < 2)
+      continue;
+    accessCosts(R, Costs);
+    auto At =
+        llvm::find_if(Costs, [&](const auto &C) { return C.second == Current; });
+    if (At == Costs.end())
+      continue;
+    double Original = At->first;
+    for (auto [Cost, P] : Costs)
+      if (Cost + 1e-6 < Original && Z80::G16RegClass.contains(P))
+        Proposals.push_back({R, P, Original - Cost});
+  }
+  llvm::stable_sort(Proposals, [](const Proposal &A, const Proposal &B) {
+    return A.Saving > B.Saving;
+  });
+  unsigned Attempts = 0;
+  for (const Proposal &Candidate : Proposals) {
+    Register R = Candidate.R;
+    MCRegister Target = Candidate.Target;
+    if (Attempts == 16 || !RemainingStates)
+      break;
+    auto &LI = LIS->getInterval(R);
+    if (VRM->getPhys(R) == Target)
+      continue;
+    auto Region = blockers(LI, Target);
+    llvm::erase_if(Region, [&](Register B) { return B == R; });
+    if (Region.size() > 7)
+      continue;
+    Region.push_back(R);
+    /* Relocating a byte can require moving a second byte before its pair is
+       free. Include those indirect blockers as well as the direct ones.
+       Prefer short relocation chains so the existing search budget can
+       examine the resulting combinations. */
+    bool Valid = true;
+    for (unsigned N = 0; N != Region.size(); ++N) {
+      Register Other = Region[N];
+      if (Other == R)
+        continue;
+      const auto &OtherLI = LIS->getInterval(Other);
+      SmallVector<std::pair<double, MCRegister>, 12> Costs;
+      for (MCRegister P : domain(Other))
+        if (P != VRM->getPhys(Other) &&
+            !interferes(LI, Target, OtherLI, P, *TRI) &&
+            !Matrix->checkRegMaskInterference(OtherLI, P) &&
+            !Matrix->checkRegUnitInterference(OtherLI, P))
+          Costs.emplace_back(0, P);
+      accessCosts(Other, Costs);
+      SmallVector<Register, 8> Best;
+      unsigned BestCount = 9;
+      double BestCost = std::numeric_limits<double>::infinity();
+      for (auto [Cost, P] : Costs) {
+        auto Extra = blockers(OtherLI, P);
+        llvm::erase_if(Extra,
+                       [&](Register B) { return llvm::is_contained(Region, B); });
+        if (Extra.size() + Region.size() > 8)
+          continue;
+        if (Extra.size() < BestCount ||
+            (Extra.size() == BestCount && Cost < BestCost)) {
+          BestCount = Extra.size();
+          BestCost = Cost;
+          Best = std::move(Extra);
+        }
+      }
+      if (BestCount == 9) {
+        Valid = false;
+        break;
+      }
+      Region.append(Best);
+    }
+    if (Valid) {
+      ++Attempts;
+      search(std::move(Region), 512);
+    }
+  }
+}
+
 // Reconsider index placements using the spill accesses left by allocation.
 // Retain all other assignments and move each affected range at most once.
 void Z80RegisterAllocator::refineSpillAccesses() {
@@ -1912,6 +2015,8 @@ bool Z80RegisterAllocator::runOnMachineFunction(MachineFunction &Func) {
   coalesceSplits();
   if (RemainingStates)
     refine();
+  if (RemainingStates)
+    refinePlacementRegions();
   refineSpillAccesses();
   refineSpillTransfers();
   reuseSpillValues();
