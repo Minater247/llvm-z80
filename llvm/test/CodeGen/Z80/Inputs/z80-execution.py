@@ -156,6 +156,17 @@ class CPU:
                     self.cycles += 4 + prefix
                 else:
                     self.cycles += (10 if pair else 7) + prefix
+            elif op == 'ldir':
+                count = self.get('bc') or 65536
+                for _ in range(count):
+                    value = self.read('(hl)')
+                    self.write('(de)', value)
+                    self.put('hl', self.get('hl') + 1)
+                    self.put('de', self.get('de') + 1)
+                self.put('bc', 0)
+                value = (self.get('a') + value) & 255
+                self.r['f'] = (self.r['f'] & 0xc1) | (value & 8) | ((value & 2) << 4)
+                self.cycles += 21 * count - 5
             elif op in ('push', 'pop'):
                 reg = args[0]
                 if op == 'push':

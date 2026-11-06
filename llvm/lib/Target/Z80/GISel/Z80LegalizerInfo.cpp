@@ -1486,6 +1486,83 @@ LegalizerHelper::LegalizeResult Z80LegalizerInfo::legalizeMemIntrinsic(
     }
   }
 
+  if ((Opc == G_MEMCPY || Opc == G_MEMCPY_INLINE) && !Is24Bit &&
+      !Subtarget.hasEZ80Ops() && !MF.getFunction().hasOptNone() &&
+      DstTy.getAddressSpace() == 0 && SrcTy.getAddressSpace() == 0 &&
+      !MI.hasOrderedMemoryRef()) {
+    /* A zero hardware count means 65536 bytes. Guard the block transfer before
+       installing its register operands so an empty copy touches no memory. */
+    MachineBasicBlock *Head = MI.getParent();
+    struct EndAddress {
+      MachineInstr *Add;
+      Register Initial, Physical, Updated;
+    };
+    SmallVector<EndAddress, 4> Ends;
+    auto IntegerAddress = [&](Register R) {
+      auto *Def = getDefIgnoringCopies(R, MRI);
+      return Def && Def->getOpcode() == G_INTTOPTR
+                 ? Def->getOperand(1).getReg()
+                 : Register();
+    };
+    Register DstInteger = IntegerAddress(DstReg);
+    Register SrcInteger = IntegerAddress(SrcReg);
+    Register Length = getSrcRegIgnoringCopies(LenReg, MRI);
+    unsigned EndBudget = 128;
+    for (auto It = std::next(MI.getIterator()); It != Head->end(); ++It) {
+      if (!EndBudget--)
+        break;
+      if (It->getOpcode() != G_ADD)
+        continue;
+      Register Base = It->getOperand(1).getReg();
+      if (getSrcRegIgnoringCopies(It->getOperand(2).getReg(), MRI) != Length) {
+        if (getSrcRegIgnoringCopies(Base, MRI) != Length)
+          continue;
+        Base = It->getOperand(2).getReg();
+      }
+      if (Base == DstInteger || Base == SrcInteger)
+        Ends.push_back(
+            {&*It, Base, Base == DstInteger ? Z80::DE : Z80::HL, Register()});
+    }
+    auto *Copy = MF.CreateMachineBasicBlock(Head->getBasicBlock());
+    auto *Tail = MF.CreateMachineBasicBlock(Head->getBasicBlock());
+    MF.insert(std::next(Head->getIterator()), Copy);
+    MF.insert(std::next(Copy->getIterator()), Tail);
+    Tail->splice(Tail->end(), Head, std::next(MI.getIterator()), Head->end());
+    Tail->transferSuccessorsAndUpdatePHIs(Head);
+    Head->addSuccessor(Copy);
+    Head->addSuccessor(Tail);
+    Copy->addSuccessor(Tail);
+    auto Zero = MIRBuilder.buildConstant(LenTy, 0);
+    auto Empty =
+        MIRBuilder.buildICmp(CmpInst::ICMP_EQ, LLT::scalar(1), LenReg, Zero);
+    MIRBuilder.buildBrCond(Empty, *Tail);
+    MIRBuilder.buildBr(*Copy);
+    MIRBuilder.setInsertPt(*Copy, Copy->end());
+    MIRBuilder.buildCopy(Z80::DE, DstReg);
+    MIRBuilder.buildCopy(Z80::HL, SrcReg);
+    MIRBuilder.buildCopy(Z80::BC, LenReg);
+    MIRBuilder.buildInstr(Z80::LDIR16).cloneMemRefs(MI);
+    for (auto &End : Ends) {
+      End.Updated = MRI.createGenericVirtualRegister(LenTy);
+      MIRBuilder.buildCopy(End.Updated, End.Physical);
+    }
+    MIRBuilder.buildBr(*Tail);
+    MIRBuilder.setInsertPt(*Tail, Tail->begin());
+    /* LDIR already computes both end addresses. Preserve these results for
+       explicit post-copy additions; the empty edge retains the input. */
+    for (auto &End : Ends) {
+      MIRBuilder.buildInstr(G_PHI, {End.Add->getOperand(0).getReg()}, {})
+          .addReg(End.Initial)
+          .addMBB(Head)
+          .addReg(End.Updated)
+          .addMBB(Copy);
+    }
+    MIRBuilder.setInsertPt(*Tail, Tail->begin());
+    for (auto &End : Ends)
+      End.Add->eraseFromParent();
+    MI.eraseFromParent();
+    return LegalizerHelper::Legalized;
+  }
   MOI->setReg(LenReg);
   auto Result = createMemLibcall(MIRBuilder, MRI, MI, LocObserver);
   MI.eraseFromParent();
