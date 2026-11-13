@@ -318,6 +318,7 @@ enum {
   EM_COOL = 217,          // iCelero CoolEngine
   EM_NORC = 218,          // Nanoradio Optimized RISC
   EM_CSR_KALIMBA = 219,   // CSR Kalimba architecture family
+  EM_Z80 = 220,          // Zilog Z80
   EM_AMDGPU = 224,        // AMD GPU architecture
   EM_RISCV = 243,         // RISC-V
   EM_LANAI = 244,         // Lanai 32-bit processor
@@ -1022,6 +1023,18 @@ enum : unsigned {
   EF_MSP430_MACH_MSP430x46 = 46,
   EF_MSP430_MACH_MSP430x47 = 47,
   EF_MSP430_MACH_MSP430x54 = 54,
+};
+
+// Z80 ELF machine variants and relocation numbers shared with GNU binutils.
+enum {
+  EF_Z80_MACH_Z80 = 0x01,
+  EF_Z80_MACH_Z180 = 0x02,
+  EF_Z80_MACH_EZ80_Z80 = 0x04,
+  EF_Z80_MACH_EZ80_ADL = 0x84,
+  EF_Z80_MACH_MSK = 0xff,
+};
+enum {
+#include "ELFRelocs/Z80.def"
 };
 
 // ELF Relocation types for MSP430

@@ -282,6 +282,7 @@ void ScalarEnumerationTraits<ELFYAML::ELF_EM>::enumeration(
   ECase(EM_MAX);
   ECase(EM_CR);
   ECase(EM_F2MC16);
+  ECase(EM_Z80);
   ECase(EM_MSP430);
   ECase(EM_BLACKFIN);
   ECase(EM_SE_C33);
@@ -423,6 +424,12 @@ void ScalarBitSetTraits<ELFYAML::ELF_EF>::bitset(IO &IO,
 #define BCase(X) IO.bitSetCase(Value, #X, ELF::X)
 #define BCaseMask(X, M) IO.maskedBitSetCase(Value, #X, ELF::X, ELF::M)
   switch (Object->getMachine()) {
+  case ELF::EM_Z80:
+    BCaseMask(EF_Z80_MACH_Z80, EF_Z80_MACH_MSK);
+    BCaseMask(EF_Z80_MACH_Z180, EF_Z80_MACH_MSK);
+    BCaseMask(EF_Z80_MACH_EZ80_Z80, EF_Z80_MACH_MSK);
+    BCaseMask(EF_Z80_MACH_EZ80_ADL, EF_Z80_MACH_MSK);
+    break;
   case ELF::EM_ARM:
     BCase(EF_ARM_SOFT_FLOAT);
     BCase(EF_ARM_VFP_FLOAT);
@@ -928,6 +935,9 @@ void ScalarEnumerationTraits<ELFYAML::ELF_REL>::enumeration(
   assert(Object && "The IO context is not initialized");
 #define ELF_RELOC(X, Y) IO.enumCase(Value, #X, ELF::X);
   switch (Object->getMachine()) {
+  case ELF::EM_Z80:
+#include "llvm/BinaryFormat/ELFRelocs/Z80.def"
+    break;
   case ELF::EM_X86_64:
 #include "llvm/BinaryFormat/ELFRelocs/x86_64.def"
     break;

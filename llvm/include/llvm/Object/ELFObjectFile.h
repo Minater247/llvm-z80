@@ -1307,6 +1307,8 @@ StringRef ELFObjectFile<ELFT>::getFileFormatName() const {
       return "elf32-lanai";
     case ELF::EM_MIPS:
       return "elf32-mips";
+    case ELF::EM_Z80:
+      return "elf32-z80";
     case ELF::EM_MSP430:
       return "elf32-msp430";
     case ELF::EM_PPC:
@@ -1391,6 +1393,11 @@ template <class ELFT> Triple::ArchType ELFObjectFile<ELFT>::getArch() const {
     default:
       report_fatal_error("Invalid ELFCLASS!");
     }
+  case ELF::EM_Z80:
+    return (EF.getHeader().e_flags & ELF::EF_Z80_MACH_MSK) ==
+                   ELF::EF_Z80_MACH_EZ80_ADL
+               ? Triple::ez80
+               : Triple::z80;
   case ELF::EM_MSP430:
     return Triple::msp430;
   case ELF::EM_PPC:

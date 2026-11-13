@@ -104,6 +104,7 @@ uint16_t ELF::convertArchNameToEMachine(StringRef Arch) {
       .Case("max", EM_MAX)
       .Case("cr", EM_CR)
       .Case("f2mc16", EM_F2MC16)
+      .Case("z80", EM_Z80)
       .Case("msp430", EM_MSP430)
       .Case("blackfin", EM_BLACKFIN)
       .Case("se_c33", EM_SE_C33)
@@ -236,6 +237,9 @@ uint16_t ELF::convertTripleArchTypeToEMachine(Triple::ArchType ArchType) {
   case Triple::mips64:
   case Triple::mips64el:
     return EM_MIPS;
+  case Triple::z80:
+  case Triple::ez80:
+    return EM_Z80;
   case Triple::msp430:
     return EM_MSP430;
   case Triple::ppc:
@@ -444,6 +448,8 @@ StringRef ELF::convertEMachineToArchName(uint16_t EMachine) {
     return "cr";
   case EM_F2MC16:
     return "f2mc16";
+  case EM_Z80:
+    return "z80";
   case EM_MSP430:
     return "msp430";
   case EM_BLACKFIN:
