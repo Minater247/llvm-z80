@@ -200,6 +200,7 @@ Z80LegalizerInfo::Z80LegalizerInfo(const Z80Subtarget &STI,
       .clampScalar(0, s8, s32);
 
   getActionDefinitionsBuilder({G_SHL, G_LSHR, G_ASHR})
+      .legalFor({{s8, s8}})
       .customForCartesianProduct(LegalLibcallScalars, {s8})
       .clampScalar(1, s8, s8)
       .minScalar(0, s8)
@@ -738,12 +739,6 @@ Z80LegalizerInfo::legalizeShift(LegalizerHelper &Helper, MachineInstr &MI,
       return LegalizerHelper::Legalized;
     }
 
-    if (Ty == LLT::scalar(8) && ShiftVal == 1)
-      return LegalizerHelper::AlreadyLegal;
-    if (Ty == LLT::scalar(8) && (Opc == G_SHL || Opc == G_LSHR) &&
-        ShiftVal >= 5 && ShiftVal < 8) {
-      return LegalizerHelper::AlreadyLegal;
-    }
     if (Opc == G_SHL &&
         (Ty == LLT::scalar(16) ||
          (Subtarget.is24Bit() && Ty == LLT::scalar(24))) &&
@@ -753,7 +748,7 @@ Z80LegalizerInfo::legalizeShift(LegalizerHelper &Helper, MachineInstr &MI,
         ShiftVal == 8)
       return LegalizerHelper::AlreadyLegal;
     if (MI.getOpcode() == G_ASHR && ShiftVal == Ty.getSizeInBits() - 1 &&
-        (Ty == LLT::scalar(8) || Ty == LLT::scalar(16) ||
+        (Ty == LLT::scalar(16) ||
          (Subtarget.is24Bit() && Ty == LLT::scalar(24))))
       return LegalizerHelper::AlreadyLegal;
 
@@ -764,8 +759,7 @@ Z80LegalizerInfo::legalizeShift(LegalizerHelper &Helper, MachineInstr &MI,
     if (Opc == G_SHL && Ty.isScalar() && Ty.getSizeInBits() <= MaxLegalSize &&
         ShiftVal >= 8 && ShiftVal < Ty.getSizeInBits())
       return Helper.narrowScalarShiftMultiway(MI, LLT::scalar(8));
-    if ((Opc == G_SHL || (Opc == G_ASHR && Ty == LLT::scalar(8))) &&
-        Ty.isScalar() && Ty.getSizeInBits() <= MaxLegalSize &&
+    if (Opc == G_SHL && Ty.isScalar() && Ty.getSizeInBits() <= MaxLegalSize &&
         ShiftVal < Ty.getSizeInBits()) {
       Builder.setInstrAndDebugLoc(MI);
       Register SrcReg = MI.getOperand(1).getReg();
@@ -785,22 +779,6 @@ Z80LegalizerInfo::legalizeShift(LegalizerHelper &Helper, MachineInstr &MI,
   if (Opc == G_LSHR) {
     Register Reg = MI.getOperand(1).getReg();
     LLT RegTy = MRI.getType(Reg);
-    if (MRI.getType(Reg).getSizeInBits() == 8) {
-      Register RHSReg = MI.getOperand(2).getReg();
-      auto RHSImm = getIConstantVRegValWithLookThrough(RHSReg, MRI);
-      if (!(!RHSImm || !RHSImm->Value || RHSImm->Value.uge(8) || RHSImm->Value.ule(1))) {
-        unsigned ShiftVal = RHSImm->Value.getZExtValue();
-        Builder.setInstrAndDebugLoc(MI);
-        Register OneReg = Builder.buildConstant(RegTy, 1).getReg(0);
-        while (--ShiftVal)
-          Reg = Builder.buildInstr(TargetOpcode::G_LSHR, {RegTy}, {Reg, OneReg}).getReg(0);
-        Observer.changingInstr(MI);
-        MI.getOperand(1).setReg(Reg);
-        MI.getOperand(2).setReg(OneReg);
-        Observer.changedInstr(MI);
-        return LegalizerHelper::Legalized;
-      }
-    }
     if (RegTy.getSizeInBits() == 16) {
       if (auto *GZExtDef = getOpcodeDef(TargetOpcode::G_ZEXT, Reg, MRI)) {
         Register SrcReg = GZExtDef->getOperand(1).getReg();
@@ -845,33 +823,6 @@ Z80LegalizerInfo::legalizeShift(LegalizerHelper &Helper, MachineInstr &MI,
           return LegalizerHelper::AlreadyLegal;
       }
     }
-  }
-
-  // There is no byte-sized shift libcall. Lower a variable byte shift to
-  // three conditional constant steps, all supported by native selection.
-  // Counts >= 8 are poison in LLVM IR, so choosing their low three bits is a
-  // valid refinement. This also handles masks such as 1u << channel.
-  if (Ty == LLT::scalar(8) &&
-      !getIConstantVRegValWithLookThrough(MI.getOperand(2).getReg(), MRI)) {
-    if (MI.getMF()->getFunction().hasMinSize())
-      return LegalizerHelper::AlreadyLegal;
-    Register Value = MI.getOperand(1).getReg();
-    Register Amount = MI.getOperand(2).getReg();
-    LLT AmtTy = MRI.getType(Amount);
-    auto One = Builder.buildConstant(AmtTy, 1);
-    auto Zero = Builder.buildConstant(AmtTy, 0);
-    for (unsigned Step : {4u, 2u, 1u}) {
-      Register Shifted = Value;
-      for (unsigned N = 0; N != Step; ++N)
-        Shifted = Builder.buildInstr(Opc, {Ty}, {Shifted, One}).getReg(0);
-      auto Bit = Builder.buildAnd(AmtTy, Amount,
-                                   Builder.buildConstant(AmtTy, Step));
-      auto Test = Builder.buildICmp(CmpInst::ICMP_NE, LLT::scalar(1), Bit, Zero);
-      Value = Builder.buildSelect(Ty, Test, Shifted, Value).getReg(0);
-    }
-    Builder.buildCopy(DstReg, Value);
-    MI.eraseFromParent();
-    return LegalizerHelper::Legalized;
   }
 
   // Split wide values into supported pieces so constant shifts can discard

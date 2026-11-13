@@ -3027,6 +3027,16 @@ bool Z80InstructionSelector::selectShift(MachineInstr &I,
     return constrainSelectedInstRegOperands(I, TII, TRI, RBI);
   }
 
+  if (Ty == LLT::scalar(8) &&
+      (Amt->Value.isZero() || Amt->Value.uge(8))) {
+    /* Zero preserves the source. Out-of-range counts are poison, so a copy
+       is also a valid refinement when these survive unoptimized lowering. */
+    I.setDesc(TII.get(TargetOpcode::COPY));
+    I.removeOperand(2);
+    return RBI.constrainGenericRegister(SrcReg, Z80::R8RegClass, MRI) &&
+           RBI.constrainGenericRegister(DstReg, Z80::R8RegClass, MRI);
+  }
+
   if (Ty == LLT::scalar(16) &&
       (Opc == TargetOpcode::G_LSHR || Opc == TargetOpcode::G_ASHR) &&
       Amt->Value.ugt(0) && Amt->Value.ule(4)) {

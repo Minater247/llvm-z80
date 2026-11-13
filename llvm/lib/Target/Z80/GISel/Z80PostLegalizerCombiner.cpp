@@ -72,6 +72,35 @@ private:
 #undef GET_GICOMBINER_IMPL
 
 bool Z80PostLegalizerCombinerImpl::tryCombineAll(MachineInstr &I) const {
+  unsigned Opc = I.getOpcode();
+  if ((Opc == TargetOpcode::G_SHL || Opc == TargetOpcode::G_LSHR ||
+       Opc == TargetOpcode::G_ASHR) &&
+      MRI.getType(I.getOperand(0).getReg()) == LLT::scalar(8) &&
+      !I.getMF()->getFunction().hasMinSize() &&
+      !getIConstantVRegValWithLookThrough(I.getOperand(2).getReg(), MRI)) {
+    /* Byte shifts are legal, including the counted loop used for size.
+       For speed, test each count bit once instead of looping per shifted bit.
+       Keeping this choice out of legalization lets generic combines narrow
+       word operations to byte shifts after the unused lanes are exposed. */
+    B.setInstrAndDebugLoc(I);
+    LLT Byte = LLT::scalar(8);
+    Register Value = I.getOperand(1).getReg();
+    Register Amount = I.getOperand(2).getReg();
+    auto One = B.buildConstant(Byte, 1);
+    auto Zero = B.buildConstant(Byte, 0);
+    for (unsigned Step : {4u, 2u, 1u}) {
+      Register Shifted = Value;
+      for (unsigned N = 0; N != Step; ++N)
+        Shifted = B.buildInstr(Opc, {Byte}, {Shifted, One}).getReg(0);
+      auto Bit = B.buildAnd(Byte, Amount, B.buildConstant(Byte, Step));
+      auto Test = B.buildICmp(CmpInst::ICMP_NE, LLT::scalar(1), Bit, Zero);
+      Value = B.buildSelect(Byte, Test, Shifted, Value).getReg(0);
+    }
+    B.buildCopy(I.getOperand(0).getReg(), Value);
+    Observer.erasingInstr(I);
+    I.eraseFromParent();
+    return true;
+  }
   if (I.getOpcode() == TargetOpcode::G_ICMP &&
       MRI.getType(I.getOperand(2).getReg()) == LLT::scalar(16) &&
       ValueTracking.getKnownBits(I.getOperand(2).getReg())
