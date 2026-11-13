@@ -30,6 +30,22 @@ public:
     return createZ80ELFObjectWriter(OSABI);
   }
 
+  std::optional<MCFixupKind> getFixupKind(StringRef Name) const override {
+    unsigned Type = StringSwitch<unsigned>(Name)
+#define ELF_RELOC(Name, Value) .Case(#Name, Value)
+#include "llvm/BinaryFormat/ELFRelocs/Z80.def"
+#undef ELF_RELOC
+                        .Case("BFD_RELOC_NONE", ELF::R_Z80_NONE)
+                        .Case("BFD_RELOC_8", ELF::R_Z80_8)
+                        .Case("BFD_RELOC_16", ELF::R_Z80_16)
+                        .Case("BFD_RELOC_24", ELF::R_Z80_24)
+                        .Case("BFD_RELOC_32", ELF::R_Z80_32)
+                        .Default(-1u);
+    if (Type != -1u)
+      return MCFixupKind(FirstLiteralRelocationKind + Type);
+    return std::nullopt;
+  }
+
   bool finishLayout() const override {
     /* Resolve extraction aliases after all assignments have been parsed.
        The operand width stays fixed, so selecting a relocation here leaves
