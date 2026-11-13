@@ -3590,8 +3590,8 @@ void DwarfDebug::emitDebugARanges() {
     unsigned TupleSize = PtrSize * 2;
 
     // 7.20 in the Dwarf specs requires the table to be aligned to a tuple.
-    unsigned Padding = offsetToAlignment(
-        Asm->getUnitLengthFieldByteSize() + ContentSize, Align(TupleSize));
+    unsigned HeaderSize = Asm->getUnitLengthFieldByteSize() + ContentSize;
+    unsigned Padding = (TupleSize - HeaderSize % TupleSize) % TupleSize;
 
     ContentSize += Padding;
     ContentSize += (List.size() + 1) * TupleSize;

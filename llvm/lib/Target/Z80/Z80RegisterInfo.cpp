@@ -30,7 +30,7 @@ using namespace llvm;
 #include "Z80GenRegisterInfo.inc"
 
 Z80RegisterInfo::Z80RegisterInfo(const Triple &TT, const Z80Subtarget &ST)
-    : Z80GenRegisterInfo(0, 0, 0, Z80::PC), ST(ST) {
+    : Z80GenRegisterInfo(Z80::PC, 0, 0, Z80::PC), ST(ST) {
   // Cache some information.
   Is24Bit = !TT.isArch16Bit() && TT.getEnvironment() != Triple::CODE16;
   StackPtr = Is24Bit ? Z80::SPL : Z80::SPS;

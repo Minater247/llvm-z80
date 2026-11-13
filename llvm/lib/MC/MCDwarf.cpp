@@ -902,7 +902,7 @@ static void EmitGenDwarfAranges(MCStreamer *MCOS,
   // pairs who's values are PointerSize'ed.
   const MCAsmInfo *asmInfo = context.getAsmInfo();
   int AddrSize = asmInfo->getCodePointerSize();
-  int Pad = 2 * AddrSize - (Length & (2 * AddrSize - 1));
+  int Pad = 2 * AddrSize - (Length % (2 * AddrSize));
   if (Pad == 2 * AddrSize)
     Pad = 0;
   Length += Pad;
@@ -1768,8 +1768,10 @@ const MCSymbol &FrameEmitterImpl::EmitCIE(const MCDwarfFrameInfo &Frame) {
 
   InitialCFAOffset = CFAOffset;
 
-  // Padding
-  Streamer.emitValueToAlignment(Align(IsEH ? 4 : MAI->getCodePointerSize()));
+  /* Section alignment uses powers of two, including targets with three-byte
+     code addresses. Round up so the padding can represent that alignment. */
+  Streamer.emitValueToAlignment(
+      Align(IsEH ? 4 : PowerOf2Ceil(MAI->getCodePointerSize())));
 
   Streamer.emitLabel(sectionEnd);
   return *sectionStart;
@@ -1847,7 +1849,7 @@ void FrameEmitterImpl::EmitFDE(const MCSymbol &cieStart,
   // since a null CIE is interpreted as the end. Old systems overaligned
   // .eh_frame, so we do too and account for it in the last FDE.
   unsigned Alignment = LastInSection ? asmInfo->getCodePointerSize() : PCSize;
-  Streamer.emitValueToAlignment(Align(Alignment));
+  Streamer.emitValueToAlignment(Align(PowerOf2Ceil(Alignment)));
 
   Streamer.emitLabel(fdeEnd);
 }

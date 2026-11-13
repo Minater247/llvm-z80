@@ -317,7 +317,8 @@ void Z80FrameLowering::emitPrologue(MachineFunction &MF,
                 nullptr, TRI->getDwarfRegNum(FrameReg, true), 2 * SlotSize)));
         BuildMI(MBB, MBBI, DL, TII.get(TargetOpcode::CFI_INSTRUCTION))
             .addCFIIndex(MF.addFrameInst(MCCFIInstruction::createOffset(
-                nullptr, TRI->getDwarfRegNum(FrameReg, true), -2 * SlotSize)));
+                nullptr, TRI->getDwarfRegNum(FrameReg, true),
+                -2 * int64_t(SlotSize))));
       }
       return;
     }
@@ -332,7 +333,8 @@ void Z80FrameLowering::emitPrologue(MachineFunction &MF,
                 MCCFIInstruction::cfiDefCfaOffset(nullptr, 2 * SlotSize)));
         BuildMI(MBB, MBBI, DL, TII.get(TargetOpcode::CFI_INSTRUCTION))
             .addCFIIndex(MF.addFrameInst(MCCFIInstruction::createOffset(
-                nullptr, TRI->getDwarfRegNum(FrameReg, true), -2 * SlotSize)));
+                nullptr, TRI->getDwarfRegNum(FrameReg, true),
+                -2 * int64_t(SlotSize))));
       }
     }
 
