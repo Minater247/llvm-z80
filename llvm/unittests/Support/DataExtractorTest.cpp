@@ -72,6 +72,24 @@ TEST(DataExtractorTest, UnsignedNumbers) {
   EXPECT_EQ(8U, offset);
 }
 
+TEST(DataExtractorTest, ThreeByteNumbers) {
+  for (bool LittleEndian : {false, true}) {
+    DataExtractor DE(StringRef(numberData, sizeof(numberData) - 1),
+                     LittleEndian, 3);
+    uint64_t Expected = LittleEndian ? 0xff9080 : 0x8090ff;
+    uint64_t Offset = 0;
+    EXPECT_EQ(Expected, DE.getAddress(&Offset));
+    EXPECT_EQ(3u, Offset);
+    Offset = 0;
+    EXPECT_EQ(int64_t(Expected) - 0x1000000, DE.getSigned(&Offset, 3));
+    EXPECT_EQ(3u, Offset);
+    DataExtractor::Cursor C(sizeof(numberData) - 3);
+    EXPECT_EQ(0u, DE.getUnsigned(C, 3));
+    EXPECT_EQ(sizeof(numberData) - 3, C.tell());
+    EXPECT_THAT_ERROR(C.takeError(), Failed());
+  }
+}
+
 TEST(DataExtractorTest, SignedNumbers) {
   DataExtractor DE(StringRef(numberData, sizeof(numberData)-1), false, 8);
   uint64_t offset = 0;

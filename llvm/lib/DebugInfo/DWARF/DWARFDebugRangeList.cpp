@@ -70,6 +70,9 @@ void DWARFDebugRangeList::dump(raw_ostream &OS) const {
   case 2:
     AddrFmt = "%08" PRIx64 " %04" PRIx64 " %04" PRIx64 "\n";
     break;
+  case 3:
+    AddrFmt = "%08" PRIx64 " %06" PRIx64 " %06" PRIx64 "\n";
+    break;
   case 4:
     AddrFmt = "%08" PRIx64 " %08" PRIx64 " %08" PRIx64 "\n";
     break;

@@ -130,6 +130,8 @@ uint64_t DataExtractor::getUnsigned(uint64_t *offset_ptr, uint32_t byte_size,
     return getU8(offset_ptr, Err);
   case 2:
     return getU16(offset_ptr, Err);
+  case 3:
+    return getU24(offset_ptr, Err);
   case 4:
     return getU32(offset_ptr, Err);
   case 8:
@@ -145,6 +147,8 @@ DataExtractor::getSigned(uint64_t *offset_ptr, uint32_t byte_size) const {
     return getS8(offset_ptr);
   case 2:
     return getS16(offset_ptr);
+  case 3:
+    return SignExtend64<24>(getU24(offset_ptr));
   case 4:
     return getS32(offset_ptr);
   case 8:

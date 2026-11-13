@@ -1280,6 +1280,8 @@ section_iterator ELFObjectFile<ELFT>::section_end() const {
 
 template <class ELFT>
 uint8_t ELFObjectFile<ELFT>::getBytesInAddress() const {
+  if (EF.getHeader().e_machine == ELF::EM_Z80)
+    return getArch() == Triple::ez80 ? 3 : 2;
   return ELFT::Is64Bits ? 8 : 4;
 }
 

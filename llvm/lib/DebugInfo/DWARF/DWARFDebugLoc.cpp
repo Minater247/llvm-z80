@@ -223,7 +223,7 @@ Error DWARFDebugLoc::visitLocationList(
     // address selection entry.
     if (Value0 == 0 && Value1 == 0) {
       E.Kind = dwarf::DW_LLE_end_of_list;
-    } else if (Value0 == (Data.getAddressSize() == 4 ? -1U : -1ULL)) {
+    } else if (Value0 == dwarf::computeTombstoneAddress(Data.getAddressSize())) {
       E.Kind = dwarf::DW_LLE_base_address;
       E.Value0 = Value1;
       E.SectionIndex = SectionIndex;
@@ -253,7 +253,7 @@ void DWARFDebugLoc::dumpRawEntry(const DWARFLocationEntry &Entry,
   uint64_t Value0, Value1;
   switch (Entry.Kind) {
   case dwarf::DW_LLE_base_address:
-    Value0 = Data.getAddressSize() == 4 ? -1U : -1ULL;
+    Value0 = dwarf::computeTombstoneAddress(Data.getAddressSize());
     Value1 = Entry.Value0;
     break;
   case dwarf::DW_LLE_offset_pair:

@@ -36,6 +36,41 @@ static int64_t getELFAddend(RelocationRef R) {
   return *AddendOrErr;
 }
 
+static bool supportsZ80(uint64_t Type) {
+  return Type <= ELF::R_Z80_16_BE;
+}
+
+static uint64_t resolveZ80(uint64_t Type, uint64_t Offset, uint64_t S,
+                          uint64_t LocData, int64_t Addend) {
+  uint64_t Value = S + Addend;
+  switch (Type) {
+  case ELF::R_Z80_NONE:
+    return LocData;
+  case ELF::R_Z80_8_PCREL:
+    return (Value - Offset) & 0xff;
+  case ELF::R_Z80_8:
+  case ELF::R_Z80_8_DIS:
+    return Value & 0xff;
+  case ELF::R_Z80_16:
+  case ELF::R_Z80_16_BE:
+    return Value & 0xffff;
+  case ELF::R_Z80_24:
+    return Value & 0xffffff;
+  case ELF::R_Z80_32:
+    return Value & 0xffffffff;
+  case ELF::R_Z80_BYTE0:
+  case ELF::R_Z80_BYTE1:
+  case ELF::R_Z80_BYTE2:
+  case ELF::R_Z80_BYTE3:
+    return (Value >> (8 * (Type - ELF::R_Z80_BYTE0))) & 0xff;
+  case ELF::R_Z80_WORD0:
+  case ELF::R_Z80_WORD1:
+    return (Value >> (16 * (Type - ELF::R_Z80_WORD0))) & 0xffff;
+  default:
+    llvm_unreachable("Invalid relocation type");
+  }
+}
+
 static bool supportsX86_64(uint64_t Type) {
   switch (Type) {
   case ELF::R_X86_64_NONE:
@@ -787,6 +822,8 @@ getRelocationResolver(const ObjectFile &Obj) {
       return {nullptr, nullptr};
     }
   } else if (Obj.isELF()) {
+    if (Obj.getArch() == Triple::z80 || Obj.getArch() == Triple::ez80)
+      return {supportsZ80, resolveZ80};
     if (Obj.getBytesInAddress() == 8) {
       switch (Obj.getArch()) {
       case Triple::x86_64:

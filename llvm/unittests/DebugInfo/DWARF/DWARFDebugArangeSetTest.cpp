@@ -76,14 +76,14 @@ TEST(DWARFDebugArangeSet, UnsupportedAddressSize) {
       "\x0c\x00\x00\x00"  // Length
       "\x02\x00"          // Version
       "\x00\x00\x00\x00"  // Debug Info Offset
-      "\x03"              // Address Size (not supported)
+      "\x05"              // Address Size (not supported)
       "\x00"              // Segment Selector Size
                           // No padding
       "\x00\x00\x00\x00"; // Termination tuple
   ExpectExtractError(
       DebugArangesSecRaw,
-      "address range table at offset 0x0 has unsupported address size: 3 "
-      "(supported are 2, 4, 8)");
+      "address range table at offset 0x0 has unsupported address size: 5 "
+      "(supported are 2, 3, 4, 8)");
 }
 
 TEST(DWARFDebugArangeSet, UnsupportedSegmentSelectorSize) {

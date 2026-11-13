@@ -4,7 +4,7 @@
 
 # CHECK: .debug_addr contents:
 # CHECK-NOT: {{.}}
-# ERR: unsupported address size: 3 (supported are 2, 4, 8)
+# ERR: unsupported address size: 5 (supported are 2, 3, 4, 8)
 # ERR-NOT: {{.}}
 
 # invalid addr size
@@ -12,7 +12,7 @@
 .Ldebug_addr0:
   .long 12 # unit_length = .short + .byte + .byte + .long + .long
   .short 5 # version
-  .byte 3  # address_size
+  .byte 5  # address_size
   .byte 0  # segment_selector_size
   .long 0x00000000
   .long 0x00000001

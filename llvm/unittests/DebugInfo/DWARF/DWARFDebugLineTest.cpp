@@ -741,10 +741,10 @@ TEST_F(DebugLineBasicFixture,
     GTEST_SKIP();
 
   LineTable &LT = Gen->addLineTable();
-  // 4 == length of the extended opcode, i.e. 1 for the opcode itself and 3 for
-  // the Half (2) + Byte (1) operand, representing the unsupported address size.
-  LT.addExtendedOpcode(4, DW_LNE_set_address,
-                       {{0x1234, LineTable::Half}, {0x56, LineTable::Byte}});
+  // 6 == length of the extended opcode, i.e. 1 for the opcode itself and 5 for
+  // the Long (4) + Byte (1) operand, representing the unsupported address size.
+  LT.addExtendedOpcode(6, DW_LNE_set_address,
+                       {{0x1234, LineTable::Long}, {0x56, LineTable::Byte}});
   LT.addStandardOpcode(DW_LNS_copy, {});
   // Special opcode to ensure the address has changed between the first and last
   // row in the sequence. Without this, the sequence will not be recorded.
@@ -757,7 +757,7 @@ TEST_F(DebugLineBasicFixture,
                                                     nullptr, RecordRecoverable);
   EXPECT_THAT_ERROR(
       std::move(Recoverable),
-      FailedWithMessage("address size 0x03 of DW_LNE_set_address opcode at "
+      FailedWithMessage("address size 0x05 of DW_LNE_set_address opcode at "
                         "offset 0x00000030 is unsupported"));
   ASSERT_THAT_EXPECTED(ExpectedLineTable, Succeeded());
   ASSERT_EQ((*ExpectedLineTable)->Rows.size(), 3u);
