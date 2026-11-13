@@ -149,6 +149,16 @@ unsigned copyCost(MCRegister Dst, MCRegister Src, bool KillSrc,
 unsigned extraAccessCost(const MachineInstr &MI, unsigned Operand, MCRegister P,
                          bool Bytes) {
   unsigned Opc = MI.getOpcode();
+  if (Operand == 0 && P != Z80::A &&
+      (Opc == Z80::SLA8g || Opc == Z80::RLC8g || Opc == Z80::RRC8g ||
+       Opc == Z80::RL8g || Opc == Z80::RR8g)) {
+    /* With dead result flags, A uses an unprefixed shift or rotate. Price
+       this before placement so eliminating copies does not hide the saving
+       from several accumulator operations in a row. */
+    const MachineOperand *Flags = MI.findRegisterDefOperand(Z80::F, nullptr);
+    if (Flags && Flags->isDead())
+      return Bytes ? 1 : 4;
+  }
   if (Z80::ALT16RegClass.contains(P) &&
       MI.getMF()->getInfo<Z80MachineFunctionInfo>()->hasSingleBankRegion())
     return 0;
