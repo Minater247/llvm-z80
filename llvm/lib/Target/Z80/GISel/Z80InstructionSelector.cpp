@@ -1047,7 +1047,52 @@ bool Z80InstructionSelector::selectInOut(MachineInstr &I,
 /// Share a constant byte address across a short region of memory accesses.
 /// Three accesses amortize materializing a primary pair. Calls and assembly
 /// boundaries retain absolute addressing so the address need not survive them.
-static bool reuseConstantByteAddress(Register Ptr, MachineRegisterInfo &MRI) {
+static bool reuseConstantByteAddress(Register Ptr, MachineInstr &Access,
+                                     MachineRegisterInfo &MRI) {
+  /* A symbol may also be accessed elsewhere in the function. Count the
+     local region independently so those distant uses do not hide a group
+     that can share one address, including read-modify-write instructions. */
+  unsigned LocalAccesses = 0, LocalBudget = 96;
+  auto Count = [&](const MachineInstr &MI) {
+    if (!LocalBudget || MI.isCall() || MI.isInlineAsm())
+      return false;
+    --LocalBudget;
+    /* Pair arithmetic also needs an address-capable destination. Extending
+       a cached constant across it can turn one ADD into exchanges or spills,
+       exceeding the saving from these byte accesses. */
+    switch (MI.getOpcode()) {
+    case TargetOpcode::G_ADD:
+    case TargetOpcode::G_SUB:
+    case TargetOpcode::G_PTR_ADD:
+      if (MRI.getType(MI.getOperand(0).getReg()).getSizeInBits() > 8)
+        return false;
+      break;
+    case Z80::ADD16rr:
+    case Z80::ADD16ao:
+    case Z80::ADD16aa:
+    case Z80::ADC16ao:
+    case Z80::SBC16ao:
+      return false;
+    }
+    if (!MI.memoperands_empty() &&
+        llvm::all_of(MI.memoperands(), [](const MachineMemOperand *MMO) {
+          return MMO->getSize() == 1;
+        }) && MI.readsRegister(Ptr, nullptr))
+      LocalAccesses += unsigned(MI.mayLoad()) + unsigned(MI.mayStore());
+    return true;
+  };
+  for (auto It = Access.getIterator(); It != Access.getParent()->end(); ++It) {
+    if (!Count(*It))
+      break;
+    if (LocalAccesses >= 3)
+      return true;
+  }
+  for (auto It = Access.getIterator(); It != Access.getParent()->begin();) {
+    if (!Count(*--It))
+      break;
+    if (LocalAccesses >= 3)
+      return true;
+  }
   SmallPtrSet<MachineBasicBlock *, 2> Blocks;
   unsigned Accesses = 0;
   for (MachineInstr &Use : MRI.use_nodbg_instructions(Ptr)) {
@@ -1172,7 +1217,8 @@ bool Z80InstructionSelector::selectLoadStore(MachineInstr &I,
       if (MachineInstr *IntMI = MRI.getVRegDef(PtrMI->getOperand(1).getReg()))
         if (IntMI->getOpcode() == TargetOpcode::G_CONSTANT)
           IsConstantPtr = true;
-    } else if (PtrMI->getOpcode() == TargetOpcode::G_CONSTANT) {
+    } else if (PtrMI->getOpcode() == TargetOpcode::G_CONSTANT ||
+               PtrMI->getOpcode() == TargetOpcode::G_GLOBAL_VALUE) {
       IsConstantPtr = true;
     }
   }
@@ -1344,7 +1390,7 @@ bool Z80InstructionSelector::selectLoadStore(MachineInstr &I,
   bool PreferRegPtrFor8 =
       (Ty.getSizeInBits() == 8) && (!MRI.hasOneUse(PtrReg) || UnitStep) &&
       (!IsConstantPtr ||
-       (!STI.hasEZ80Ops() && reuseConstantByteAddress(PtrReg, MRI)));
+       (!STI.hasEZ80Ops() && reuseConstantByteAddress(PtrReg, I, MRI)));
   if (PreferRegPtrFor8 && !UnitStep && !STI.hasEZ80Ops() && PtrMI &&
       !MRI.getRegClassOrNull(PtrReg) &&
       PtrMI->getOpcode() == TargetOpcode::G_PTR_ADD)
