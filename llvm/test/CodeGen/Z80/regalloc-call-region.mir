@@ -1,0 +1,63 @@
+# RUN: llc -start-before=z80-regalloc -verify-machineinstrs %s -o %t.s
+# RUN: FileCheck %s < %t.s
+# RUN: %python %S/Inputs/regalloc-call-region.py %t.s
+--- |
+  target triple = "z80"
+  declare void @clobber()
+  define i8 @dispatch(i8 %value) optsize minsize { ret i8 %value }
+...
+---
+name: dispatch
+tracksRegLiveness: true
+# The live value stays in a byte register through the dispatcher, with saves
+# and restores confined to the call that clobbers that register.
+# CHECK-LABEL: dispatch:
+# CHECK: ld (ix - 1), [[REG:[bcdehl]]]
+# CHECK-NEXT: call clobber
+# CHECK-NEXT: ld [[REG]], (ix - 1)
+frameInfo:
+  adjustsStack: true
+  hasCalls: true
+body: |
+  bb.0:
+    successors: %bb.1(0x80000000)
+    liveins: $e
+    %0:g8 = COPY $e
+    JQ %bb.1
+  bb.1:
+    successors: %bb.2(0x70000000), %bb.6(0x10000000)
+    LD8am 8192, implicit-def $a :: (volatile load (s8))
+    OR8aa implicit-def $f, implicit $a
+    JQCC %bb.6, 1, implicit $f
+    JQ %bb.2
+  bb.2:
+    successors: %bb.3(0x40000000), %bb.4(0x40000000)
+    %0:g8 = INC8r %0, implicit-def $f
+    $a = COPY %0
+    LD8ma 8193, implicit $a :: (volatile store (s8))
+    LD8am 8192, implicit-def $a :: (volatile load (s8))
+    AND8ai 1, implicit-def $a, implicit-def $f, implicit $a
+    JQCC %bb.4, 1, implicit $f
+    JQ %bb.3
+  bb.3:
+    successors: %bb.5(0x80000000)
+    CALL16 @clobber, csr_z80_c, implicit $sps
+    JQ %bb.5
+  bb.4:
+    successors: %bb.5(0x80000000)
+    %0:g8 = INC8r %0, implicit-def $f
+    $a = COPY %0
+    LD8ma 8193, implicit $a :: (volatile store (s8))
+    JQ %bb.5
+  bb.5:
+    successors: %bb.1(0x80000000)
+    %0:g8 = INC8r %0, implicit-def $f
+    $a = COPY %0
+    LD8ma 8193, implicit $a :: (volatile store (s8))
+    $hl = LD16ri 8192
+    DEC8p $hl, implicit-def $f :: (volatile load (s8)), (volatile store (s8))
+    JQ %bb.1
+  bb.6:
+    $a = COPY %0
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...

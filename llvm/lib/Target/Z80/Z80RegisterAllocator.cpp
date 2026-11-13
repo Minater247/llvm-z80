@@ -365,6 +365,8 @@ class Z80RegisterAllocator final : public MachineFunctionPass,
               Register Pending = Register());
   bool split(const LiveInterval &LI, SmallVectorImpl<Register> &NewRegs,
              bool MainBank = false);
+  bool splitAroundCalls(const LiveInterval &LI,
+                        SmallVectorImpl<Register> &NewRegs);
   void refine();
   void refinePlacementRegions();
   void refineSpillAccesses();
@@ -855,6 +857,92 @@ bool Z80RegisterAllocator::search(SmallVector<Register, 8> Regs,
   return Valid;
 }
 
+/// Retain a value in a free register between calls that clobber that register.
+/// The complement carries the value across those calls. Only intervals with
+/// whole-register liveness and ordinary returning calls are eligible.
+bool Z80RegisterAllocator::splitAroundCalls(
+    const LiveInterval &LI, SmallVectorImpl<Register> &NewRegs) {
+  auto Slots = LIS->getRegMaskSlots();
+  if (LI.hasSubRanges() || Slots.size() > 128 ||
+      SA->getUseSlots().size() < 4 ||
+      VirtRegAuxInfo::isRematerializable(LI, *LIS, *VRM, *MRI,
+                                         *ST->getInstrInfo()))
+    return false;
+  SmallVector<std::pair<double, MCRegister>, 12> Choices;
+  for (MCRegister P : domain(LI.reg()))
+    if (!Matrix->checkRegUnitInterference(LI, P) &&
+        Matrix->checkRegMaskInterference(LI, P) && blockers(LI, P).empty())
+      Choices.emplace_back(0, P);
+  if (Choices.empty())
+    return false;
+  accessCosts(LI.reg(), Choices);
+  MCRegister BestReg;
+  double BestCost = std::numeric_limits<double>::infinity();
+  SmallVector<SlotIndex, 8> BestCuts;
+  for (auto [Cost, P] : Choices) {
+    SmallVector<SlotIndex, 8> Cuts;
+    bool Valid = true;
+    for (unsigned I = 0; I != Slots.size(); ++I) {
+      SlotIndex At = Slots[I];
+      if (!LI.liveAt(At) ||
+          !MachineOperand::clobbersPhysReg(LIS->getRegMaskBits()[I], P))
+        continue;
+      auto *MI = LIS->getInstructionFromIndex(At);
+      if (!MI || !MI->isCall() || MI->isTerminator() || MI->isBundled() ||
+          MI->getParent()->hasEHPadSuccessor() ||
+          !LI.liveAt(At.getBaseIndex()) ||
+          !LI.liveAt(At.getBoundaryIndex())) {
+        Valid = false;
+        break;
+      }
+      Cuts.push_back(At);
+      unsigned Bytes = TRI->getSpillSize(*MRI->getRegClass(LI.reg()));
+      Cost += frequency(*MI) * Bytes * (OptSize || ST->hasEZ80Ops() ? 6 : 38);
+    }
+    if (Valid && !Cuts.empty() &&
+        SA->getUseSlots().size() > 2 * Cuts.size() + 1 && Cost < BestCost) {
+      BestReg = P;
+      BestCost = Cost;
+      BestCuts = std::move(Cuts);
+    }
+  }
+  if (!BestReg)
+    return false;
+
+  /* Block-local splitting loses values on every edge of a dispatcher even
+     when just one arm calls a clobbering helper. Keep all other portions of
+     the interval together and put transitions immediately around each call. */
+  LiveRangeEdit Edit(&LI, NewRegs, *MF, *LIS, VRM, this, &DeadRemats);
+  SE->reset(Edit, SplitEditor::SM_Size);
+  unsigned Region = SE->openIntv();
+  unsigned Cut = 0;
+  for (const auto &Segment : LI.segments) {
+    SlotIndex Begin = Segment.start;
+    while (Cut < BestCuts.size() && BestCuts[Cut] < Segment.end) {
+      SlotIndex At = BestCuts[Cut++];
+      SlotIndex Leave = SE->leaveIntvBefore(At);
+      SE->useIntv(Begin, Leave);
+      Begin = SE->enterIntvAfter(At);
+    }
+    SE->useIntv(Begin, Segment.end);
+  }
+  SmallVector<unsigned, 8> Map;
+  SE->finish(&Map);
+  getAnalysis<LiveDebugVariablesWrapperLegacy>().getLDV().splitRegister(
+      LI.reg(), Edit.regs(), *LIS);
+  for (unsigned I = 0; I != Edit.size(); ++I) {
+    Register R = Edit.get(I);
+    Stage[R] = Map[I] == Region ? 1 : 2;
+    if (Map[I] == Region &&
+        Matrix->checkInterference(LIS->getInterval(R), BestReg) ==
+            LiveRegMatrix::IK_Free)
+      Matrix->assign(LIS->getInterval(R), BestReg);
+  }
+  llvm::erase_if(NewRegs, [&](Register R) { return VRM->hasPhys(R); });
+  ++NumSplits;
+  return true;
+}
+
 bool Z80RegisterAllocator::split(const LiveInterval &LI,
                                  SmallVectorImpl<Register> &NewRegs,
                                  bool MainBank) {
@@ -969,6 +1057,9 @@ bool Z80RegisterAllocator::split(const LiveInterval &LI,
       Previous = MI;
     }
   }
+  if (!MainBank && S == 0 && LoopGroups.empty() &&
+      splitAroundCalls(LI, NewRegs))
+    return true;
   LiveRangeEdit Edit(&LI, NewRegs, *MF, *LIS, VRM, this, &DeadRemats);
   SE->reset(Edit, SplitEditor::SM_Size);
   SmallDenseSet<unsigned, 4> LoopIntervals;
@@ -1346,17 +1437,22 @@ Z80RegisterAllocator::selectOrSplit(const LiveInterval &LI,
     }
   }
   if (SpillReg) {
+    for (Register R : Victims)
+      if (VRM->hasPhys(R))
+        Matrix->unassign(LIS->getInterval(R));
+    /* Reserve the incoming placement while planning replacement regions for
+       its displaced intervals. Otherwise a loop can select the register that
+       this allocation is about to occupy. */
+    Matrix->assign(LI, SpillReg);
     for (Register R : Victims) {
-      if (!VRM->hasPhys(R))
-        continue;
       const auto &Other = LIS->getInterval(R);
-      Matrix->unassign(Other);
       if (split(Other, NewRegs))
         continue;
       LiveRangeEdit Edit(&Other, NewRegs, *MF, *LIS, VRM, this, &DeadRemats);
       spiller().spill(Edit);
       ++NumSpills;
     }
+    Matrix->unassign(LI);
     return SpillReg;
   }
   if (!LI.isSpillable()) {
