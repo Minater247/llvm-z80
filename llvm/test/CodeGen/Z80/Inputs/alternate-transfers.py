@@ -1,7 +1,8 @@
 """Execute emitted bank transfers against randomized register states.
 
 Checks all byte/pair sources, destinations and bank slots in both native modes,
-including preservation of the primary flags, unrelated registers and SP.
+including preservation of both flag banks, unrelated registers and SP.
+Explicit alternate-flag clobbers also exercise the shorter AF copy.
 """
 import argparse
 import random
@@ -25,21 +26,28 @@ def main():
         for save in (True, False):
             for reg in ['a', 'b', 'c', 'd', 'e', 'h', 'l', 'ixh', 'ixl', 'iyh', 'iyl']:
                 for alt in ('a', 'b', 'c', 'd', 'e', 'h', 'l'):
-                    cases.append((save, 8, reg, alt + '_alt'))
+                    cases.append((save, 8, reg, alt + '_alt', False, None))
             for reg in ['bc', 'de', 'hl', 'ix', 'iy']:
                 for alt in ['bc', 'de', 'hl']:
-                    cases.append((save, bits, prefix + reg, prefix + alt + '_alt'))
+                    cases.append((save, bits, prefix + reg, prefix + alt + '_alt', False, None))
+        cases.append((True, 8, 'a', 'a_alt', True, None))
+        for scratch in ('b', 'c', 'd', 'e', 'h', 'l'):
+            for save in (True, False):
+                cases.append((save, 8, 'a', 'a_alt', False, scratch))
         ir = '\n'.join(f'define void @f{i}() {{ ret void }}' for i in range(len(cases)))
         mir = f'--- |\n  target triple = "{triple}"\n  ' + ir.replace('\n', '\n  ') + '\n...\n'
-        for i, (save, width, reg, alt) in enumerate(cases):
+        for i, (save, width, reg, alt, clobber_flags, scratch) in enumerate(cases):
             dst, src = (alt, reg) if save else (reg, alt)
             op = 'SAVE' if save else 'LOAD'
+            flags_def = ', implicit-def dead $f_alt' if clobber_flags else ''
+            if scratch:
+                flags_def += f', implicit-def dead ${scratch}'
             mir += f'''---
 name: f{i}
 tracksRegLiveness: false
 body: |
   bb.0:
-    ${dst} = ALT_{op}{width} ${src}
+    ${dst} = ALT_{op}{width} ${src}{flags_def}
     RET{bits} implicit-def $sp{'l' if bits == 24 else 's'}, implicit $sp{'l' if bits == 24 else 's'}
 ...
 '''
@@ -49,7 +57,7 @@ body: |
                                        '-start-after=prologepilog', str(path), '-o', '-'], text=True)
         bodies = re.findall(r'^f\d+:.*?^\s*\.size', asm, re.M | re.S)
         assert len(bodies) == len(cases)
-        for (save, width, reg, alt), body in zip(cases, bodies):
+        for (save, width, reg, alt, clobber_flags, scratch), body in zip(cases, bodies):
             code = [line.strip() for line in body.splitlines() if re.match(r'\t[a-z]', line)]
             for _ in range(32):
                 regs = {r: rng.randrange(256) for r in
@@ -97,10 +105,12 @@ body: |
                 shadow = alt.removesuffix('_alt').removeprefix('u')
                 if save:
                     write(shadow, read(main, initial), expected_alt)
-                    if main == 'a' and shadow == 'a':
+                    if clobber_flags:
                         expected_alt['f'] = initial['f']
                 else:
                     write(main, read(shadow, alternate), expected)
+                if scratch:
+                    expected[scratch] = initial['a'] if save else alternate['a']
                 assert not stack and regs == expected and bank == expected_alt, (bits, reg, alt, save, code)
                 checked += 1
     print(f'{checked} randomized bank-transfer executions passed')

@@ -168,6 +168,14 @@ unsigned llvm::Z80::bankAddCost(MCRegister Dst, MCRegister Src, bool Bytes) {
   return (Bytes ? 1 : 11) + Extra;
 }
 
+MCRegister Z80InstrInfo::getAFTransferScratch(const MachineInstr &MI) {
+  for (const auto &MO : MI.implicit_operands())
+    if (MO.isReg() && MO.isDef() && MO.isDead() && MO.getReg() != Z80::A &&
+        Z80::G8RegClass.contains(MO.getReg()))
+      return MO.getReg().asMCReg();
+  return MCRegister();
+}
+
 std::optional<unsigned>
 Z80InstrInfo::getEmissionPseudoSize(const MachineInstr &MI) const {
   // These atomic pseudos are expanded by the assembly printer, after
@@ -238,8 +246,12 @@ Z80InstrInfo::getEmissionPseudoSize(const MachineInstr &MI) const {
     MCRegister R = MI.getOperand(Load ? 0 : 1).getReg();
     if (MI.getOperand(Load ? 1 : 0).getReg() != Z80::A_ALT)
       return R == Z80::A ? 3 : 6 + unsigned(Z80::I8RegClass.contains(R));
-    return R == Z80::A ? (Load ? 6 : 4)
-                       : 3 + unsigned(Z80::I8RegClass.contains(R));
+    return R == Z80::A
+               ? (getAFTransferScratch(MI) ||
+                          (!Load && MI.modifiesRegister(Z80::F_ALT, &getRegisterInfo()))
+                      ? 4
+                      : 6)
+               : 3 + unsigned(Z80::I8RegClass.contains(R));
   }
   default:
     return std::nullopt;

@@ -20,6 +20,7 @@ stack:
   - { id: 0, type: spill-slot, size: 1, alignment: 1 }
   - { id: 1, type: spill-slot, size: 1, alignment: 1 }
 # Both values are live together and occupy different lanes of one pair.
+# Live alternate flags prevent accumulator ownership exchanges.
 # Removing all stack spills also releases the frame pointer, despite the
 # dead frame-object entries retained by MachineFrameInfo.
 # FRAME-LABEL: two_bytes:
@@ -32,7 +33,7 @@ stack:
 # CHECK: $a = ALT_LOAD8 $h_alt
 body: |
   bb.0:
-    liveins: $hl
+    liveins: $hl, $f_alt
     $a = COPY $l
     LD8or %stack.0, 0, $a
     $a = COPY $h
@@ -41,7 +42,7 @@ body: |
     $b = COPY $a
     $a = LD8ro %stack.1, 0
     ADD8ar $b, implicit-def $a, implicit-def $f, implicit $a
-    RET16 implicit-def $sps, implicit $sps, implicit $a
+    RET16 implicit-def $sps, implicit $sps, implicit $a, implicit $f_alt
 ...
 ---
 name: word_bytes
@@ -60,7 +61,7 @@ stack:
 # CHECK: $a = ALT_LOAD8 $d_alt
 body: |
   bb.0:
-    liveins: $hl, $a, $c
+    liveins: $hl, $a, $c, $f_alt
     LD88or %stack.0, 0, $hl
     $hl = LD16ri 0
     LD8or %stack.1, 0, $a
@@ -71,7 +72,7 @@ body: |
     $b = COPY $a
     $a = LD8ro %stack.2, 0
     ADD8ar $b, implicit-def $a, implicit-def $f, implicit $a
-    RET16 implicit-def $sps, implicit $sps, implicit $a, implicit $de
+    RET16 implicit-def $sps, implicit $sps, implicit $a, implicit $de, implicit $f_alt
 ...
 ---
 name: fixed_lane
@@ -84,11 +85,11 @@ stack:
 # CHECK: $a = ALT_LOAD8 $l_alt
 body: |
   bb.0:
-    liveins: $a, $h_alt
+    liveins: $a, $h_alt, $f_alt
     LD8or %stack.0, 0, $a
     $a = LD8ri 0
     $a = LD8ro %stack.0, 0
-    RET16 implicit-def $sps, implicit $sps, implicit $a, implicit $h_alt
+    RET16 implicit-def $sps, implicit $sps, implicit $a, implicit $h_alt, implicit $f_alt
 ...
 ---
 name: partial_neighbor

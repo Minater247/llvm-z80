@@ -43,13 +43,14 @@ struct Access {
   bool Load;
   MachineInstr *CopiedStep = nullptr;
   bool SwapAF = false;
+  bool ClobberAltFlags = false;
+  MCRegister AFScratch;
 };
 struct Slot {
   unsigned Width = 0;
   bool Valid = true;
   double Saving = 0, PairByteSaving = 0;
   double SwapSaving = 0;
-  bool EveryAFTransferCheaper = true;
   MCRegister Assigned;
   unsigned UnavailableBanks = 0;
 };
@@ -109,7 +110,7 @@ static int saving(const Access &A, unsigned Width, bool Bytes,
     return int(Old) - int(New);
   }
   unsigned New = A.Reg == Z80::A
-                     ? (Bytes ? (A.Load ? 6 : 4) : (A.Load ? 37 : 29))
+                     ? (Bytes ? 6 : 37)
                      : (Bytes ? 3 + unsigned(Index) : 12 + 4 * unsigned(Index));
   return int(Old) - int(New);
 }
@@ -384,6 +385,11 @@ bool Z80AlternateRegAllocator::runOnMachineFunction(MachineFunction &MF) {
                        llvm::any_of(Slots, [](const Slot &S) {
                          return S.Valid && S.Width == 1;
                        });
+  SmallVector<MCRegister, 6> ScratchBytes;
+  if (SwapRegisters)
+    for (MCRegister R : {Z80::B, Z80::C, Z80::D, Z80::E, Z80::H, Z80::L})
+      if (MF.getRegInfo().isPhysRegModified(R))
+        ScratchBytes.push_back(R);
   for (const auto &MBB : MF) {
     BitVector Live = Out[MBB.getNumber()];
     /* Fixed assignments from the main allocator only exclude storage while
@@ -431,6 +437,25 @@ bool Z80AlternateRegAllocator::runOnMachineFunction(MachineFunction &MF) {
       auto AccessIt = AccessIndex.find(&MI);
       if (AccessIt != AccessIndex.end()) {
         auto &A = Accesses[AccessIt->second];
+        /* A dead primary byte can bridge the accumulator banks without a
+           stack save. Reuse a register the function already clobbers so IPRA
+           callers retain their existing preservation guarantees. When no
+           byte is available, a store can copy all of AF if F' is dead. */
+        if (Slots[A.Slot].Width == 1 && A.Reg == Z80::A && SwapRegisters) {
+          for (MCRegister R : ScratchBytes)
+            if (FixedLive.available(R)) {
+              A.AFScratch = R;
+              break;
+            }
+          A.ClobberAltFlags = !A.AFScratch && !A.Load &&
+                             FixedLive.available(Z80::F_ALT);
+          double Weight = MF.getFunction().hasOptSize()
+                              ? 1.0
+                              : MBFI.getBlockFreqRelativeToEntryBlock(&MBB);
+          if (A.AFScratch || A.ClobberAltFlags)
+            Slots[A.Slot].Saving +=
+                Weight * (Bytes ? 2 : A.AFScratch ? 21 : 8);
+        }
         if (A.CopiedStep && !FixedLive.available(A.Reg))
           A.CopiedStep = nullptr;
         /* A consumed spill can exchange ownership with the accumulator.
@@ -443,8 +468,9 @@ bool Z80AlternateRegAllocator::runOnMachineFunction(MachineFunction &MF) {
           A.SwapAF = true;
           bool Index = Z80::I8RegClass.contains(A.Reg);
           unsigned Old = A.Reg == Z80::A
-                             ? (Bytes ? (A.Load ? 6 : 4)
-                                      : (A.Load ? 37 : 29))
+                             ? (A.AFScratch ? (Bytes ? 4 : 16)
+                                            : Bytes ? (A.ClobberAltFlags ? 4 : 6)
+                                                    : (A.ClobberAltFlags ? 29 : 37))
                              : (Bytes ? 3 + unsigned(Index)
                                       : 12 + 4 * unsigned(Index));
           unsigned New = (Bytes ? 1 : 4) +
@@ -456,8 +482,6 @@ bool Z80AlternateRegAllocator::runOnMachineFunction(MachineFunction &MF) {
                               : MBFI.getBlockFreqRelativeToEntryBlock(&MBB);
           Slots[A.Slot].SwapSaving += Weight * (Old - New);
         }
-        if (Slots[A.Slot].Width == 1 && !A.SwapAF && A.Reg == Z80::A)
-          Slots[A.Slot].EveryAFTransferCheaper = false;
       }
       if (TrackRegisters)
         FixedLive.stepBackward(MI);
@@ -480,9 +504,18 @@ bool Z80AlternateRegAllocator::runOnMachineFunction(MachineFunction &MF) {
     for (int J : Conflicts[I].set_bits())
       Conflicts[J].set(I);
   }
+  /* Include ownership exchanges in AF' placement costs before assigning any
+     slot. Otherwise a small ordinary transfer can occupy AF' before a more
+     valuable accumulator lifetime is considered. Charge preserving transfers
+     against the lifetime's total saving: one expensive access can coexist
+     with enough cheap exchanges to make the placement profitable. */
+  auto AFSaving = [&](unsigned I) {
+    const auto &S = Slots[I];
+    return S.Saving + S.SwapSaving;
+  };
   auto BestSaving = [&](unsigned I) {
     return Slots[I].Width == 1
-               ? std::max(Slots[I].Saving, Slots[I].PairByteSaving)
+               ? std::max(AFSaving(I), Slots[I].PairByteSaving)
                : Slots[I].Saving;
   };
   SmallVector<unsigned, 16> Order;
@@ -498,9 +531,9 @@ bool Z80AlternateRegAllocator::runOnMachineFunction(MachineFunction &MF) {
                                            : Z80::ALT24RegClass;
     double Best = 0;
     for (MCRegister R : RC) {
-      double Saving = Slots[I].Width == 1 && R != Z80::A_ALT
-                          ? Slots[I].PairByteSaving
-                          : Slots[I].Saving;
+      double Saving = Slots[I].Width != 1 ? Slots[I].Saving
+                      : R == Z80::A_ALT   ? AFSaving(I)
+                                         : Slots[I].PairByteSaving;
       if (Saving <= Best || (Slots[I].UnavailableBanks & bankMask(R)))
         continue;
       bool Available = true;
@@ -515,27 +548,6 @@ bool Z80AlternateRegAllocator::runOnMachineFunction(MachineFunction &MF) {
       }
     }
   }
-  /* Keep the ordinary pair placements, then fill unused AF' lifetimes. Each
-     newly promoted access must improve independently: a cheap final exchange
-     must not subsidize expensive preserving reloads on another path. */
-  SmallVector<unsigned, 16> Swaps;
-  for (unsigned I = 0; I != N; ++I)
-    if (Slots[I].Valid && Slots[I].Width == 1 && !Slots[I].Assigned &&
-        Slots[I].EveryAFTransferCheaper && Slots[I].SwapSaving > 0 &&
-        Slots[I].Saving + Slots[I].SwapSaving > 0 &&
-        !(Slots[I].UnavailableBanks & bankMask(Z80::A_ALT)))
-      Swaps.push_back(I);
-  llvm::stable_sort(Swaps, [&](unsigned A, unsigned B) {
-    return Slots[A].Saving + Slots[A].SwapSaving >
-           Slots[B].Saving + Slots[B].SwapSaving;
-  });
-  for (unsigned I : Swaps)
-    if (llvm::none_of(Conflicts[I].set_bits(), [&](int J) {
-          return Slots[J].Assigned == Z80::A_ALT;
-        })) {
-      Slots[I].Assigned = Z80::A_ALT;
-      Order.push_back(I);
-    }
   bool Any = Reused;
   for (const auto &A : Accesses) {
     auto &S = Slots[A.Slot];
@@ -577,6 +589,12 @@ bool Z80AlternateRegAllocator::runOnMachineFunction(MachineFunction &MF) {
         BuildMI(*A.MI->getParent(), A.MI, A.MI->getDebugLoc(), TII.get(Opc),
                 A.Load ? A.Reg : S.Assigned)
             .addReg(A.Load ? S.Assigned : A.Reg);
+    if (Opc == Z80::ALT_SAVE8 && S.Assigned == Z80::A_ALT &&
+        A.ClobberAltFlags)
+      Replacement.addReg(Z80::F_ALT, RegState::ImplicitDefine | RegState::Dead);
+    if ((Opc == Z80::ALT_SAVE8 || Opc == Z80::ALT_LOAD8) &&
+        S.Assigned == Z80::A_ALT && A.AFScratch)
+      Replacement.addReg(A.AFScratch, RegState::ImplicitDefine | RegState::Dead);
     /* The remaining stack intervals keep their original instruction positions.
        Coloring ignores the removed frame objects and can still merge the
        unassigned spills using the intervals recorded during allocation. */

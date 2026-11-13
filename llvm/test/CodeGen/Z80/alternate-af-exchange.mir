@@ -10,6 +10,9 @@
   define i8 @alternate_flags_live() minsize optsize { ret i8 0 }
   define i8 @multiple_reads() minsize optsize { ret i8 0 }
   define i8 @primary_live() minsize optsize { ret i8 0 }
+  define i8 @competing_slots() minsize optsize { ret i8 0 }
+  define i8 @alternate_store_flags() { ret i8 0 }
+  define i8 @mixed_af_transfers() minsize optsize { ret i8 0 }
 ...
 ---
 name: consume
@@ -66,7 +69,10 @@ tracksRegLiveness: true
 stack:
   - { id: 0, type: spill-slot, size: 1, alignment: 1 }
 # CHECK-LABEL: name: multiple_reads
-# CHECK-NOT: ALT_SWAP
+# CHECK: ALT_SWAP_SAVE8
+# CHECK: $a = ALT_LOAD8 $a_alt
+# CHECK: LD8ma 16384
+# CHECK: ALT_SWAP_LOAD8
 # CHECK: RET16
 body: |
   bb.0:
@@ -94,4 +100,101 @@ body: |
     $b = LD8ri 0
     $c = LD8ro %stack.0, 0
     RET16 implicit-def $sps, implicit $sps, implicit $a, implicit $c
+...
+---
+name: competing_slots
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 1, alignment: 1 }
+  - { id: 1, type: spill-slot, size: 1, alignment: 1 }
+# Exchange savings must compete with ordinary AF' transfer savings. The
+# accumulator has six cheap exchanges; the index byte has just two accesses.
+# CHECK-LABEL: name: competing_slots
+# CHECK: $a_alt = ALT_SWAP_SAVE8 $a
+# CHECK: LD8or %stack.1, 0, $iyl
+# CHECK: $a = ALT_SWAP_LOAD8 $a_alt
+# CHECK: $a_alt = ALT_SWAP_SAVE8 $a
+# CHECK: $a = ALT_SWAP_LOAD8 $a_alt
+# CHECK: $a_alt = ALT_SWAP_SAVE8 $a
+# CHECK: $iyl = LD8ro %stack.1, 0
+# CHECK: $a = ALT_SWAP_LOAD8 $a_alt
+body: |
+  bb.0:
+    liveins: $a
+    LD8or %stack.0, 0, $a
+    $iyl = LD8ri 42
+    LD8or %stack.1, 0, $iyl
+    $iyl = LD8ri 0
+    $a = LD8ri 0
+    $a = LD8ro %stack.0, 0
+    $a = INC8r $a, implicit-def dead $f
+    LD8or %stack.0, 0, $a
+    $a = LD8ri 0
+    $a = LD8ro %stack.0, 0
+    $a = INC8r $a, implicit-def dead $f
+    LD8or %stack.0, 0, $a
+    $iyl = LD8ro %stack.1, 0
+    $a = COPY $iyl
+    LD8ma 8194, implicit $a :: (volatile store (s8))
+    $a = LD8ri 0
+    $a = LD8ro %stack.0, 0
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...
+---
+name: alternate_store_flags
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 1, alignment: 1 }
+# Copying primary AF into AF' would destroy live alternate flags.
+# Repeated non-accumulator loads otherwise make AF' storage profitable.
+# CHECK-LABEL: name: alternate_store_flags
+# CHECK: $a_alt = ALT_SAVE8 $a, implicit-def dead $b
+# CHECK-NOT: implicit-def dead $f_alt
+# CHECK: RET16
+body: |
+  bb.0:
+    liveins: $a, $f_alt
+    $hl = LD16ri 8192
+    LD8or %stack.0, 0, $a
+    $a = LD8ri 0
+    $b = LD8ro %stack.0, 0
+    LD8pg $hl, $b
+    $b = LD8ri 0
+    $b = LD8ro %stack.0, 0
+    LD8pg $hl, $b
+    $b = LD8ri 0
+    $b = LD8ro %stack.0, 0
+    LD8pg $hl, $b
+    $b = LD8ri 0
+    $b = LD8ro %stack.0, 0
+    $a = COPY $b
+    RET16 implicit-def $sps, implicit $sps, implicit $a, implicit $f_alt
+...
+---
+name: mixed_af_transfers
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 1, alignment: 1 }
+# Several cheap ownership exchanges pay for one flag-preserving reload.
+# CHECK-LABEL: name: mixed_af_transfers
+# CHECK: ALT_SWAP_SAVE8
+# CHECK: ALT_SWAP_LOAD8
+# CHECK: CP8ai 128
+# CHECK-NEXT: $a = ALT_LOAD8 $a_alt
+body: |
+  bb.0:
+    liveins: $a
+    LD8or %stack.0, 0, $a
+    $a = LD8ri 0
+    $a = LD8ro %stack.0, 0
+    $a = INC8r $a, implicit-def dead $f
+    LD8or %stack.0, 0, $a
+    $a = LD8ri 0
+    $a = LD8ro %stack.0, 0
+    $a = INC8r $a, implicit-def dead $f
+    LD8or %stack.0, 0, $a
+    $a = LD8ri 0
+    CP8ai 128, implicit-def $f, implicit $a
+    $a = LD8ro %stack.0, 0
+    RET16 implicit-def $sps, implicit $sps, implicit $a, implicit $f
 ...

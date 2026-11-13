@@ -402,21 +402,31 @@ void Z80AsmPrinter::emitInstruction(const MachineInstr *MI) {
           Emit(Move, {Main, Z80::A});
         Pop(Z80::AF);
       }
-    } else if (Main == Z80::A && Save) {
+    } else if (Main == Z80::A && Save &&
+               MI->modifiesRegister(Z80::F_ALT,
+                                    getSubtarget().getRegisterInfo())) {
+      // Copy the flag byte only when its clobber is explicit in the pseudo.
       Push(Z80::AF);
       Emit(Z80::EXAF);
       Pop(Z80::AF);
       Emit(Z80::EXAF);
     } else if (Main == Z80::A) {
-      // POP AF would corrupt the primary flags with the alternate flags.
-      // Use a preserved byte of BC instead, retaining both banks' flags.
+      // Bridge through a preserved byte of BC to retain both flag banks.
       MCRegister BC = Wide ? Z80::UBC : Z80::BC;
-      Push(BC);
+      MCRegister Scratch = Z80InstrInfo::getAFTransferScratch(*MI);
+      MCRegister Byte = Scratch ? Scratch : MCRegister(Z80::B);
+      if (!Scratch)
+        Push(BC);
+      if (Save)
+        Emit(Z80::LD8gg, {Byte, Z80::A});
       Emit(Z80::EXAF);
-      Emit(Z80::LD8gg, {Z80::B, Z80::A});
+      Emit(Z80::LD8gg, {Save ? MCRegister(Z80::A) : Byte,
+                       Save ? Byte : MCRegister(Z80::A)});
       Emit(Z80::EXAF);
-      Emit(Z80::LD8gg, {Z80::A, Z80::B});
-      Pop(BC);
+      if (Load)
+        Emit(Z80::LD8gg, {Z80::A, Byte});
+      if (!Scratch)
+        Pop(BC);
     } else {
       unsigned Move =
           Z80::I8RegClass.contains(Main)

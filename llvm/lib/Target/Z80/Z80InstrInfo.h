@@ -115,6 +115,10 @@ public:
   /// Other instructions have no size supplied by this query.
   std::optional<unsigned> getEmissionPseudoSize(const MachineInstr &MI) const;
 
+  /// Return the dead primary byte explicitly supplied to an AF' transfer.
+  /// An invalid register requests a temporary preserved through the stack.
+  static MCRegister getAFTransferScratch(const MachineInstr &MI);
+
 	// Branch analysis.
 	bool analyzeBranch(MachineBasicBlock &MBB, MachineBasicBlock *&TBB,
 										 MachineBasicBlock *&FBB,
