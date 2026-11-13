@@ -30,6 +30,45 @@ public:
     return createZ80ELFObjectWriter(OSABI);
   }
 
+  bool finishLayout() const override {
+    /* Resolve extraction aliases after all assignments have been parsed.
+       The operand width stays fixed, so selecting a relocation here leaves
+       instruction offsets and relative branches unchanged. */
+    for (MCSection &Section : *Asm)
+      for (MCFragment &Fragment : Section) {
+        SmallVector<MCFixup, 4> ExtraFixups;
+        for (MCFixup &Fixup : Fragment.getFixups()) {
+          unsigned Size = Fixup.getKind() == FK_Data_1       ? 1
+                          : Fixup.getKind() == FK_Data_2     ? 2
+                          : Fixup.getKind() == Z80::fixup_24 ? 3
+                          : Fixup.getKind() == FK_Data_4     ? 4
+                                                             : 0;
+          if (!Size || Fixup.isPCRel())
+            continue;
+          const MCExpr *Expr = Fixup.getValue();
+          auto Byte = Z80::getExtractOffset(Expr, Size, *Asm);
+          if (!Byte)
+            continue;
+          unsigned Offset = Fixup.getOffset();
+          if (Size == 2 && (*Byte == 0 || *Byte == 2)) {
+            Fixup = MCFixup::create(Offset, Expr,
+                                    MCFixupKind(Z80::fixup_word0 + *Byte / 2));
+          } else {
+            // Keep the entire addend on every relocation so carries occur
+            // before extraction, including words starting at an odd byte.
+            Fixup = MCFixup::create(Offset, Expr,
+                                    MCFixupKind(Z80::fixup_byte0 + *Byte));
+            for (unsigned I = 1; I < Size; ++I)
+              ExtraFixups.push_back(MCFixup::create(
+                  Offset + I, Expr, MCFixupKind(Z80::fixup_byte0 + *Byte + I)));
+          }
+        }
+        Fragment.appendFixups(ExtraFixups);
+      }
+    Z80::inlineExtractAliases(*Asm);
+    return false;
+  }
+
   MCFixupKindInfo getFixupKindInfo(MCFixupKind Kind) const override {
     switch (Kind) {
     case Z80::fixup_24:
@@ -38,6 +77,14 @@ public:
       return {"fixup_8_pcrel", 0, 8, 0};
     case Z80::fixup_8_disp:
       return {"fixup_8_disp", 0, 8, 0};
+    case Z80::fixup_byte0:
+    case Z80::fixup_byte1:
+    case Z80::fixup_byte2:
+    case Z80::fixup_byte3:
+      return {"fixup_byte", 0, 8, 0};
+    case Z80::fixup_word0:
+    case Z80::fixup_word1:
+      return {"fixup_word", 0, 16, 0};
     default:
       return MCAsmBackend::getFixupKindInfo(Kind);
     }
@@ -50,6 +97,13 @@ public:
     if (mc::isRelocation(Fixup.getKind()))
       return;
     unsigned Bits = getFixupKindInfo(Fixup.getKind()).TargetSize;
+    if (Fixup.getKind() >= Z80::fixup_byte0 &&
+        Fixup.getKind() <= Z80::fixup_word1) {
+      unsigned Shift = Fixup.getKind() <= Z80::fixup_byte3
+                           ? 8 * (Fixup.getKind() - Z80::fixup_byte0)
+                           : 16 * (Fixup.getKind() - Z80::fixup_word0);
+      Value = (Value >> Shift) & ((uint64_t(1) << Bits) - 1);
+    }
     if (IsResolved &&
         (Fixup.getKind() == Z80::fixup_8_pcrel ||
          Fixup.getKind() == Z80::fixup_8_disp) &&

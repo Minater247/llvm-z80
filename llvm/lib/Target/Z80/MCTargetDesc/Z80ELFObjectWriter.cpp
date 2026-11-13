@@ -36,6 +36,14 @@ public:
       return ELF::R_Z80_24;
     case Z80::fixup_8_disp:
       return ELF::R_Z80_8_DIS;
+    case Z80::fixup_byte0:
+    case Z80::fixup_byte1:
+    case Z80::fixup_byte2:
+    case Z80::fixup_byte3:
+      return ELF::R_Z80_BYTE0 + Fixup.getKind() - Z80::fixup_byte0;
+    case Z80::fixup_word0:
+    case Z80::fixup_word1:
+      return ELF::R_Z80_WORD0 + Fixup.getKind() - Z80::fixup_word0;
     default:
       getContext().reportError(Fixup.getLoc(), "unsupported Z80 relocation");
       return ELF::R_Z80_NONE;
