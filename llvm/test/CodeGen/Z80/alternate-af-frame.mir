@@ -1,0 +1,22 @@
+# RUN: llc -mattr=+alternate-regs -start-before=prologepilog -verify-machineinstrs %s -o %t.s
+# RUN: %python %S/Inputs/alternate-af-frame.py %t.s
+--- |
+  target triple = "z80"
+  define void @far_slot() { ret void }
+...
+---
+name: far_slot
+tracksRegLiveness: true
+fixedStack:
+  - { id: 0, type: default, offset: 300, size: 1, alignment: 1, isImmutable: false }
+body: |
+  bb.0:
+    liveins: $a_alt, $a, $f_alt, $hl, $de, $bc
+    ; Primary data pairs and AF are live across both transfers. Address
+    ; materialization must preserve them when the displacement cannot fit.
+    CP8ai 128, implicit-def $f, implicit $a
+    ALT_SPILL8o %fixed-stack.0, 0, implicit $a_alt
+    $a_alt = ALT_SAVE8 $b
+    ALT_RELOAD8o %fixed-stack.0, 0, implicit-def $a_alt
+    RET16 implicit-def $sps, implicit $sps, implicit $a, implicit $f, implicit $a_alt, implicit $hl, implicit $de, implicit $bc, implicit $f_alt
+...

@@ -182,6 +182,12 @@ Z80InstrInfo::getEmissionPseudoSize(const MachineInstr &MI) const {
   // scheduling and liveness-based optimizations. Branch relaxation needs their
   // exact encoded size, including an index prefix on the main-bank operand.
   switch (MI.getOpcode()) {
+  case Z80::ALT_SPILL8o:
+  case Z80::ALT_RELOAD8o:
+    return 5;
+  case Z80::ALT_SPILL8p:
+  case Z80::ALT_RELOAD8p:
+    return isIndex(MI.getOperand(0), getRegisterInfo()) ? 5 : 3;
   case Z80::LD8A_POST16:
   case Z80::BANK_LD8A_POST16: {
     Register R = MI.getOperand(1).getReg();
@@ -1369,6 +1375,8 @@ void Z80InstrInfo::rewriteFrameIndex(MachineInstr &MI, unsigned FIOperandNum,
     }
     switch (Opc) {
     default: llvm_unreachable("Unexpected opcode!");
+    case Z80::ALT_SPILL8o: Opc = Z80::ALT_SPILL8p; break;
+    case Z80::ALT_RELOAD8o: Opc = Z80::ALT_RELOAD8p; break;
     case Z80::LD24ro:  Opc = Z80::LD24rp;  break;
     case Z80::LD16ro:  Opc = Z80::LD16rp;  break;
     case Z80::LD88ro:  Opc = Z80::LD88rp;  break;

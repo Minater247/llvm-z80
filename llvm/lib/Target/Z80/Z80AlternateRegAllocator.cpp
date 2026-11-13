@@ -51,6 +51,8 @@ struct Slot {
   bool Valid = true;
   double Saving = 0, PairByteSaving = 0;
   double SwapSaving = 0;
+  double CallCost = 0;
+  SmallVector<const MachineInstr *, 2> AFCalls;
   MCRegister Assigned;
   unsigned UnavailableBanks = 0;
 };
@@ -483,10 +485,29 @@ bool Z80AlternateRegAllocator::runOnMachineFunction(MachineFunction &MF) {
           Slots[A.Slot].SwapSaving += Weight * (Old - New);
         }
       }
+      bool BridgeAF = (FixedBanks & bankMask(Z80::A_ALT)) && MI.isCall() &&
+                      !MI.isTerminator() && !MI.isBundled() &&
+                      !MBB.hasEHPadSuccessor() &&
+                      FixedLive.available(Z80::A_ALT) &&
+                      llvm::none_of(MI.operands(), [&](const MachineOperand &MO) {
+                        return MO.isReg() && MO.getReg() &&
+                               TRI.regsOverlap(MO.getReg(), Z80::AF_ALT);
+                      });
       if (TrackRegisters)
         FixedLive.stepBackward(MI);
-      for (int I : Live.set_bits())
-        Slots[I].UnavailableBanks |= FixedBanks;
+      for (int I : Live.set_bits()) {
+        auto &S = Slots[I];
+        if (BridgeAF && S.Valid && S.Width == 1) {
+          S.AFCalls.push_back(&MI);
+          double Weight = MF.getFunction().hasOptSize()
+                              ? 1.0
+                              : MBFI.getBlockFreqRelativeToEntryBlock(&MBB);
+          S.CallCost += Weight * (Bytes ? 10 : 54);
+          S.UnavailableBanks |= FixedBanks & ~bankMask(Z80::A_ALT);
+        } else {
+          S.UnavailableBanks |= FixedBanks;
+        }
+      }
       if (AccessIt == AccessIndex.end())
         continue;
       const auto &A = Accesses[AccessIt->second];
@@ -511,7 +532,7 @@ bool Z80AlternateRegAllocator::runOnMachineFunction(MachineFunction &MF) {
      with enough cheap exchanges to make the placement profitable. */
   auto AFSaving = [&](unsigned I) {
     const auto &S = Slots[I];
-    return S.Saving + S.SwapSaving;
+    return S.Saving + S.SwapSaving - S.CallCost;
   };
   auto BestSaving = [&](unsigned I) {
     return Slots[I].Width == 1
@@ -611,7 +632,35 @@ bool Z80AlternateRegAllocator::runOnMachineFunction(MachineFunction &MF) {
   }
   for (unsigned I : Order)
     if (Slots[I].Assigned) {
-      MFI.RemoveStackObject(I);
+      if (Slots[I].Assigned != Z80::A_ALT || Slots[I].AFCalls.empty()) {
+        MFI.RemoveStackObject(I);
+      } else {
+        /* Save the bank byte through its private frame slot around clobbering
+           calls. Atomic transfers preserve arguments, return values and flags;
+           the stack pointer and the callee's argument layout stay unchanged. */
+        for (const MachineInstr *Call : Slots[I].AFCalls) {
+          auto &MBB = *const_cast<MachineBasicBlock *>(Call->getParent());
+          auto At = const_cast<MachineInstr *>(Call)->getIterator();
+          auto Store = BuildMI(MBB, At, Call->getDebugLoc(),
+                               TII.get(Z80::ALT_SPILL8o))
+                           .addFrameIndex(I)
+                           .addImm(0)
+                           .addMemOperand(MF.getMachineMemOperand(
+                               MachinePointerInfo::getFixedStack(MF, I),
+                               MachineMemOperand::MOStore, 1, Align(1)));
+          auto Load = BuildMI(MBB, std::next(At), Call->getDebugLoc(),
+                              TII.get(Z80::ALT_RELOAD8o))
+                          .addFrameIndex(I)
+                          .addImm(0)
+                          .addMemOperand(MF.getMachineMemOperand(
+                              MachinePointerInfo::getFixedStack(MF, I),
+                              MachineMemOperand::MOLoad, 1, Align(1)));
+          if (Indexes) {
+            Indexes->getSI().insertMachineInstrInMaps(*Store);
+            Indexes->getSI().insertMachineInstrInMaps(*Load);
+          }
+        }
+      }
       ++NumBankSlots;
     }
   return Any;

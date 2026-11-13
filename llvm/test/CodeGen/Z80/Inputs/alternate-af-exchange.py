@@ -8,10 +8,20 @@ spec = importlib.util.spec_from_file_location(
     'execution', Path(__file__).with_name('z80-execution.py'))
 x = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(x)
-program = x.Program(Path(sys.argv[1]).read_text())
+program = x.Program(Path(sys.argv[1]).read_text() + """
+helper:
+ld (8196), a
+ex af, af'
+ld a, 173
+scf
+ex af, af'
+ld a, 55
+scf
+ret
+""")
 checks = 0
 for name in ('consume', 'flags_live', 'alternate_flags_live',
-             'multiple_reads', 'primary_live', 'competing_slots',
+             'multiple_reads', 'primary_live', 'competing_slots', 'call_bridge',
              'alternate_store_flags', 'mixed_af_transfers'):
     for value in range(256):
         for flags in (0, 1, 64, 255):
@@ -22,8 +32,10 @@ for name in ('consume', 'flags_live', 'alternate_flags_live',
             cpu.alt['f'] = flags ^ 0xa5 if name == 'alternate_store_flags' else flags
             ix, sp = cpu.get('ix'), cpu.sp
             cpu.run(program, entry=name)
-            increment = 2 if name in ('competing_slots', 'mixed_af_transfers') else 0
+            increment = 3 if name == 'call_bridge' else 2 if name in ('competing_slots', 'mixed_af_transfers') else 0
             expected = (value + increment) & 255
+            if name == 'call_bridge':
+                assert cpu.mem[8195] == 55 and cpu.mem[8196] == 201
             assert cpu.get('a') == expected, (name, value, flags)
             if name == 'competing_slots':
                 assert cpu.mem[8194] == 42

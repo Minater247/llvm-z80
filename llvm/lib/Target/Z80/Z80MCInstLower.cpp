@@ -304,6 +304,27 @@ void Z80AsmPrinter::emitInstruction(const MachineInstr *MI) {
     Emit(Z80::EXX16);
     return;
   }
+  if (Opc == Z80::ALT_SPILL8o || Opc == Z80::ALT_SPILL8p ||
+      Opc == Z80::ALT_RELOAD8o || Opc == Z80::ALT_RELOAD8p) {
+    bool Load = Opc == Z80::ALT_RELOAD8o || Opc == Z80::ALT_RELOAD8p;
+    bool Offset = Opc == Z80::ALT_SPILL8o || Opc == Z80::ALT_RELOAD8o;
+    MCInst Exchange;
+    Exchange.setOpcode(Z80::EXAF);
+    EmitToStreamer(*OutStreamer, Exchange);
+    MCInst Transfer;
+    Transfer.setOpcode(Load ? (Offset ? Z80::LD8go : Z80::LD8gp)
+                            : (Offset ? Z80::LD8og : Z80::LD8pg));
+    if (Load)
+      Transfer.addOperand(MCOperand::createReg(Z80::A));
+    Transfer.addOperand(MCOperand::createReg(MI->getOperand(0).getReg()));
+    if (Offset)
+      Transfer.addOperand(MCOperand::createImm(MI->getOperand(1).getImm()));
+    if (!Load)
+      Transfer.addOperand(MCOperand::createReg(Z80::A));
+    EmitToStreamer(*OutStreamer, Transfer);
+    EmitToStreamer(*OutStreamer, Exchange);
+    return;
+  }
   if (Opc == Z80::ALT_SWAP_SAVE8 || Opc == Z80::ALT_SWAP_LOAD8) {
     bool Load = Opc == Z80::ALT_SWAP_LOAD8;
     MCRegister Main = MI->getOperand(Load ? 0 : 1).getReg();

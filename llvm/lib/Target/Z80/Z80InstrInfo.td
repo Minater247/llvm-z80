@@ -1425,6 +1425,15 @@ def : Pat<(bswap R16:$src),
 // Expansion is deliberately after post-RA scheduling: each transfer restores
 // the primary bank before another instruction, call, or branch can execute.
 let hasSideEffects = 1 in {
+  // These memory transfers preserve the primary accumulator and both flags.
+  let mayStore = true, Uses = [A_ALT] in {
+    def ALT_SPILL8o : Pseudo<"", "", "", (outs), (ins off:$dst)>;
+    def ALT_SPILL8p : Pseudo<"", "", "", (outs), (ins aptr:$dst)>;
+  }
+  let mayLoad = true, Defs = [A_ALT] in {
+    def ALT_RELOAD8o : Pseudo<"", "", "", (outs), (ins off:$src)>;
+    def ALT_RELOAD8p : Pseudo<"", "", "", (outs), (ins aptr:$src)>;
+  }
   def ALT_SAVE8 : Pseudo<"", "", "", (outs ALT8:$dst), (ins R8:$src)>;
   def ALT_LOAD8 : Pseudo<"", "", "", (outs R8:$dst), (ins ALT8:$src)>;
   // Exchanges transfer ownership when the discarded accumulator and both
