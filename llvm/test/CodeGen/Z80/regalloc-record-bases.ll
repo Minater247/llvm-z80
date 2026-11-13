@@ -6,7 +6,7 @@
 ;
 ; CHECK-LABEL: name: record
 ; CHECK: %[[BASE:[0-9]+]]:i16 = ADD16ao
-; CHECK: LD8gp %[[BASE]]
+; CHECK: LD8{{[ga]}}p %[[BASE]]
 ; CHECK: LD8go %[[BASE]], 1
 ; CHECK: LD8go %[[BASE]], 5
 ; CHECK: CALL16 @opaque

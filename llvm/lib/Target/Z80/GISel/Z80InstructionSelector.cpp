@@ -655,7 +655,7 @@ bool Z80InstructionSelector::selectPairLoad(MachineInstr &I,
 // earlier definitions still have their generic form. Bound the local search;
 // no CFG or alias analysis is needed for this arithmetic identity.
 static Register previousCursor(MachineInstr &I, Register Base, int64_t Step,
-                               bool Byte, MachineRegisterInfo &MRI) {
+                               bool Byte, MachineRegisterInfo &MRI, bool &Inc) {
   unsigned Scanned = 0;
   for (auto It = I.getIterator(); It != I.getParent()->begin() && Scanned < 64;
        ++Scanned) {
@@ -675,7 +675,9 @@ static Register previousCursor(MachineInstr &I, Register Base, int64_t Step,
         Add->getOperand(1).getReg() != Base)
       continue;
     auto Offset = getIConstantVRegVal(Add->getOperand(2).getReg(), MRI);
-    if (Offset && Offset->getSExtValue() == Step) {
+    if (Offset && (Offset->getSExtValue() == Step - 1 ||
+                   Offset->getSExtValue() == Step + 1)) {
+      Inc = Offset->getSExtValue() == Step - 1;
       // The new use may require wrapping arithmetic even when the old use
       // allowed poison. Refining the earlier step to modular arithmetic avoids
       // introducing its no-wrap/inbounds assumptions into the later result.
@@ -695,13 +697,11 @@ bool Z80InstructionSelector::selectConsecutiveAdd(
       MRI.getType(I.getOperand(0).getReg()) != LLT::scalar(16))
     return false;
   auto Offset = getIConstantVRegVal(I.getOperand(2).getReg(), MRI);
-  if (!Offset || !Offset->isSignedIntN(16) || Offset->isZero() ||
-      Offset->isOne() || Offset->isAllOnes())
+  if (!Offset || !Offset->isSignedIntN(16) || Offset->isZero())
     return false;
   bool Inc = !Offset->isNegative();
   Register Previous = previousCursor(I, I.getOperand(1).getReg(),
-                                    Offset->getSExtValue() + (Inc ? -1 : 1),
-                                    false, MRI);
+                                    Offset->getSExtValue(), false, MRI, Inc);
   if (!Previous)
     return false;
   I.getOperand(1).setReg(Previous);
@@ -734,10 +734,8 @@ bool Z80InstructionSelector::selectTruncInc(MachineInstr &I,
         Register Base = Def->getOperand(1).getReg();
         bool Double = Step->getSExtValue() == 2 || Step->getSExtValue() == -2;
         Register Byte;
-        if (Step->getSExtValue() != 1 && Step->getSExtValue() != -1)
-          Byte = previousCursor(I, Base, Step->getSExtValue() +
-                                            (Step->isNegative() ? 1 : -1),
-                                true, MRI);
+        bool Inc = !Step->isNegative();
+        Byte = previousCursor(I, Base, Step->getSExtValue(), true, MRI, Inc);
         bool Reused = bool(Byte);
         if (!Reused && !Double && Step->getSExtValue() != 1 &&
             Step->getSExtValue() != -1)
@@ -750,7 +748,7 @@ bool Z80InstructionSelector::selectTruncInc(MachineInstr &I,
           if (!selectCopy(*Copy, MRI))
             return false;
         }
-        unsigned Opc = Step->isNegative() ? Z80::DEC8r : Z80::INC8r;
+        unsigned Opc = Inc ? Z80::INC8r : Z80::DEC8r;
         if (Double && !Reused) {
           Register NextByte = MRI.createVirtualRegister(&Z80::R8RegClass);
           auto Inc = BuildMI(*I.getParent(), I, I.getDebugLoc(), TII.get(Opc),
@@ -1204,6 +1202,17 @@ bool Z80InstructionSelector::selectLoadStore(MachineInstr &I,
   bool CopyByte = !IsLoad && Ty.getSizeInBits() == 8 && ValMI &&
                   ValMI->getOpcode() == TargetOpcode::G_LOAD &&
                   MRI.hasOneNonDBGUse(ValReg);
+  bool CopySourceByte = false;
+  if (IsLoad && Ty == LLT::scalar(8) && MRI.hasOneNonDBGUse(ValReg)) {
+    const MachineInstr &Use = *MRI.use_nodbg_instructions(ValReg).begin();
+    /* A byte store can consume A even when its address uses an index
+       displacement. Let the source use BC or DE instead of forcing both
+       sides of the copy through HL/IX/IY. */
+    CopySourceByte = Use.getOpcode() == Z80::LD8pg ||
+                     Use.getOpcode() == Z80::LD8og ||
+                     Use.getOpcode() == Z80::LD8pr ||
+                     Use.getOpcode() == Z80::LD8or;
+  }
   bool AccumulatorByte = false;
   if (IsLoad && Ty.getSizeInBits() == 8 && MRI.hasOneNonDBGUse(ValReg)) {
     auto &Use = *MRI.use_nodbg_instructions(ValReg).begin();
@@ -1297,7 +1306,7 @@ bool Z80InstructionSelector::selectLoadStore(MachineInstr &I,
     }
   }
   bool UnitStep = false;
-  if ((AddressByte || CopyByte || AccumulatorByte) && PtrMI &&
+  if ((AddressByte || CopyByte || CopySourceByte || AccumulatorByte) && PtrMI &&
       PtrMI->getOpcode() == TargetOpcode::G_PTR_ADD)
     if (auto Step = getIConstantVRegVal(PtrMI->getOperand(2).getReg(), MRI)) {
       bool UnitOffset = Step->isOne() || Step->isAllOnes();
@@ -1326,10 +1335,11 @@ bool Z80InstructionSelector::selectLoadStore(MachineInstr &I,
       // Keep the address explicit when selection can reuse the preceding
       // cursor with one increment, preserving primary and alternate choices.
       if (!STI.hasEZ80Ops() && !UnitStep && !Step->isZero() &&
-          Step->isSignedIntN(16))
-        UnitStep = bool(previousCursor(
-            *PtrMI, PtrMI->getOperand(1).getReg(),
-            Step->getSExtValue() + (Step->isNegative() ? 1 : -1), false, MRI));
+          Step->isSignedIntN(16)) {
+        bool Inc;
+        UnitStep = bool(previousCursor(*PtrMI, PtrMI->getOperand(1).getReg(),
+                                       Step->getSExtValue(), false, MRI, Inc));
+      }
     }
   bool PreferRegPtrFor8 =
       (Ty.getSizeInBits() == 8) && (!MRI.hasOneUse(PtrReg) || UnitStep) &&
@@ -1601,8 +1611,8 @@ bool Z80InstructionSelector::selectLoadStore(MachineInstr &I,
     return selectCopy(*Copy, MRI) &&
            constrainSelectedInstRegOperands(I, TII, TRI, RBI);
   }
-  if ((AddressByte || AccumulatorByte || SharedAccumulatorByte) && !IsOff &&
-      RMWOps.empty()) {
+  if ((AddressByte || CopySourceByte || AccumulatorByte || SharedAccumulatorByte) &&
+      !IsOff && RMWOps.empty()) {
     MachineInstr *AccumulatorUse = nullptr;
     if (AccumulatorByte) {
       auto &Use = *MRI.use_nodbg_instructions(ValReg).begin();
@@ -1765,12 +1775,11 @@ bool Z80InstructionSelector::selectFrameIndexOrGep(MachineInstr &I,
   if (I.getOpcode() == TargetOpcode::G_PTR_ADD) {
     auto OffConst = getIConstantVRegVal(I.getOperand(2).getReg(), MRI);
     if (!HasLEA && PtrSize >= 16 && OffConst &&
-        OffConst->isSignedIntN(16) && !OffConst->isZero() &&
-        !OffConst->isOne() && !OffConst->isAllOnes()) {
+        OffConst->isSignedIntN(16) && !OffConst->isZero()) {
       bool Inc = !OffConst->isNegative();
       if (Register Previous = previousCursor(I, I.getOperand(1).getReg(),
-                                             OffConst->getSExtValue() +
-                                                 (Inc ? -1 : 1), false, MRI)) {
+                                             OffConst->getSExtValue(), false,
+                                             MRI, Inc)) {
         I.getOperand(1).setReg(Previous);
         I.removeOperand(2);
         Opc = PtrSize == 16 ? (Inc ? Z80::INC16r : Z80::DEC16r)
