@@ -9,6 +9,7 @@
   define void @invariant() optsize minsize { ret void }
   define void @conditional_loop() optsize minsize { ret void }
   define void @updated() optsize minsize { ret void }
+  define i16 @updated_pair(i16 %value) optsize minsize { ret i16 %value }
   define void @live_exit() optsize minsize { ret void }
   define void @shared_live_exit() optsize minsize { ret void }
   define void @updated_live_exit() optsize minsize { ret void }
@@ -95,6 +96,17 @@ body: |
 ...
 ---
 name: updated
+# CHECK-LABEL: updated:
+# CHECK: call opaque
+# CHECK: ld a, (ix
+# CHECK: [[UPDATED:.LBB[0-9]+_[0-9]+]]:
+# CHECK-NEXT: call preserving
+# CHECK-NOT: (ix
+# CHECK: inc a
+# CHECK-NOT: (ix
+# CHECK: jr nz, [[UPDATED]]
+# CHECK: ld (ix
+# CHECK: call opaque
 tracksRegLiveness: true
 frameInfo:
   adjustsStack: true
@@ -233,4 +245,48 @@ body: |
   bb.3:
     $a = COPY %0
     RET16 implicit-def $sps, implicit $sps, implicit $a
+...
+
+---
+name: updated_pair
+tracksRegLiveness: true
+# CHECK-LABEL: updated_pair:
+# CHECK: call opaque
+# CHECK: [[PAIRLOOP:.LBB[0-9]+_[0-9]+]]:
+# CHECK-NEXT: call preserving
+# CHECK-NOT: (ix
+# CHECK: inc [[PAIR:bc|de|hl|iy]]
+# CHECK-NOT: (ix
+# CHECK: jr nz, [[PAIRLOOP]]
+# CHECK: call opaque
+frameInfo:
+  adjustsStack: true
+  hasCalls: true
+stack:
+  - { id: 0, size: 2, alignment: 1 }
+body: |
+  bb.0:
+    successors: %bb.1(0x80000000)
+    liveins: $de
+    %0:r16 = COPY $de
+    LD88or %stack.0, 0, %0 :: (store (s16) into %stack.0)
+    CALL16 @opaque, csr_z80_c, implicit $sps
+    %1:r8 = LD8ri 8
+    JQ %bb.1
+  bb.1:
+    successors: %bb.2(0x80000000)
+    CALL16 @preserving, csr_z80_allregs, implicit $sps
+    JQ %bb.2
+  bb.2:
+    successors: %bb.1(0x70000000), %bb.3(0x10000000)
+    $a = COPY %0.sub_low
+    LD8ma 12544, implicit $a :: (volatile store (s8))
+    %0:r16 = INC16r %0
+    %1:r8 = DEC8r %1, implicit-def $f
+    JQCC %bb.1, 0, implicit $f
+    JQ %bb.3
+  bb.3:
+    CALL16 @opaque, csr_z80_c, implicit $sps
+    $de = COPY %0
+    RET16 implicit-def $sps, implicit $sps, implicit $de
 ...

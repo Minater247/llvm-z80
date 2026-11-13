@@ -65,18 +65,21 @@ ret
         program = execution.Program(assembly)
         rng = random.Random(421)
         for name in ('invariant', 'conditional_loop', 'updated',
-                     'live_exit', 'shared_live_exit', 'updated_live_exit'):
+                     'live_exit', 'shared_live_exit', 'updated_live_exit',
+                     'updated_pair'):
             for value in range(256):
                 cpu = CPU(rng)
-                cpu.put('e', value)
+                pair = name == 'updated_pair'
+                initial = ((value * 257) & 65535) if pair else value
+                cpu.put('de' if pair else 'e', initial)
                 sp, ix, alternate = cpu.sp, cpu.get('ix'), dict(cpu.alt)
                 cpu.run(program, entry=name)
                 skipped = name in ('conditional_loop', 'shared_live_exit') and value & 1
                 count = 0 if skipped else 8
-                updated = name in ('updated', 'updated_live_exit')
+                updated = name in ('updated', 'updated_live_exit', 'updated_pair')
                 expected = [(value + i * updated) & 255 for i in range(count)]
                 assert cpu.values == expected, (allocator, bank, name, value)
-                assert cpu.get('a') == (value + count * updated) & 255
+                assert cpu.get('de' if pair else 'a') == (initial + count * updated) & (65535 if pair else 255)
                 assert cpu.sp == sp + 2 and cpu.get('ix') == ix
                 assert cpu.writes <= {12544} | set(range(sp - 256, sp))
                 if not bank:

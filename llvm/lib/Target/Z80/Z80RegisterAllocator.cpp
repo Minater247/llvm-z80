@@ -333,9 +333,10 @@ class Z80RegisterAllocator final : public MachineFunctionPass,
   MCRegister resolve(const MachineOperand &MO, MCRegister R) const {
     return MO.getSubReg() ? TRI->getSubReg(R, MO.getSubReg()) : R;
   }
-  SmallVector<MCRegister, 12> domain(Register R) const {
+  SmallVector<MCRegister, 12> domain(
+      Register R, const TargetRegisterClass *RC = nullptr) const {
     SmallVector<MCRegister, 12> Result;
-    for (MCRegister P : RegClassInfo.getOrder(MRI->getRegClass(R))) {
+    for (MCRegister P : RegClassInfo.getOrder(RC ? RC : MRI->getRegClass(R))) {
       /* Reserve the coordinated channel for state lifetimes. An unrelated
          local placement can otherwise force transfers at every nested call. */
       if (HasStateBank && !StateValues.contains(R) &&
@@ -359,7 +360,8 @@ class Z80RegisterAllocator final : public MachineFunctionPass,
   }
   void
   accessCosts(Register R,
-              SmallVectorImpl<std::pair<double, MCRegister>> &Candidates) const;
+              SmallVectorImpl<std::pair<double, MCRegister>> &Candidates,
+              const MachineLoop *Loop = nullptr) const;
   SmallVector<Register, 8> blockers(const LiveInterval &LI, MCRegister P);
   bool search(SmallVector<Register, 8> Regs, unsigned Budget,
               Register Pending = Register());
@@ -422,10 +424,12 @@ void Z80RegisterAllocator::enqueueImpl(const LiveInterval *LI) {
 // across candidates; querying them once matters on this small register file.
 void Z80RegisterAllocator::accessCosts(
     Register R,
-    SmallVectorImpl<std::pair<double, MCRegister>> &Candidates) const {
+    SmallVectorImpl<std::pair<double, MCRegister>> &Candidates,
+    const MachineLoop *Loop) const {
   bool Bytes = OptSize || ST->hasEZ80Ops();
   for (const MachineInstr &MI : MRI->reg_nodbg_instructions(R)) {
-    if (MI.isImplicitDef() || MI.isKill())
+    if ((Loop && !Loop->contains(MI.getParent())) ||
+        MI.isImplicitDef() || MI.isKill())
       continue;
     double Weight = frequency(MI);
     if (MI.getOpcode() == Z80::BANK_ADD16) {
@@ -954,11 +958,12 @@ bool Z80RegisterAllocator::split(const LiveInterval &LI,
     return false;
   SmallVector<MachineLoop *, 4> LoopGroups;
   if (!MainBank && S == 0 &&
-      Z80::R8RegClass.hasSubClassEq(MRI->getRegClass(LI.reg()))) {
+      (Z80::R8RegClass.hasSubClassEq(MRI->getRegClass(LI.reg())) ||
+       Z80::B16RegClass.hasSubClassEq(MRI->getRegClass(LI.reg())))) {
     SmallPtrSet<MachineLoop *, 8> Seen;
     for (const auto &BI : SA->getUseBlocks()) {
       auto *Loop = SA->Loops.getLoopFor(BI.MBB);
-      if (!Loop || !Seen.insert(Loop).second || !Loop->isInnermost() ||
+      if (!Loop || !Seen.insert(Loop).second ||
           Loop->getNumBlocks() > 16 || LoopGroups.size() == 4)
         continue;
       if (Seen.size() > 8)
@@ -968,11 +973,10 @@ bool Z80RegisterAllocator::split(const LiveInterval &LI,
           !LI.liveAt(LIS->getMBBStartIdx(Loop->getHeader())) ||
           llvm::any_of(LoopGroups, [&](const auto *Other) {
             return Other->getLoopPredecessor() == Entry ||
+                   Other->contains(Loop->getHeader()) ||
+                   Loop->contains(Other->getHeader()) ||
                    Other->contains(Entry) ||
                    Loop->contains(Other->getLoopPredecessor());
-          }) ||
-          llvm::any_of(MRI->def_instructions(LI.reg()), [&](const auto &MI) {
-            return Loop->contains(MI.getParent());
           }))
         continue;
       auto *Value = LI.getVNInfoAt(LIS->getMBBStartIdx(Loop->getHeader()));
@@ -983,33 +987,85 @@ bool Z80RegisterAllocator::split(const LiveInterval &LI,
       if (Def && (ST->getInstrInfo()->isTriviallyReMaterializable(*Def) ||
                   (Def->isCopy() && Def->getOperand(1).isUndef())))
         continue;
-      auto Choices = domain(LI.reg());
+      auto *LoopRC = TRI->getLargestLegalSuperClass(
+          MRI->getRegClass(LI.reg()), *MF);
+      for (const auto &MI : MRI->reg_nodbg_instructions(LI.reg()))
+        if (LoopRC && Loop->contains(MI.getParent()))
+          LoopRC = MI.getRegClassConstraintEffectForVReg(
+              LI.reg(), LoopRC, ST->getInstrInfo(), TRI, true);
+      if (!LoopRC)
+        continue;
+      auto Choices = domain(LI.reg(), LoopRC);
       unsigned Scanned = 0;
       for (auto *MBB : Loop->blocks()) {
         SlotIndex Begin = LIS->getMBBStartIdx(MBB);
         SlotIndex End = LIS->getMBBEndIdx(MBB);
-        llvm::erase_if(Choices, [&](MCRegister P) {
-          return llvm::any_of(TRI->regunits(P), [&](MCRegUnit U) {
-            if (LIS->getRegUnit(U).overlaps(Begin, End))
-              return true;
-            auto At =
-                Matrix->getLiveUnions()[static_cast<unsigned>(U)].find(Begin);
-            return At.valid() && At.start() < End;
-          });
-        });
+        auto Interferes = [&](MCRegister P) {
+          for (MCRegUnitMaskIterator U(P, TRI); U.isValid(); ++U) {
+            auto [Unit, Mask] = *U;
+            const auto *Range = unitRange(LI, Mask);
+            if (!Range)
+              continue;
+            for (auto Segment = Range->find(Begin);
+                 Segment != Range->end() && Segment->start < End; ++Segment) {
+              SlotIndex Start = std::max(Begin, Segment->start);
+              SlotIndex Stop = std::min(End, Segment->end);
+              if (LIS->getRegUnit(Unit).overlaps(Start, Stop))
+                return true;
+              auto At = Matrix->getLiveUnions()[static_cast<unsigned>(Unit)]
+                            .find(Start);
+              if (At.valid() && At.start() < Stop)
+                return true;
+            }
+          }
+          return false;
+        };
+        llvm::erase_if(Choices, [&](MCRegister P) { return Interferes(P); });
         for (const auto &MI : *MBB) {
           if (++Scanned > 256) {
             Choices.clear();
             break;
           }
-          for (const auto &MO : MI.operands())
-            if (MO.isRegMask())
-              llvm::erase_if(Choices, [&](MCRegister P) {
-                return MO.clobbersPhysReg(P);
-              });
+          if (!MI.isDebugInstr() &&
+              LI.liveAt(LIS->getInstructionIndex(MI).getRegSlot()))
+            for (const auto &MO : MI.operands())
+              if (MO.isRegMask())
+                llvm::erase_if(Choices, [&](MCRegister P) {
+                  return MO.clobbersPhysReg(P);
+                });
         }
         if (Choices.empty())
           break;
+      }
+      if (!Choices.empty() &&
+          Z80::B16RegClass.hasSubClassEq(MRI->getRegClass(LI.reg()))) {
+        SmallVector<std::pair<double, MCRegister>, 12> Costs;
+        for (MCRegister P : domain(LI.reg(), LoopRC))
+          Costs.emplace_back(0, P);
+        accessCosts(LI.reg(), Costs, Loop);
+        auto Best = Costs.end();
+        for (auto It = Costs.begin(); It != Costs.end(); ++It)
+          if (llvm::is_contained(Choices, It->second) &&
+              (Best == Costs.end() || It->first < Best->first))
+            Best = It;
+        if (Best != Costs.end())
+          for (const auto &[Cost, P] : Costs) {
+            if (Cost >= Best->first || isIndex(P) ||
+                Z80::ALT16RegClass.contains(P))
+              continue;
+            double Transfers = 0;
+            for (const auto *MBB : Loop->blocks())
+              for (const auto &MI : *MBB)
+                if (!MI.isDebugInstr() && MI.modifiesRegister(P, TRI) &&
+                    LI.liveAt(LIS->getInstructionIndex(MI).getRegSlot()))
+                  Transfers += frequency(MI) *
+                      (transferCost(P, Best->second, false) +
+                       transferCost(Best->second, P, false));
+            if (Cost + Transfers < Best->first) {
+              Choices.clear();
+              break;
+            }
+          }
       }
       if (!Choices.empty())
         LoopGroups.push_back(Loop);
@@ -1061,30 +1117,37 @@ bool Z80RegisterAllocator::split(const LiveInterval &LI,
       splitAroundCalls(LI, NewRegs))
     return true;
   LiveRangeEdit Edit(&LI, NewRegs, *MF, *LIS, VRM, this, &DeadRemats);
-  SE->reset(Edit, SplitEditor::SM_Size);
+  SE->reset(Edit, LoopGroups.empty() ? SplitEditor::SM_Size
+                                    : SplitEditor::SM_Speed);
   SmallDenseSet<unsigned, 4> LoopIntervals;
   if (!LoopGroups.empty()) {
-    /* A read-only value can stay in a free register throughout an inner
-       loop, including calls that preserve it. Load it on the entering edge
-       instead of making each block reload the spilled complement. The
-       complement retains its original value for every loop exit. */
+    /* Retain the loop's values across its internal edges. Definitions inside
+       the loop belong to this interval as well; exit transitions publish the
+       reaching value to uses of the complement outside the loop. */
     SmallPtrSet<MachineBasicBlock *, 16> LoopBlocks;
     for (auto *Loop : LoopGroups) {
       LoopIntervals.insert(SE->openIntv());
       SE->enterIntvAtEnd(*Loop->getLoopPredecessor());
       LoopBlocks.insert(Loop->getLoopPredecessor());
       for (auto *MBB : Loop->blocks()) {
-        /* Publish the loop value on every live exit. The size-mode splitter
-           can hoist these copies back to the original definition, but needs
-           them to reconstruct the complement's liveness through the loop.
-           Without an exit transition, its range can contain an unprotected
-           hole even though a later use still needs the original value. */
+        /* Publish the reaching value on live exits. A dedicated successor
+           keeps this copy outside the repeated path. Shared exits require
+           a copy before the branch, with overlap preserving the backedge. */
         SlotIndex End = LIS->getMBBEndIdx(MBB).getPrevSlot();
-        if (LI.liveAt(End) &&
-            llvm::any_of(MBB->successors(), [&](const auto *Succ) {
-              return !Loop->contains(Succ) &&
-                     LI.liveAt(LIS->getMBBStartIdx(Succ));
-            })) {
+        bool ExitInBlock = false;
+        if (LI.liveAt(End))
+          for (auto *Succ : MBB->successors()) {
+            if (Loop->contains(Succ) ||
+                !LI.liveAt(LIS->getMBBStartIdx(Succ)))
+              continue;
+            if (Succ->pred_size() == 1) {
+              SE->leaveIntvAtTop(*Succ);
+              LoopBlocks.insert(Succ);
+            } else {
+              ExitInBlock = true;
+            }
+          }
+        if (ExitInBlock) {
           SlotIndex Leave = SE->leaveIntvBefore(SA->getLastSplitPoint(MBB));
           SE->useIntv(LIS->getMBBStartIdx(MBB), Leave);
           SE->overlapIntv(Leave, End);
@@ -1251,6 +1314,26 @@ bool Z80RegisterAllocator::split(const LiveInterval &LI,
     if (MainBank && Map[I] != 0)
       MRI->constrainRegClass(Edit.get(I), &Z80::R16RegClass);
   }
+  /* Commit the planned regions before their complements compete for those
+     placements. Boundary copies participate in this final interference check. */
+  for (unsigned I = 0; I != Edit.size(); ++I) {
+    Register R = Edit.get(I);
+    if (!LoopIntervals.contains(Map[I]))
+      continue;
+    auto &Region = LIS->getInterval(R);
+    SmallVector<std::pair<double, MCRegister>, 12> Choices;
+    for (MCRegister P : domain(R))
+      if (Matrix->checkInterference(Region, P) == LiveRegMatrix::IK_Free)
+        Choices.emplace_back(0, P);
+    if (Choices.empty())
+      continue;
+    accessCosts(R, Choices);
+    llvm::stable_sort(Choices, [](const auto &A, const auto &B) {
+      return A.first < B.first;
+    });
+    Matrix->assign(Region, Choices.front().second);
+  }
+  llvm::erase_if(NewRegs, [&](Register R) { return VRM->hasPhys(R); });
   ++NumSplits;
   return true;
 }
