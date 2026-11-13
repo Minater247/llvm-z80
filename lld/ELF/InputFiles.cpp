@@ -266,6 +266,15 @@ std::optional<MemoryBufferRef> elf::readFile(Ctx &ctx, StringRef path) {
   return mbref;
 }
 
+static bool isZ80ADL(const InputFile &file) {
+  if (auto *bc = dyn_cast<BitcodeFile>(&file)) {
+    Triple t(bc->obj->getTargetTriple());
+    return t.getArch() == Triple::ez80 && t.getEnvironment() != Triple::CODE16;
+  }
+  return cast<ELFFileBase>(file).getObj<ELF32LE>().getHeader().e_flags ==
+         EF_Z80_MACH_EZ80_ADL;
+}
+
 // All input object files must be for the same architecture
 // (e.g. it does not make sense to link x86 object files with
 // MIPS object files.) This function checks for that error.
@@ -274,9 +283,24 @@ static bool isCompatible(Ctx &ctx, InputFile *file) {
     return true;
 
   if (file->ekind == ctx.arg.ekind && file->emachine == ctx.arg.emachine) {
-    if (ctx.arg.emachine == EM_Z80 && file->ekind != ELF32LEKind) {
-      Err(ctx) << file << ": Z80 requires little-endian ELF32 objects";
-      return false;
+    if (ctx.arg.emachine == EM_Z80) {
+      if (file->ekind != ELF32LEKind) {
+        Err(ctx) << file << ": Z80 requires little-endian ELF32 objects";
+        return false;
+      }
+      InputFile *existing = nullptr;
+      if (!ctx.objectFiles.empty())
+        existing = ctx.objectFiles.front();
+      else if (!ctx.bitcodeFiles.empty())
+        existing = ctx.bitcodeFiles.front();
+      // Check before LTO merges modules: the two ABIs have different pointer
+      // widths and call sequences, even though both use ELF32 and EM_Z80.
+      if (existing && isZ80ADL(*file) != isZ80ADL(*existing)) {
+        Err(ctx) << file
+                 << ": cannot link Z80 16-bit and eZ80 ADL objects ("
+                 << existing << ")";
+        return false;
+      }
     }
     if (ctx.arg.emachine != EM_MIPS)
       return true;
@@ -1779,6 +1803,9 @@ static uint16_t getBitcodeMachineKind(Ctx &ctx, StringRef path,
     return EM_MIPS;
   case Triple::msp430:
     return EM_MSP430;
+  case Triple::z80:
+  case Triple::ez80:
+    return EM_Z80;
   case Triple::ppc:
   case Triple::ppcle:
     return EM_PPC;
