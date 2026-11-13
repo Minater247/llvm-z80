@@ -1,0 +1,32 @@
+# RUN: yaml2obj %s -DFLAGS=EF_Z80_MACH_Z80 -o %t.z80.o
+# RUN: yaml2obj %s -DFLAGS=EF_Z80_MACH_Z180 -o %t.z180.o
+# RUN: yaml2obj %s -DFLAGS=EF_Z80_MACH_EZ80_Z80 -o %t.code16.o
+# RUN: yaml2obj %s -DFLAGS=EF_Z80_MACH_EZ80_ADL -o %t.adl.o
+# RUN: ld.lld -r %t.z80.o %t.z180.o -o %t.o
+# RUN: llvm-readobj -h %t.o | FileCheck %s --check-prefix=Z180
+# RUN: ld.lld -r %t.z180.o %t.z80.o %t.code16.o -o %t.o
+# RUN: llvm-readobj -h %t.o | FileCheck %s --check-prefix=CODE16
+# RUN: ld.lld -r %t.adl.o -o %t.o
+# RUN: llvm-readobj -h %t.o | FileCheck %s --check-prefix=ADL
+# RUN: not ld.lld -r %t.adl.o %t.code16.o -o /dev/null 2>&1 | FileCheck %s --check-prefix=MIX
+# RUN: not ld.lld -r %t.z80.o %t.adl.o -o /dev/null 2>&1 | FileCheck %s --check-prefix=MIX
+# RUN: yaml2obj %s -DFLAGS= -o %t.bad.o
+# RUN: not ld.lld -r %t.bad.o -o /dev/null 2>&1 | FileCheck %s --check-prefix=BAD
+
+# Z180: Flags [ (0x2)
+# CODE16: Flags [ (0x4)
+# ADL: Flags [ (0x84)
+# MIX: cannot link Z80 16-bit and eZ80 ADL objects
+# BAD: unsupported Z80 ELF flags: 0
+--- !ELF
+FileHeader:
+  Class: ELFCLASS32
+  Data: ELFDATA2LSB
+  Type: ET_REL
+  Machine: EM_Z80
+  Flags: [ [[FLAGS]] ]
+Sections:
+  - Name: .text
+    Type: SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_EXECINSTR ]
+    Content: 'C9'

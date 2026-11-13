@@ -1,0 +1,47 @@
+# RUN: yaml2obj %s -DRELOC=R_Z80_8 -DVALUE=256 -o %t.o
+# RUN: not ld.lld %t.o -o /dev/null 2>&1 | FileCheck %s --check-prefix=BYTE
+# RUN: yaml2obj %s -DRELOC=R_Z80_8_DIS -DVALUE=128 -o %t.o
+# RUN: not ld.lld %t.o -o /dev/null 2>&1 | FileCheck %s --check-prefix=DISP
+# RUN: yaml2obj %s -DRELOC=R_Z80_8_DIS -DVALUE=-129 -o %t.o
+# RUN: not ld.lld %t.o -o /dev/null 2>&1 | FileCheck %s --check-prefix=DISP
+# RUN: yaml2obj %s -DRELOC=R_Z80_8_PCREL -DVALUE=128 -o %t.o
+# RUN: not ld.lld -Ttext=0 %t.o -o /dev/null 2>&1 | FileCheck %s --check-prefix=PCREL
+# RUN: yaml2obj %s -DRELOC=R_Z80_16 -DVALUE=65536 -o %t.o
+# RUN: not ld.lld %t.o -o /dev/null 2>&1 | FileCheck %s --check-prefix=WORD
+# RUN: yaml2obj %s -DRELOC=R_Z80_24 -DVALUE=16777216 -o %t.o
+# RUN: not ld.lld %t.o -o /dev/null 2>&1 | FileCheck %s --check-prefix=LONG
+# RUN: yaml2obj %s -DRELOC=R_Z80_16_BE -DVALUE=65536 -o %t.o
+# RUN: not ld.lld %t.o -o /dev/null 2>&1 | FileCheck %s --check-prefix=BE
+# RUN: yaml2obj %s -DRELOC=255 -DVALUE=0 -o %t.o
+# RUN: not ld.lld %t.o -o /dev/null 2>&1 | FileCheck %s --check-prefix=UNKNOWN
+# RUN: yaml2obj %s -DRELOC=R_Z80_16 -DVALUE=0 -DTYPE=SHT_REL -o %t.o
+# RUN: not ld.lld %t.o -o /dev/null 2>&1 | FileCheck %s --check-prefix=REL
+
+# BYTE: relocation R_Z80_8 out of range: 256 is not in [-128, 255]
+# DISP: relocation R_Z80_8_DIS out of range: {{.*}} is not in [-128, 127]
+# PCREL: relocation R_Z80_8_PCREL out of range: 128 is not in [-128, 127]
+# WORD: relocation R_Z80_16 out of range: 65536 is not in [-32768, 65535]
+# LONG: relocation R_Z80_24 out of range: 16777216 is not in [-8388608, 16777215]
+# BE: relocation R_Z80_16_BE out of range: 65536 is not in [-32768, 65535]
+# UNKNOWN: unknown relocation (255) against symbol value
+# REL: Z80 requires RELA relocations with explicit addends
+--- !ELF
+FileHeader:
+  Class: ELFCLASS32
+  Data: ELFDATA2LSB
+  Type: ET_REL
+  Machine: EM_Z80
+  Flags: [ EF_Z80_MACH_Z80 ]
+Sections:
+  - Name: .text
+    Type: SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_EXECINSTR ]
+    Content: '00000000'
+  - Name: .rela.text
+    Type: [[TYPE=SHT_RELA]]
+    Info: .text
+    Relocations:
+      - { Offset: 0, Type: [[RELOC]], Symbol: value, Addend: [[VALUE]] }
+Symbols:
+  - { Name: _start, Section: .text, Binding: STB_GLOBAL }
+  - { Name: value, Binding: STB_GLOBAL, Index: SHN_ABS, Value: 0 }

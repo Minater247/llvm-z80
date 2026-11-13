@@ -1,0 +1,57 @@
+# RUN: yaml2obj %s -o %t.o
+# RUN: ld.lld -m elf32z80 -Ttext=0x100 -e _start %t.o -o %t
+# RUN: llvm-readobj --file-headers --hex-dump=.text %t | FileCheck %s
+# RUN: ld.lld -r %t.o -o %t.partial.o
+# RUN: ld.lld -Ttext=0x100 -e _start %t.partial.o -o %t.partial
+# RUN: llvm-readobj --file-headers --hex-dump=.text %t.partial | FileCheck %s
+# RUN: echo 'OUTPUT_FORMAT(elf32-z80) SECTIONS { .text 0x100 : { *(.text) } }' > %t.lds
+# RUN: ld.lld -T %t.lds -e _start %t.o -o %t.script
+# RUN: llvm-readobj --file-headers --hex-dump=.text %t.script | FileCheck %s
+
+## Exercise every relocation, including byte and word extraction, signed index
+## displacement, and a branch whose RELA addend accounts for the next PC byte.
+# CHECK: Format: elf32-z80
+# CHECK: Type: Executable
+# CHECK: Machine: EM_Z80
+# CHECK: Entry: 0x100
+# CHECK: Flags [ (0x1)
+# CHECK: Hex dump of section '.text':
+# CHECK-NEXT: 0x00000100 5aa5fd18 fb341256 34127856 34127856
+# CHECK-NEXT: 0x00000110 34127856 34121234
+--- !ELF
+FileHeader:
+  Class: ELFCLASS32
+  Data: ELFDATA2LSB
+  Type: ET_REL
+  Machine: EM_Z80
+  Flags: [ EF_Z80_MACH_Z80 ]
+Sections:
+  - Name: .text
+    Type: SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_EXECINSTR ]
+    Content: '5A0000180000000000000000000000000000000000000000'
+  - Name: .rela.text
+    Type: SHT_RELA
+    Info: .text
+    Relocations:
+      - { Offset: 0, Type: R_Z80_NONE, Symbol: wide }
+      - { Offset: 1, Type: R_Z80_8, Symbol: byte }
+      - { Offset: 2, Type: R_Z80_8_DIS, Symbol: zero, Addend: -3 }
+      - { Offset: 4, Type: R_Z80_8_PCREL, Symbol: _start, Addend: -1 }
+      - { Offset: 5, Type: R_Z80_16, Symbol: word }
+      - { Offset: 7, Type: R_Z80_24, Symbol: addr }
+      - { Offset: 10, Type: R_Z80_32, Symbol: wide }
+      - { Offset: 14, Type: R_Z80_BYTE0, Symbol: wide }
+      - { Offset: 15, Type: R_Z80_BYTE1, Symbol: wide }
+      - { Offset: 16, Type: R_Z80_BYTE2, Symbol: wide }
+      - { Offset: 17, Type: R_Z80_BYTE3, Symbol: wide }
+      - { Offset: 18, Type: R_Z80_WORD0, Symbol: wide }
+      - { Offset: 20, Type: R_Z80_WORD1, Symbol: wide }
+      - { Offset: 22, Type: R_Z80_16_BE, Symbol: word }
+Symbols:
+  - { Name: _start, Section: .text, Binding: STB_GLOBAL }
+  - { Name: zero, Binding: STB_GLOBAL, Index: SHN_ABS, Value: 0 }
+  - { Name: byte, Binding: STB_GLOBAL, Index: SHN_ABS, Value: 0xA5 }
+  - { Name: word, Binding: STB_GLOBAL, Index: SHN_ABS, Value: 0x1234 }
+  - { Name: addr, Binding: STB_GLOBAL, Index: SHN_ABS, Value: 0x123456 }
+  - { Name: wide, Binding: STB_GLOBAL, Index: SHN_ABS, Value: 0x12345678 }

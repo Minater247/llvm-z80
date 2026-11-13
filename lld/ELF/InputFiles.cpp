@@ -274,6 +274,10 @@ static bool isCompatible(Ctx &ctx, InputFile *file) {
     return true;
 
   if (file->ekind == ctx.arg.ekind && file->emachine == ctx.arg.emachine) {
+    if (ctx.arg.emachine == EM_Z80 && file->ekind != ELF32LEKind) {
+      Err(ctx) << file << ": Z80 requires little-endian ELF32 objects";
+      return false;
+    }
     if (ctx.arg.emachine != EM_MIPS)
       return true;
     if (isMipsN32Abi(ctx, *file) == ctx.arg.mipsN32Abi)
