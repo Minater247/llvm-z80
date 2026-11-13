@@ -29,6 +29,7 @@
 #include "llvm/CodeGen/MachineMemOperand.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
+#include "llvm/IR/GlobalValue.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Target/TargetMachine.h"
@@ -258,6 +259,37 @@ static bool combineMaskedWordShift(MachineInstr &MI, MachineIRBuilder &Builder,
 }
 
 bool Z80PreLegalizerCombinerImpl::tryCombineAll(MachineInstr &MI) const {
+  if (MI.getOpcode() == TargetOpcode::G_PTR_ADD) {
+    auto Offset = getIConstantVRegValWithLookThrough(MI.getOperand(2).getReg(), MRI);
+    auto *Base = getOpcodeDef(TargetOpcode::G_GLOBAL_VALUE,
+                             MI.getOperand(1).getReg(), MRI);
+    if (Base && Offset && Offset->Value.getBitWidth() <= 32 &&
+        MRI.getType(MI.getOperand(0).getReg()).getAddressSpace() == 0 &&
+        !Base->getOperand(1).getTargetFlags() &&
+        !Base->getOperand(1).getGlobal()->isThreadLocal()) {
+      /* Absolute relocations can materialize a field address directly.
+         Keeping a shared global base plus arithmetic instead makes every
+         field address occupy a live pair and prevents rematerialization. */
+      MachineOperand Global = Base->getOperand(1);
+      APInt Addend(64, Global.getOffset(), true);
+      Addend += Offset->Value.sextOrTrunc(64);
+      const GlobalValue *GV = Global.getGlobal();
+      Type *Ty = GV->getValueType();
+      /* Keep the relocation within its object so folding cannot introduce
+         an address-space overflow that runtime pointer arithmetic wraps. */
+      if (Ty->isSized() && !Addend.isNegative() && Addend.isSignedIntN(32) &&
+          !GV->getDataLayout().getTypeAllocSize(Ty).isScalable() &&
+          Addend.getZExtValue() < GV->getDataLayout().getTypeAllocSize(Ty)) {
+        Global.setOffset(Addend.getSExtValue());
+        B.setInstrAndDebugLoc(MI);
+        B.buildInstr(TargetOpcode::G_GLOBAL_VALUE, {MI.getOperand(0).getReg()}, {})
+            .add(Global);
+        Observer.erasingInstr(MI);
+        MI.eraseFromParent();
+        return true;
+      }
+    }
+  }
   /* Materialize the known shift count directly. The generic power-of-two
      combine introduces a CTTZ that would otherwise need a software helper. */
   if (MI.getOpcode() == TargetOpcode::G_UDIV ||
