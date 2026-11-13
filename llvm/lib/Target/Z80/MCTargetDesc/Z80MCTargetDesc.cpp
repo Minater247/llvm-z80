@@ -128,6 +128,18 @@ class Z80ELFStreamer final : public MCELFStreamer {
 public:
   using MCELFStreamer::MCELFStreamer;
 
+  void emitInstruction(const MCInst &Inst, const MCSubtargetInfo &STI) override {
+    // Function-specific subtargets can require a more capable ISA after LTO.
+    // Preserve the object's initial ABI mode when emitting mode overrides.
+    unsigned ISA = Z80_MC::getELFFlags(STI);
+    if (ISA == ELF::EF_Z80_MACH_EZ80_ADL)
+      ISA = ELF::EF_Z80_MACH_EZ80_Z80;
+    getWriter().setELFHeaderEFlags(
+        std::max(getWriter().getELFHeaderEFlags(), ISA));
+    MCELFStreamer::emitInstruction(Inst, STI);
+  }
+
+
   void emitValueImpl(const MCExpr *Value, unsigned Size, SMLoc Loc) override {
     if (Size != 3) {
       MCELFStreamer::emitValueImpl(Value, Size, Loc);
