@@ -6,6 +6,10 @@
 // RUN: llvm-readobj -h --hex-dump=.text %t/full | FileCheck %s --check-prefixes=Z80,LTO
 // RUN: %clang --target=z80 -O2 -ffreestanding -fintegrated-as -nostdlib -flto=thin -Wl,-e,entry,-Ttext=0x100,--gc-sections %t/entry.c %t/step.c -o %t/thin
 // RUN: llvm-readobj -h --hex-dump=.text %t/thin | FileCheck %s --check-prefixes=Z80,LTO
+// RUN: %clang --target=z80 -O2 -ffreestanding -nostdlib -flto=full -funified-lto -Wl,-e,entry,-Ttext=0x100,--gc-sections %t/entry.c %t/step.c -o %t/unified-full
+// RUN: llvm-readobj -h --hex-dump=.text %t/unified-full | FileCheck %s --check-prefixes=Z80,LTO
+// RUN: %clang --target=z80 -O2 -ffreestanding -nostdlib -flto=thin -funified-lto -Wl,-e,entry,-Ttext=0x100,--gc-sections %t/entry.c %t/step.c -o %t/unified-thin
+// RUN: llvm-readobj -h --hex-dump=.text %t/unified-thin | FileCheck %s --check-prefixes=Z80,LTO
 // RUN: %clang --target=ez80 -O2 -ffreestanding -fintegrated-as -nostdlib -flto -Wl,-e,entry,-Ttext=0x10000,--gc-sections %t/entry.c %t/step.c -o %t/adl
 // RUN: llvm-readobj -h --hex-dump=.text %t/adl | FileCheck %s --check-prefix=ADL
 // RUN: %clang --target=ez80-unknown-none-code16 -O2 -ffreestanding -fintegrated-as -nostdlib -flto=thin -Wl,-e,entry,-Ttext=0x100,--gc-sections %t/entry.c %t/step.c -o %t/code16

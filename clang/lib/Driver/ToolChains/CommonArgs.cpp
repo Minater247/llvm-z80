@@ -1043,6 +1043,11 @@ void tools::addLTOOptions(const ToolChain &ToolChain, const ArgList &Args,
                             Plugin);
     CmdArgs.push_back(Args.MakeArgString(Twine(PluginPrefix) + Plugin));
   } else {
+    if (Triple.isOSBinFormatELF() &&
+        Args.hasFlag(options::OPT_funified_lto, options::OPT_fno_unified_lto,
+                     false))
+      CmdArgs.push_back(IsThinLTO ? "--lto=thin" : "--lto=full");
+
     // Tell LLD to find and use .llvm.lto section in regular relocatable object
     // files
     if (IsFatLTO)

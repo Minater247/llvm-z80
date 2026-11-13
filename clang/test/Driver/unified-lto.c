@@ -6,6 +6,20 @@
 // UNIT: "-flto-unit"
 // NOUNIT-NOT: "-flto-unit"
 
+// ELF LLD needs an explicit mode for unified bitcode; otherwise it selects
+// ThinLTO even when the driver was given -flto=full.
+// RUN: %clang --target=x86_64-unknown-linux -fuse-ld=lld -### %s -flto=full -funified-lto 2>&1 | FileCheck %s --check-prefix=ELF-FULL
+// RUN: %clang --target=x86_64-unknown-linux -fuse-ld=lld -### %s -flto=thin -funified-lto 2>&1 | FileCheck %s --check-prefix=ELF-THIN
+// RUN: %clang --target=z80 -### %s -flto=full -funified-lto 2>&1 | FileCheck %s --check-prefix=ELF-FULL
+// RUN: %clang --target=z80 -### %s -flto=thin -funified-lto 2>&1 | FileCheck %s --check-prefix=ELF-THIN
+// RUN: %clang --target=z80 -### %s -flto=full -funified-lto -fno-unified-lto 2>&1 | FileCheck %s --check-prefix=ELF-LEGACY
+// ELF-FULL: "{{.*}}ld.lld{{(\.exe)?}}"
+// ELF-FULL-SAME: "--lto=full"
+// ELF-THIN: "{{.*}}ld.lld{{(\.exe)?}}"
+// ELF-THIN-SAME: "--lto=thin"
+// ELF-LEGACY: "{{.*}}ld.lld{{(\.exe)?}}"
+// ELF-LEGACY-NOT: "--lto=
+
 // RUN: %clang --target=x86_64-sie-ps5 -### %s -funified-lto 2>&1 | FileCheck --check-prefix=NOUNILTO %s
 // NOUNILTO: "-cc1"
 // NOUNILTO-NOT: "-funified-lto
