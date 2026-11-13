@@ -1126,10 +1126,61 @@ bool Z80RegisterAllocator::split(const LiveInterval &LI,
   if (!MainBank && S == 0 && LoopGroups.empty() &&
       splitAroundCalls(LI, NewRegs))
     return true;
+  SlotIndex LocalFirst, LocalLast;
+  const auto *RC = MRI->getRegClass(LI.reg());
+  const auto *Super = TRI->getLargestLegalSuperClass(RC, *MF);
+  if (!MainBank && LoopGroups.empty() && !AcrossCall &&
+      SA->getUseBlocks().size() == 1 && SA->getUseSlots().size() <= 64 &&
+      RegClassInfo.getNumAllocatableRegs(Super) <=
+          RegClassInfo.getNumAllocatableRegs(RC)) {
+    /* A local range can cross a brief pressure peak and then have many uses
+       with a free register. Keep that sequence together instead of asking
+       the spiller to reload every updated value independently. Narrow
+       classes use the constraint splitting below, which can move the value
+       to a broader class between accesses instead of occupying a scarce
+       address register throughout the sequence. */
+    unsigned BestUses = 2;
+    const auto &Uses = SA->getUseSlots();
+    for (MCRegister P : domain(LI.reg())) {
+      SlotIndex First, Last;
+      unsigned Count = 0;
+      auto Free = [&](SlotIndex Begin, SlotIndex End) {
+        for (MCRegUnit U : TRI->regunits(P)) {
+          if (LIS->getRegUnit(U).overlaps(Begin, End))
+            return false;
+          auto At = Matrix->getLiveUnions()[static_cast<unsigned>(U)].find(Begin);
+          if (At.valid() && At.start() < End)
+            return false;
+        }
+        return true;
+      };
+      for (SlotIndex Use : Uses) {
+        if (Last.isValid() && SlotIndex::isSameInstr(Use, Last))
+          continue;
+        if (!First.isValid() || !Free(First.getBaseIndex(), Use.getDeadSlot())) {
+          First = SlotIndex();
+          Count = 0;
+          if (Free(Use.getBaseIndex(), Use.getDeadSlot()))
+            First = Use;
+        }
+        Last = Use;
+        if (!First.isValid())
+          continue;
+        ++Count;
+        if (Count > BestUses &&
+            (First != Uses.front() || Use != Uses.back())) {
+          BestUses = Count;
+          LocalFirst = First;
+          LocalLast = Use;
+        }
+      }
+    }
+  }
   LiveRangeEdit Edit(&LI, NewRegs, *MF, *LIS, VRM, this, &DeadRemats);
   SE->reset(Edit, LoopGroups.empty() ? SplitEditor::SM_Size
                                     : SplitEditor::SM_Speed);
   SmallDenseSet<unsigned, 4> LoopIntervals;
+  unsigned LocalInterval = 0;
   if (!LoopGroups.empty()) {
     /* Retain the loop's values across its internal edges. Definitions inside
        the loop belong to this interval as well; exit transitions publish the
@@ -1186,6 +1237,11 @@ bool Z80RegisterAllocator::split(const LiveInterval &LI,
     for (const auto &BI : SA->getUseBlocks())
       if (SA->shouldSplitSingleBlock(BI, true))
         SE->splitSingleBlock(BI);
+  } else if (LocalFirst.isValid()) {
+    LocalInterval = SE->openIntv();
+    SlotIndex Begin = SE->enterIntvBefore(LocalFirst);
+    SlotIndex End = SE->leaveIntvAfter(LocalLast);
+    SE->useIntv(Begin, End);
   } else {
     // Relax instruction-specific classes: e.g. retain a value in an index
     // register between accesses that require HL. Splitting is bounded by the
@@ -1328,7 +1384,8 @@ bool Z80RegisterAllocator::split(const LiveInterval &LI,
      placements. Boundary copies participate in this final interference check. */
   for (unsigned I = 0; I != Edit.size(); ++I) {
     Register R = Edit.get(I);
-    if (!LoopIntervals.contains(Map[I]))
+    if (!LoopIntervals.contains(Map[I]) &&
+        (!LocalInterval || Map[I] != LocalInterval))
       continue;
     auto &Region = LIS->getInterval(R);
     SmallVector<std::pair<double, MCRegister>, 12> Choices;

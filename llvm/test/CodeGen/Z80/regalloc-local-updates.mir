@@ -1,0 +1,85 @@
+# RUN: llc -run-pass=z80-regalloc,virtregrewriter -verify-machineinstrs %s -o - | FileCheck %s
+#
+# A brief fixed-register conflict precedes a sequence of pointer updates.
+# Split the range at that conflict and retain the updated pointer throughout
+# the sequence, including every definition produced by a postincrement load.
+--- |
+  target triple = "z80"
+  define void @local_updates() { ret void }
+  define void @partial_clobber() { ret void }
+...
+---
+name: local_updates
+tracksRegLiveness: true
+# CHECK-LABEL: name: local_updates
+# CHECK: $bc = LD88ro
+# CHECK-NEXT: early-clobber $a, {{.*}}$bc = LD8A_POST16
+# CHECK-NOT: LD88ro
+# CHECK-NOT: LD88or
+# CHECK: RET16
+body: |
+  bb.0:
+    liveins: $de, $hl, $ix, $iy
+    %0:r16 = COPY $de
+    $de = LD16ri 42
+    $bc = LD16ri 123
+    KILL $bc
+    early-clobber $a, %0:r16 = LD8A_POST16 %0 :: (load (s8))
+    LD8pa $de, killed $a :: (volatile store (s8))
+    early-clobber $a, %0:r16 = LD8A_POST16 %0 :: (load (s8))
+    LD8pa $de, killed $a :: (volatile store (s8))
+    early-clobber $a, %0:r16 = LD8A_POST16 %0 :: (load (s8))
+    LD8pa $de, killed $a :: (volatile store (s8))
+    early-clobber $a, %0:r16 = LD8A_POST16 %0 :: (load (s8))
+    LD8pa $de, killed $a :: (volatile store (s8))
+    early-clobber $a, %0:r16 = LD8A_POST16 %0 :: (load (s8))
+    LD8pa $de, killed $a :: (volatile store (s8))
+    early-clobber $a, %0:r16 = LD8A_POST16 %0 :: (load (s8))
+    LD8pa $de, killed $a :: (volatile store (s8))
+    early-clobber $a, %0:r16 = LD8A_POST16 %0 :: (load (s8))
+    LD8pa $de, killed $a :: (volatile store (s8))
+    early-clobber $a, %0:r16 = LD8A_POST16 %0 :: (load (s8))
+    LD8pa $de, killed $a :: (volatile store (s8))
+    KILL $de, $hl, $ix, $iy
+    RET16 implicit-def $sps, implicit $sps
+...
+---
+name: partial_clobber
+tracksRegLiveness: true
+# A definition of B invalidates BC, including when C is untouched. The
+# reaching updated pointer must survive that definition through its spill.
+# CHECK-LABEL: name: partial_clobber
+# CHECK: $bc = LD88ro
+# CHECK: LD88or %stack.0, 0, {{.*}}$bc
+# CHECK: $b = LD8ri 0
+# CHECK: $bc = LD88ro
+# CHECK: early-clobber $a, {{.*}}$bc = LD8A_POST16
+# CHECK: RET16
+body: |
+  bb.0:
+    liveins: $de, $hl, $ix, $iy
+    %0:r16 = COPY $de
+    $de = LD16ri 42
+    $bc = LD16ri 123
+    KILL $bc
+    early-clobber $a, %0:r16 = LD8A_POST16 %0 :: (load (s8))
+    LD8pa $de, killed $a :: (volatile store (s8))
+    early-clobber $a, %0:r16 = LD8A_POST16 %0 :: (load (s8))
+    LD8pa $de, killed $a :: (volatile store (s8))
+    early-clobber $a, %0:r16 = LD8A_POST16 %0 :: (load (s8))
+    LD8pa $de, killed $a :: (volatile store (s8))
+    early-clobber $a, %0:r16 = LD8A_POST16 %0 :: (load (s8))
+    LD8pa $de, killed $a :: (volatile store (s8))
+    $b = LD8ri 0
+    KILL $b
+    early-clobber $a, %0:r16 = LD8A_POST16 %0 :: (load (s8))
+    LD8pa $de, killed $a :: (volatile store (s8))
+    early-clobber $a, %0:r16 = LD8A_POST16 %0 :: (load (s8))
+    LD8pa $de, killed $a :: (volatile store (s8))
+    early-clobber $a, %0:r16 = LD8A_POST16 %0 :: (load (s8))
+    LD8pa $de, killed $a :: (volatile store (s8))
+    early-clobber $a, %0:r16 = LD8A_POST16 %0 :: (load (s8))
+    LD8pa $de, killed $a :: (volatile store (s8))
+    KILL $de, $hl, $ix, $iy
+    RET16 implicit-def $sps, implicit $sps
+...
