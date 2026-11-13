@@ -2122,8 +2122,10 @@ bool Z80InstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
     break;
   case Z80::CALL16r:
   case Z80::CALL24r: {
+    Register TargetReg = MI.getOperand(0).getReg();
+    bool KillTarget = MI.getOperand(0).isKill();
     const char *Symbol;
-    switch (MI.getOperand(0).getReg()) {
+    switch (TargetReg) {
     default: llvm_unreachable("Unexpected indcall register");
     case Z80::HL: case Z80::UHL: Symbol = "_indcallhl"; break;
     case Z80::IX: case Z80::UIX: Symbol = "_indcallix"; break;
@@ -2131,6 +2133,10 @@ bool Z80InstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
     }
     MI.setDesc(get(Opc == Z80::CALL24r ? Z80::CALL24 : Z80::CALL16));
     MI.getOperand(0).ChangeToES(Symbol);
+    /* The helper jumps through the original destination register. Keep that
+       input live after replacing the explicit operand with the helper name. */
+    MachineInstrBuilder(MF, &MI).addReg(
+        TargetReg, RegState::Implicit | getKillRegState(KillTarget));
     break;
   }
   case Z80::EI_RETI:

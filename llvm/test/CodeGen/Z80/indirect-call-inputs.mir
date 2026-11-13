@@ -1,0 +1,26 @@
+# RUN: llc -run-pass=postrapseudos -verify-machineinstrs %s -o - | FileCheck %s
+--- |
+  target triple = "ez80"
+  define void @indirect_calls() { ret void }
+...
+---
+name: indirect_calls
+tracksRegLiveness: false
+body: |
+  bb.0:
+    ; The helper name replaces the explicit target, but the destination
+    ; register remains an input with its original kill status.
+    ; CHECK: CALL16 &_indcallhl, implicit $sps, implicit $hl
+    ; CHECK: CALL16 &_indcallix, implicit $sps, implicit killed $ix
+    ; CHECK: CALL16 &_indcall, implicit $sps, implicit killed $iy
+    ; CHECK: CALL24 &_indcallhl, implicit $spl, implicit killed $uhl
+    ; CHECK: CALL24 &_indcallix, implicit $spl, implicit killed $uix
+    ; CHECK: CALL24 &_indcall, implicit $spl, implicit $uiy
+    CALL16r $hl, implicit $sps
+    CALL16r killed $ix, implicit $sps
+    CALL16r killed $iy, implicit $sps
+    CALL24r killed $uhl, implicit $spl
+    CALL24r killed $uix, implicit $spl
+    CALL24r $uiy, implicit $spl
+    RET24 implicit-def $spl, implicit $spl
+...
