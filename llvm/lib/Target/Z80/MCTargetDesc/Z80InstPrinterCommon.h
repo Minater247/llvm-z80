@@ -38,6 +38,8 @@ public:
   void printOperand(const MCInst *MI, unsigned OpNo, raw_ostream &OS);
   void printOperand(const MCInst *MI, uint64_t Address, unsigned OpNo,
                     raw_ostream &OS);
+  void printPCRel(const MCInst *MI, uint64_t Address, unsigned OpNo,
+                  raw_ostream &OS);
   void printCondCode(const MCInst *MI, unsigned OpNo, raw_ostream &OS);
   void printOffset(const MCInst *MI, unsigned OpNo, raw_ostream &OS);
   void printIndirect(const MCInst *MI, unsigned OpNo, raw_ostream &OS);

@@ -4,6 +4,7 @@ set(LLVM_TARGET_DEFINITIONS Z80.td)
 
 tablegen(LLVM EZ80GenAsmWriter.inc -gen-asm-writer -asmwriternum=1)
 tablegen(LLVM Z80GenAsmWriter.inc -gen-asm-writer)
+tablegen(LLVM Z80GenAsmMatcher.inc -gen-asm-matcher)
 tablegen(LLVM Z80GenCallingConv.inc -gen-callingconv)
 tablegen(LLVM Z80GenPostLegalizeGICombiner.inc -gen-global-isel-combiner
               -combiners="Z80PostLegalizerCombiner")
@@ -82,5 +83,6 @@ add_llvm_target(Z80CodeGen ${sources}
   Z80
   )
 
+add_subdirectory(AsmParser)
 add_subdirectory(MCTargetDesc)
 add_subdirectory(TargetInfo)

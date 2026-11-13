@@ -229,9 +229,11 @@ AsmToken AsmLexer::LexHexFloatLiteral(bool NoIntDigits) {
 }
 
 /// LexIdentifier: [a-zA-Z_$.@?][a-zA-Z0-9_$.@#?]*
-static bool isIdentifierChar(char C, bool AllowAt, bool AllowHash) {
+static bool isIdentifierChar(char C, bool AllowAt, bool AllowHash,
+                             bool AllowSingleQuote) {
   return isAlnum(C) || C == '_' || C == '$' || C == '.' || C == '?' ||
-         (AllowAt && C == '@') || (AllowHash && C == '#');
+         (AllowAt && C == '@') || (AllowHash && C == '#') ||
+         (AllowSingleQuote && C == '\'');
 }
 
 AsmToken AsmLexer::LexIdentifier() {
@@ -241,13 +243,14 @@ AsmToken AsmLexer::LexIdentifier() {
     while (isDigit(*CurPtr))
       ++CurPtr;
 
-    if (!isIdentifierChar(*CurPtr, AllowAtInIdentifier,
-                          AllowHashInIdentifier) ||
+    if (!isIdentifierChar(*CurPtr, AllowAtInIdentifier, AllowHashInIdentifier,
+                          MAI.doesAllowSingleQuoteInName()) ||
         *CurPtr == 'e' || *CurPtr == 'E')
       return LexFloatLiteral();
   }
 
-  while (isIdentifierChar(*CurPtr, AllowAtInIdentifier, AllowHashInIdentifier))
+  while (isIdentifierChar(*CurPtr, AllowAtInIdentifier, AllowHashInIdentifier,
+                          MAI.doesAllowSingleQuoteInName()))
     ++CurPtr;
 
   // Handle . as a special case.

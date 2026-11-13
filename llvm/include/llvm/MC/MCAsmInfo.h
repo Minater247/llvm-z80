@@ -181,6 +181,9 @@ protected:
   /// Defaults to false.
   bool AllowAtInName = false;
 
+  /// Allow apostrophes within identifiers, such as alternate register names.
+  bool AllowSingleQuoteInName = false;
+
   /// This is true if the assembler allows the "?" character at the start of
   /// of a string to be lexed as an AsmToken::Identifier.
   /// If the AsmLexer determines that the string can be lexed as a possible
@@ -564,6 +567,7 @@ public:
   const char *getInlineAsmEnd() const { return InlineAsmEnd; }
   unsigned getAssemblerDialect() const { return AssemblerDialect; }
   bool doesAllowAtInName() const { return AllowAtInName; }
+  bool doesAllowSingleQuoteInName() const { return AllowSingleQuoteInName; }
   void setAllowAtInName(bool V) { AllowAtInName = V; }
   bool doesAllowQuestionAtStartOfIdentifier() const {
     return AllowQuestionAtStartOfIdentifier;

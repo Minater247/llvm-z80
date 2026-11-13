@@ -14,9 +14,14 @@
 
 #include "Z80InstPrinterCommon.h"
 #include "Z80InstPrinter.h"
+#include "Z80BaseInfo.h"
+#include "Z80MCTargetDesc.h"
+#include "llvm/ADT/SmallString.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInst.h"
+#include "llvm/MC/MCInstrInfo.h"
+#include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FormattedStream.h"
@@ -70,7 +75,32 @@ void Z80InstPrinterCommon::printInst(const MCInst *MI, uint64_t Address,
                                      StringRef Annot,
                                      const MCSubtargetInfo &STI,
                                      raw_ostream &OS) {
-  printInstruction(MI, Address, OS);
+  unsigned Prefix = MI->getFlags() & Z80II::ExplicitPrefixMask;
+  StringRef Suffix;
+  if (Prefix)
+    Suffix = Prefix == 0x40 ? "sis" : Prefix == 0x49 ? "lis"
+                                    : Prefix == 0x52 ? "sil" : "lil";
+  else {
+    unsigned Mode = MII.get(MI->getOpcode()).TSFlags & Z80II::ModeMask;
+    if (Mode == Z80II::Z80Mode && STI.hasFeature(Z80::Mode24Bit))
+      Suffix = "sis";
+    else if (Mode == Z80II::EZ80Mode && !STI.hasFeature(Z80::Mode24Bit))
+      Suffix = "lil";
+  }
+  StringRef PrintedSuffix = StringRef(getMnemonic(*MI).first)
+                                .split('\t').first.split('.').second;
+  if (Suffix == PrintedSuffix) {
+    printInstruction(MI, Address, OS);
+  } else {
+    SmallString<128> Text;
+    raw_svector_ostream Buffer(Text);
+    printInstruction(MI, Address, Buffer);
+    StringRef Body = StringRef(Text).ltrim();
+    auto [Mnemonic, Operands] = Body.split('\t');
+    OS << '\t' << Mnemonic.split('.').first;
+    if (!Suffix.empty()) OS << '.' << Suffix;
+    if (!Operands.empty()) OS << '\t' << Operands;
+  }
   printAnnotation(OS, Annot);
 }
 
@@ -98,6 +128,20 @@ void Z80InstPrinterCommon::printOperand(const MCInst *MI, unsigned OpNo,
 void Z80InstPrinterCommon::printOperand(const MCInst *MI, uint64_t Address,
                                         unsigned Op, raw_ostream &OS) {
   return printOperand(MI, Op, OS);
+}
+
+void Z80InstPrinterCommon::printPCRel(const MCInst *MI, uint64_t Address,
+                                      unsigned OpNo,
+                                      raw_ostream &OS) {
+  if (!MI->getOperand(OpNo).isImm()) {
+    printOperand(MI, OpNo, OS);
+    return;
+  }
+  int64_t Offset = MI->getOperand(OpNo).getImm() + 2 +
+                   bool(MI->getFlags() & Z80II::ExplicitPrefixMask);
+  OS << '$';
+  if (Offset >= 0) OS << '+';
+  OS << Offset;
 }
 
 void Z80InstPrinterCommon::printCondCode(const MCInst *MI, unsigned Op,

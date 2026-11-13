@@ -1,3 +1,7 @@
+# RUN: llc -mtriple=ez80 -start-after=z80-branch-select -filetype=asm %s -o %t.s
+# RUN: llvm-mc -triple=ez80 -filetype=obj %t.s -o %t.parsed.o
+# RUN: llvm-objcopy --dump-section .text=%t.parsed.bin %t.parsed.o
+# RUN: %python %S/Inputs/check-object-bytes.py %s %t.parsed.bin
 # RUN: llc -mtriple=ez80 -start-after=z80-branch-select -filetype=obj %s -o %t.o
 # RUN: llvm-objcopy --dump-section .text=%t.bin %t.o
 # RUN: %python %S/Inputs/check-object-bytes.py %s %t.bin

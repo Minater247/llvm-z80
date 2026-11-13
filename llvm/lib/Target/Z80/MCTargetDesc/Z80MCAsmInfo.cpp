@@ -22,7 +22,8 @@ Z80MCAsmInfoELF::Z80MCAsmInfoELF(const Triple &T) {
   CodePointerSize = CalleeSaveStackSlotSize = Is16Bit ? 2 : 3;
   MaxInstLength = 6;
   DollarIsPC = true;
-  SeparatorString = nullptr;
+  AllowSingleQuoteInName = true;
+  SeparatorString = "\n";
   CommentString = ";";
   AssemblerDialect = !Is16Bit;
   SupportsQuotedNames = false;
@@ -41,7 +42,7 @@ Z80MCAsmInfoELF::Z80MCAsmInfoELF(const Triple &T) {
   GlobalDirective = "\t.global\t";
   WeakDirective = "\t.weak\t";
 
-  UseIntegratedAssembler = false;
+  UseIntegratedAssembler = true;
   UseLogicalShr = false;
 
   SupportsDebugInformation = true;

@@ -173,13 +173,40 @@ def iptr_rc : PointerLikeRegClass<4>;
 def rptr_rc : PointerLikeRegClass<5>;
 def hptr_rc : PointerLikeRegClass<6>;
 
+// Assembly memory operands retain their addressing form until matching.
+class Z80AsmOperand<string name, string render> : AsmOperandClass {
+  let Name = name;
+  let RenderMethod = render;
+}
+def Z80Mem : Z80AsmOperand<"Mem", "addMemOperands">;
+def Z80RPtr : Z80AsmOperand<"RPtr", "addPtrOperands">;
+def Z80APtr : Z80AsmOperand<"APtr", "addPtrOperands"> {
+  let SuperClasses = [Z80RPtr];
+}
+def Z80HPtr : Z80AsmOperand<"HPtr", "addPtrOperands"> {
+  let SuperClasses = [Z80APtr];
+}
+def Z80Off : Z80AsmOperand<"Off", "addOffsetOperands">;
+def Z80Offset : Z80AsmOperand<"Offset", "addOffsetOperands">;
+def Z80Branch : Z80AsmOperand<"Branch", "addBranchOperands"> {
+  let PredicateMethod = "isImm";
+  let SuperClasses = [ImmAsmOperand];
+}
+def Z80CC : Z80AsmOperand<"CC", "addImmOperands">;
+def Z80Constant : Z80AsmOperand<"Constant", "addImmOperands"> {
+  let SuperClasses = [ImmAsmOperand];
+}
+
 let OperandType = "OPERAND_IMMEDIATE" in {
+  let ParserMatchClass = Z80Constant in
   def bitimm : Operand<i8>, PatLeaf<(i8 imm), [{
     return isUInt<3>(N->getZExtValue());
   }]>;
+  let ParserMatchClass = Z80Constant in
   def rsttarget : Operand<i8>, PatLeaf<(i8 imm), [{
     return N->getZExtValue() == (N->getZExtValue() & 070);
   }]>;
+  let ParserMatchClass = Z80Constant in
   def intmode : Operand<i8>, PatLeaf<(i8 imm), [{
     return N->getZExtValue() <= 2;
   }]>;
@@ -189,6 +216,7 @@ let OperandType = "OPERAND_IMMEDIATE" in {
 let OperandType = "OPERAND_MEMORY" in {
   let PrintMethod = "printIndirect" in {
     def mem : Operand<iPTR> {
+      let ParserMatchClass = Z80Mem;
       let MIOperandInfo = (ops imm);
     }
     def gptr: Operand<iPTR> {
@@ -198,18 +226,22 @@ let OperandType = "OPERAND_MEMORY" in {
       let MIOperandInfo = (ops optr_rc);
     }
     def aptr: Operand<iPTR> {
+      let ParserMatchClass = Z80APtr;
       let MIOperandInfo = (ops aptr_rc);
     }
     def rptr: Operand<iPTR> {
+      let ParserMatchClass = Z80RPtr;
       let MIOperandInfo = (ops rptr_rc);
     }
     def hptr: Operand<iPTR> {
+      let ParserMatchClass = Z80HPtr;
       let MIOperandInfo = (ops hptr_rc);
     }
-    def port : Operand<i8>;
+    def port : Operand<i8> { let ParserMatchClass = Z80Mem; }
   }
   let PrintMethod = "printIndirectOffset" in {
     def off : Operand<iPTR> {
+      let ParserMatchClass = Z80Off;
       let MIOperandInfo = (ops iptr_rc, i8imm);
     }
   }
@@ -217,18 +249,24 @@ let OperandType = "OPERAND_MEMORY" in {
 
 let PrintMethod = "printOffset" in {
   def off16 : Operand<i16> {
+      let ParserMatchClass = Z80Offset;
     let MIOperandInfo = (ops I16, i8imm);
   }
   def off24 : Operand<i24> {
+      let ParserMatchClass = Z80Offset;
     let MIOperandInfo = (ops I24, i8imm);
   }
 }
 
 def jmptarget : Operand<OtherVT>;
 let OperandType = "OPERAND_PCREL" in
-def jmptargetoff : Operand<OtherVT>;
+def jmptargetoff : Operand<OtherVT> {
+  let ParserMatchClass = Z80Branch;
+  let PrintMethod = "printPCRel";
+}
 
 def cc : Operand<i8> {
+      let ParserMatchClass = Z80CC;
   let PrintMethod = "printCondCode";
 }
 
@@ -1050,6 +1088,10 @@ let isCompare = true, Defs = [F], Uses = [A],
                  (outs), (ins hptr:$src),
                  [(set F, (Z80tst_flag A, (i8 (load iPTR:$src))))]>;
 }
+
+def : InstAlias<"tst\t$src", (TST8ag G8:$src)>, Requires<[HaveZ180Ops]>;
+def : InstAlias<"tst\t$src", (TST8ai i8imm:$src)>, Requires<[HaveZ180Ops]>;
+def : InstAlias<"tst\t$src", (TST8ap hptr:$src)>, Requires<[HaveZ180Ops]>;
 
 def : MnemonicAlias<"sll", "sli">, Requires<[HaveSliOp]>;
 def : MnemonicAlias<"sl1", "sli">, Requires<[HaveSliOp]>;

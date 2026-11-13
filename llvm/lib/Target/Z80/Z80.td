@@ -85,7 +85,15 @@ include "Z80CallingConv.td"
 
 let ShouldEmitMatchRegisterName = 0 in {
   def Z80AsmParser : AsmParser;
-  def EZ80AsmParser : AsmParser;
+
+}
+def Z80AsmParser16 : AsmParserVariant {
+  let Variant = 0;
+  let TokenizingCharacters = "()";
+}
+def Z80AsmParser24 : AsmParserVariant {
+  let Variant = 1;
+  let TokenizingCharacters = "()";
 }
 def Z80AsmWriter : AsmWriter;
 def EZ80AsmWriter : AsmWriter {
@@ -96,6 +104,7 @@ def EZ80AsmWriter : AsmWriter {
 def Z80 : Target {
   // Information about the instructions...
   let InstructionSet = Z80InstrInfo;
-  let AssemblyParsers = [Z80AsmParser, EZ80AsmParser];
+  let AssemblyParsers = [Z80AsmParser];
+  let AssemblyParserVariants = [Z80AsmParser16, Z80AsmParser24];
   let AssemblyWriters = [Z80AsmWriter, EZ80AsmWriter];
 }

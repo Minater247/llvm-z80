@@ -1,5 +1,10 @@
 # RUN: llc -mattr=+alternate-regs -start-before=prologepilog -verify-machineinstrs %s -o %t.s
 # RUN: %python %S/Inputs/alternate-af-frame.py %t.s
+# RUN: llc -mattr=+alternate-regs -start-before=prologepilog -filetype=obj -verify-machineinstrs %s -o %t.o
+# RUN: llvm-mc -triple=z80 -filetype=obj %t.s -o %t.parsed.o
+# RUN: llvm-objcopy --dump-section .text=%t.bin %t.o
+# RUN: llvm-objcopy --dump-section .text=%t.parsed.bin %t.parsed.o
+# RUN: cmp %t.bin %t.parsed.bin
 --- |
   target triple = "z80"
   define void @far_slot() { ret void }
