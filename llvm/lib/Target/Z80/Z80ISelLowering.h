@@ -85,6 +85,8 @@ class Z80TargetLowering final : public TargetLowering {
 public:
   Z80TargetLowering(const Z80TargetMachine &TM, const Z80Subtarget &STI);
 
+  bool shouldSplitBranchConditions() const override;
+
   bool isLegalAddressingMode(const DataLayout &DL, const AddrMode &AM, Type *Ty,
                             unsigned AS, Instruction *I = nullptr) const override;
 

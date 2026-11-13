@@ -9285,7 +9285,8 @@ static void scaleWeights(uint64_t &NewTrue, uint64_t &NewFalse) {
 /// FIXME: Remove the (equivalent?) implementation in SelectionDAG.
 ///
 bool CodeGenPrepare::splitBranchCondition(Function &F, ModifyDT &ModifiedDT) {
-  if (!TM->Options.EnableFastISel || TLI->isJumpExpensive())
+  if ((!TM->Options.EnableFastISel && !TLI->shouldSplitBranchConditions()) ||
+      TLI->isJumpExpensive())
     return false;
 
   bool MadeChange = false;
@@ -9407,7 +9408,7 @@ bool CodeGenPrepare::splitBranchCondition(Function &F, ModifyDT &ModifiedDT) {
         scaleWeights(NewTrueWeight, NewFalseWeight);
         Br1->setMetadata(LLVMContext::MD_prof,
                          MDBuilder(Br1->getContext())
-                             .createBranchWeights(TrueWeight, FalseWeight,
+                             .createBranchWeights(NewTrueWeight, NewFalseWeight,
                                                   hasBranchWeightOrigin(*Br1)));
 
         NewTrueWeight = TrueWeight;
@@ -9415,7 +9416,7 @@ bool CodeGenPrepare::splitBranchCondition(Function &F, ModifyDT &ModifiedDT) {
         scaleWeights(NewTrueWeight, NewFalseWeight);
         Br2->setMetadata(LLVMContext::MD_prof,
                          MDBuilder(Br2->getContext())
-                             .createBranchWeights(TrueWeight, FalseWeight));
+                             .createBranchWeights(NewTrueWeight, NewFalseWeight));
       }
     } else {
       // Codegen X & Y as:
@@ -9443,14 +9444,14 @@ bool CodeGenPrepare::splitBranchCondition(Function &F, ModifyDT &ModifiedDT) {
         scaleWeights(NewTrueWeight, NewFalseWeight);
         Br1->setMetadata(LLVMContext::MD_prof,
                          MDBuilder(Br1->getContext())
-                             .createBranchWeights(TrueWeight, FalseWeight));
+                             .createBranchWeights(NewTrueWeight, NewFalseWeight));
 
         NewTrueWeight = 2 * TrueWeight;
         NewFalseWeight = FalseWeight;
         scaleWeights(NewTrueWeight, NewFalseWeight);
         Br2->setMetadata(LLVMContext::MD_prof,
                          MDBuilder(Br2->getContext())
-                             .createBranchWeights(TrueWeight, FalseWeight));
+                             .createBranchWeights(NewTrueWeight, NewFalseWeight));
       }
     }
 

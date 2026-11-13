@@ -19,9 +19,18 @@
 #include "llvm/CodeGen/MachineJumpTableInfo.h"
 #include "llvm/IR/Attributes.h"
 #include "llvm/Support/KnownBits.h"
+#include "llvm/Support/CommandLine.h"
 using namespace llvm;
 
 #define DEBUG_TYPE "z80-isel"
+
+static cl::opt<bool> SplitBranchConditions(
+    "z80-split-branch-conditions", cl::Hidden, cl::init(true),
+    cl::desc("Use control flow for compound comparison conditions"));
+
+bool Z80TargetLowering::shouldSplitBranchConditions() const {
+  return SplitBranchConditions && Subtarget.is16Bit() && !Subtarget.hasEZ80Ops();
+}
 
 bool Z80TargetLowering::isLegalAddressingMode(
     const DataLayout &DL, const AddrMode &AM, Type *Ty, unsigned AS,

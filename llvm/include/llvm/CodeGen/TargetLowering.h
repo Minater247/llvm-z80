@@ -637,6 +637,11 @@ public:
   /// avoided.
   bool isJumpExpensive() const { return JumpIsExpensive; }
 
+  /// Expose compound branch conditions as separate control-flow edges before
+  /// instruction selection. Targets whose selector cannot consume combined
+  /// comparisons can use each comparison's flags directly on those edges.
+  virtual bool shouldSplitBranchConditions() const { return false; }
+
   // Costs parameters used by
   // SelectionDAGBuilder::shouldKeepJumpConditionsTogether.
   // shouldKeepJumpConditionsTogether will use these parameter value to
