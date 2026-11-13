@@ -2651,11 +2651,20 @@ MachineInstr *Z80InstrInfo::foldMemoryOperandImpl(
     case Z80::AND8ar: Opc = IsOff ? Z80::AND8ao : Z80::AND8ap; break;
     case Z80::XOR8ar: Opc = IsOff ? Z80::XOR8ao : Z80::XOR8ap; break;
     case Z80:: OR8ar: Opc = IsOff ? Z80:: OR8ao : Z80:: OR8ap; break;
-    case Z80::TST8ag:
+    case Z80::TST8ag: {
       if (IsOff)
+        return nullptr;
+      const TargetRegisterClass *RC = getRegClass(get(Z80::TST8ap), 0);
+      Register AddrReg = MOs[0].getReg();
+      if (MOs[0].getSubReg() ||
+          (AddrReg.isPhysical()
+               ? !RC->contains(AddrReg)
+               : !getRegisterInfo().getCommonSubClass(
+                     MF.getRegInfo().getRegClass(AddrReg), RC)))
         return nullptr;
       Opc = Z80::TST8ap;
       break;
+    }
     case TargetOpcode::COPY:
       if (!isRegisterOperandSubClassEq(MI.getOperand(1), Z80::R8RegClass))
         return nullptr;

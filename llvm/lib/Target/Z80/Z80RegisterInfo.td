@@ -162,6 +162,7 @@ let CopyCost = -1 in {
   def Z8  : Z80RC8 <(add I, R, MB)>;
 }
 
+def H16 : Z80RC16<(add HL)>;
 def O16 : Z80RC16<(add DE, BC)>;
 def G16 : Z80RC16<(add HL, O16)>;
 def Y16 : Z80RC16<(add IY, O16)>;
@@ -172,6 +173,7 @@ def R16 : Z80RC16<(add G16, I16)>;
 let CopyCost = -1 in
 def Z16 : Z80RC16<(add SPS, AF, UI)>;
 
+def H24 : Z80RC24<(add UHL)>;
 def O24 : Z80RC24<(add UDE, UBC)>;
 def G24 : Z80RC24<(add UHL, O24)>;
 def Y24 : Z80RC24<(add UIY, O24)>;

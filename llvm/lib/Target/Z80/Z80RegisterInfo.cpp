@@ -93,6 +93,7 @@ Z80RegisterInfo::getPointerRegClass(unsigned Kind) const {
   case 3: return Is24Bit ? &Z80::A24RegClass : &Z80::A16RegClass;
   case 4: return Is24Bit ? &Z80::I24RegClass : &Z80::I16RegClass;
   case 5: return Is24Bit ? &Z80::R24RegClass : &Z80::R16RegClass;
+  case 6: return Is24Bit ? &Z80::H24RegClass : &Z80::H16RegClass;
   }
 }
 
