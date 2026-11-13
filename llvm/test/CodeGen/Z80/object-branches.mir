@@ -1,0 +1,33 @@
+# RUN: llc -mtriple=z80 -start-after=z80-branch-select -filetype=obj %s -o %t.o
+# RUN: llvm-objcopy --dump-section .text=%t.bin %t.o
+# RUN: %python %S/Inputs/check-object-bytes.py %s %t.bin
+# RUN: llvm-readobj --relocations %t.o | FileCheck %s
+# CHECK: 0x9 R_Z80_16 external 0x0
+# CHECK: 0xC R_Z80_8_PCREL external 0xFFFFFFFF
+# CHECK: 0xE R_Z80_16 external 0x0
+--- |
+  target triple = "z80"
+  declare void @external()
+  define void @branches() { ret void }
+...
+---
+name: branches
+tracksRegLiveness: false
+body: |
+  bb.0:
+    ; BYTES: 00 20 fd 18 00
+    NOP
+    JRCC %bb.0, 0, implicit $f
+    JR %bb.1
+  bb.1:
+    ; BYTES: 00 10 fd cd 00 00 18 00 c3 00 00 c9
+    NOP
+    DJNZ %bb.1, implicit-def $b, implicit $b
+  bb.2:
+    CALL16 @external, implicit $sps
+    JR @external
+  bb.3:
+    JP16 @external
+  bb.4:
+    RET16 implicit-def $sps, implicit $sps
+...

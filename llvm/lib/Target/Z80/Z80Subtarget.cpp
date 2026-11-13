@@ -33,6 +33,15 @@ Z80Subtarget &Z80Subtarget::initializeSubtargetDependencies(StringRef CPU,
   if (CPU.empty())
     CPU = TargetTriple.getArchName();
   ParseSubtargetFeatures(CPU, TuneCPU, FS);
+  // MC encoding consumes feature bits, while code generation queries the
+  // mode fields initialized from the triple. Publish that same mode without
+  // changing the instruction capabilities selected by the CPU.
+  FeatureBitset Features = getFeatureBits();
+  if (In16BitMode)
+    Features.set(Z80::Mode16Bit);
+  if (In24BitMode)
+    Features.set(Z80::Mode24Bit);
+  setFeatureBits(Features);
   HasIdxHalfRegs = HasUndocOps || HasEZ80Ops;
   HasSliOp = HasUndocOps;
   return *this;

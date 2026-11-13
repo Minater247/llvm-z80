@@ -12,6 +12,10 @@
 //===----------------------------------------------------------------------===//
 
 #include "Z80TargetStreamer.h"
+#include "Z80MCTargetDesc.h"
+#include "llvm/MC/MCELFStreamer.h"
+#include "llvm/MC/MCELFObjectWriter.h"
+#include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/Support/FormattedStream.h"
@@ -72,4 +76,27 @@ void Z80TargetAsmStreamer::emitCode16() {
 
 void Z80TargetAsmStreamer::emitCode24() {
   OS << "\t.code24\n";
+}
+
+Z80TargetELFStreamer::Z80TargetELFStreamer(MCStreamer &S,
+                                         const MCSubtargetInfo &STI)
+    : Z80TargetStreamer(S) {
+  static_cast<MCELFStreamer &>(S).getWriter().setELFHeaderEFlags(
+      Z80_MC::getELFFlags(STI));
+}
+
+void Z80TargetELFStreamer::emitAlign(Align Alignment) {
+  getStreamer().emitValueToAlignment(Alignment);
+}
+void Z80TargetELFStreamer::emitBlock(uint64_t NumBytes) {
+  getStreamer().emitZeros(NumBytes);
+}
+void Z80TargetELFStreamer::emitLocal(MCSymbol *Symbol) {
+  getStreamer().emitSymbolAttribute(Symbol, MCSA_Local);
+}
+void Z80TargetELFStreamer::emitWeakGlobal(MCSymbol *Symbol) {
+  getStreamer().emitSymbolAttribute(Symbol, MCSA_Weak);
+}
+void Z80TargetELFStreamer::emitGlobal(MCSymbol *Symbol) {
+  getStreamer().emitSymbolAttribute(Symbol, MCSA_Global);
 }

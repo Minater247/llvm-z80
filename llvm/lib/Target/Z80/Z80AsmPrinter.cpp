@@ -78,6 +78,10 @@ void Z80AsmPrinter::emitEndOfAsmFile(Module &M) {
 }
 
 void Z80AsmPrinter::emitGlobalVariable(const GlobalVariable *GV) {
+  if (!OutStreamer->hasRawTextSupport()) {
+    AsmPrinter::emitGlobalVariable(GV);
+    return;
+  }
   Z80TargetStreamer *TS =
       static_cast<Z80TargetStreamer *>(OutStreamer->getTargetStreamer());
   const DataLayout &DL = GV->getParent()->getDataLayout();

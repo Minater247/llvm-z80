@@ -55,6 +55,19 @@ public:
   void emitCode24() override;
 };
 
+class Z80TargetELFStreamer final : public Z80TargetStreamer {
+public:
+  Z80TargetELFStreamer(MCStreamer &S, const MCSubtargetInfo &STI);
+  void emitAlign(Align Alignment) override;
+  void emitBlock(uint64_t NumBytes) override;
+  void emitLocal(MCSymbol *Symbol) override;
+  void emitWeakGlobal(MCSymbol *Symbol) override;
+  void emitGlobal(MCSymbol *Symbol) override;
+  void emitExtern(MCSymbol *) override {}
+  void emitCode16() override {}
+  void emitCode24() override {}
+};
+
 } // end namespace llvm
 
 #endif // LLVM_LIB_TARGET_Z80_MCTARGETDESC_Z80TARGETSTREAMER_H

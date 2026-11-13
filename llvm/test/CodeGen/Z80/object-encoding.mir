@@ -1,0 +1,108 @@
+# RUN: llc -mtriple=z80 -mcpu=z80 -start-after=z80-branch-select -filetype=obj %s -o %t.o
+# RUN: llvm-objcopy --dump-section .text=%t.bin %t.o
+# RUN: %python %S/Inputs/check-object-bytes.py %s %t.bin
+# RUN: llvm-readobj --file-headers %t.o | FileCheck %s
+# CHECK: Format: elf32-z80
+# CHECK: Machine: EM_Z80
+# CHECK: Flags [ (0x1)
+--- |
+  target triple = "z80"
+  define void @encoding() { ret void }
+...
+---
+name: encoding
+tracksRegLiveness: false
+body: |
+  bb.0:
+    ; Byte and pair loads, including index halves and zero displacement.
+    ; BYTES: 06 12 5f dd 26 34 fd 6f 01 34 12 dd 21 78 56
+    $b = LD8ri 18
+    $e = LD8gg $a
+    $ixh = LD8ri 52
+    $iyl = LD8yy $a
+    $bc = LD16ri 4660
+    $ix = LD16ri 22136
+    ; BYTES: 0a 1a 7e dd 7e 00 fd 46 80 02 12 77 dd 73 7f
+    $a = LD8ap $bc
+    $a = LD8ap $de
+    $a = LD8ap $hl
+    $a = LD8ap $ix
+    $b = LD8go $iy, -128
+    LD8pa $bc, $a
+    LD8pa $de, $a
+    LD8pa $hl, $a
+    LD8og $ix, 127, $e
+    ; BYTES: 36 42 fd 36 fe 43 2a 34 12 ed 5b 34 12 ed 43 34 12
+    LD8pi $hl, 66
+    LD8oi $iy, -2, 67
+    $hl = LD16am 4660
+    $de = LD16gm 4660
+    LD16mg 4660, $bc
+    ; The ED-prefixed absolute HL forms are valid distinct MC encodings.
+    ; BYTES: ed 6b 34 12 ed 63 34 12
+    $hl = LD16gm 4660
+    LD16mg 4660, $hl
+    ; Arithmetic, flags, stack operations, and exchanges.
+    ; BYTES: 87 dd 85 ce 05 93 a2 ab b0 bf 04 fd 2d 34 dd 35 02
+    ADD8ar $a, implicit-def $a, implicit-def $f, implicit $a
+    ADD8ar $ixl, implicit-def $a, implicit-def $f, implicit $a
+    ADC8ai 5, implicit-def $a, implicit-def $f, implicit $a, implicit $f
+    SUB8ar $e, implicit-def $a, implicit-def $f, implicit $a
+    AND8ar $d, implicit-def $a, implicit-def $f, implicit $a
+    XOR8ar $e, implicit-def $a, implicit-def $f, implicit $a
+    OR8ar $b, implicit-def $a, implicit-def $f, implicit $a
+    CP8ar $a, implicit-def $f, implicit $a
+    $b = INC8r $b, implicit-def $f
+    $iyl = DEC8r $iyl, implicit-def $f
+    INC8p $hl, implicit-def $f
+    DEC8o $ix, 2, implicit-def $f
+    ; BYTES: 13 fd 2b 19 dd 29 ed 62 ed 6a c5 fd e1 eb d9 08
+    $de = INC16r $de
+    $iy = DEC16r $iy
+    $hl = ADD16ao $hl, $de, implicit-def $f
+    $ix = ADD16aa $ix, implicit-def $f
+    SBC16aa implicit-def $hl, implicit-def $f, implicit $hl, implicit $f
+    ADC16aa implicit-def $hl, implicit-def $f, implicit $hl, implicit $f
+    PUSH16r $bc, implicit-def $sps, implicit $sps
+    $iy = POP16r implicit-def $sps, implicit $sps
+    EX16DE implicit-def $de, implicit-def $hl, implicit $de, implicit $hl
+    EXX16 implicit-def $hl, implicit-def $de, implicit-def $bc, implicit-def $hl_alt, implicit-def $de_alt, implicit-def $bc_alt, implicit $hl, implicit $de, implicit $bc, implicit $hl_alt, implicit $de_alt, implicit $bc_alt
+    EXAF implicit-def $af, implicit-def $af_alt, implicit $af, implicit $af_alt
+    ; CB operations put the displacement before the final opcode.
+    ; BYTES: cb 08 cb 11 cb 3e dd cb ff 1e fd cb 00 46 cb 7f cb 9b fd cb 7f ee
+    $b = RRC8g $b, implicit-def $f
+    $c = RL8g $c, implicit-def $f, implicit $f
+    SRL8p $hl, implicit-def $f
+    RR8o $ix, -1, implicit-def $f, implicit $f
+    BIT8pb $iy, 0, implicit-def $f
+    BIT8gb $a, 7, implicit-def $f
+    $e = RES8gb $e, 3
+    SET8ob $iy, 127, 5
+    ; A store preserves alternate flags unless their clobber is explicit.
+    ; BYTES: c5 47 08 78 08 c1 f5 08 f1 08
+    $a_alt = ALT_SAVE8 $a
+    $a_alt = ALT_SAVE8 $a, implicit-def dead $f_alt
+    ; Dead primary bytes bridge the banks without stack traffic.
+    ; BYTES: 08 57 08 7a 5f 08 7b 08
+    $a = ALT_LOAD8 $a_alt, implicit-def dead $d
+    $a_alt = ALT_SAVE8 $a, implicit-def dead $e
+    ; Alternate accumulator frame transfers preserve primary AF and both flags.
+    ; BYTES: 08 dd 77 fe 08 08 fd 7e 02 08 08 77 08 08 7e 08
+    ALT_SPILL8o $ix, -2, implicit $a_alt
+    ALT_RELOAD8o $iy, 2, implicit-def $a_alt
+    ALT_SPILL8p $hl, implicit $a_alt
+    ALT_RELOAD8p $hl, implicit-def $a_alt
+    ; Ports, interrupt modes, conditional calls/jumps/returns.
+    ; BYTES: db 7f d3 80 ed 50 ed 59 ed 46 ed 56 ed 5e cc 34 12 fa 78 56 c8 c9
+    IN8am 127, implicit-def $a
+    OUT8ma 128, implicit $a
+    $d = IN16gp implicit-def $f, implicit $bc
+    OUT16pg $e, implicit $bc
+    IM 0
+    IM 1
+    IM 2
+    CALL16CC 4660, 1, implicit $f, implicit $sps
+    JP16CC 22136, 7, implicit $f
+    RET16CC 1, implicit-def $sps, implicit $f, implicit $sps
+    RET16 implicit-def $sps, implicit $sps
+...

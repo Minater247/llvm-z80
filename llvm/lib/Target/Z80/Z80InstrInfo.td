@@ -413,11 +413,11 @@ let isBranch = true, isTerminator = true in {
     def JQCC : Pseudo<"jp", "\t$cc, $tgt", "",
                       (outs), (ins jmptarget:$tgt, cc:$cc),
                       [(Z80brcond bb:$tgt, imm:$cc, F)]>;
-    def JRCC   : Io  <  NoPre, 0x18, "jr", "\t$cc, $tgt", "",
+    def JRCC   : Io  <  NoPre, 0x20, "jr", "\t$cc, $tgt", "",
                       (outs), (ins jmptargetoff:$tgt, cc:$cc)>;
-    def JP16CC : I16i<  NoPre, 0xC3, "jp", "\t$cc, $tgt", "",
+    def JP16CC : I16i<  NoPre, 0xC2, "jp", "\t$cc, $tgt", "",
                       (outs), (ins jmptarget:$tgt, cc:$cc)>;
-    def JP24CC : I24i<  NoPre, 0xC3, "jp", "\t$cc, $tgt", "",
+    def JP24CC : I24i<  NoPre, 0xC2, "jp", "\t$cc, $tgt", "",
                       (outs), (ins jmptarget:$tgt, cc:$cc)>;
   }
 }
@@ -647,7 +647,7 @@ let Defs = [SPS] in {
                     (outs), (ins A16:$src)>;
 }
 let Defs = [SPL] in {
-  def LD24si : I16i<  NoPre, 0x31, "ld", "\tsp, $src", "",
+  def LD24si : I24i<  NoPre, 0x31, "ld", "\tsp, $src", "",
                     (outs), (ins i24imm:$src), [(set SPL, imm:$src)]>;
   def LD24sa : I24 <Idx0Pre, 0xF9, "ld", "\tsp, $src", "",
                     (outs), (ins A24:$src)>;
@@ -915,13 +915,13 @@ multiclass BitOp8R<bits<2> opcode, string mnemonic> {
 }
 
 defm RLC : UnOp8RF  <  CBPre, 0, "rlc">;
-defm RRC : UnOp8RF  <  CBPre, 1, "rrc">;
-defm RL  : UnOp8RFF <  CBPre, 2, "rl">;
-defm RR  : UnOp8RFF <  CBPre, 3, "rr">;
-defm SLA : UnOp8RF  <  CBPre, 4, "sla">;
-defm SRA : UnOp8RF  <  CBPre, 5, "sra">;
-defm SLI : UnOp8RF  <  CBPre, 6, "sli", [HaveSliOp]>;
-defm SRL : UnOp8RF  <  CBPre, 7, "srl">;
+defm RRC : UnOp8RF  <  CBPre, 8, "rrc">;
+defm RL  : UnOp8RFF <  CBPre, 16, "rl">;
+defm RR  : UnOp8RFF <  CBPre, 24, "rr">;
+defm SLA : UnOp8RF  <  CBPre, 32, "sla">;
+defm SRA : UnOp8RF  <  CBPre, 40, "sra">;
+defm SLI : UnOp8RF  <  CBPre, 48, "sli", [HaveSliOp]>;
+defm SRL : UnOp8RF  <  CBPre, 56, "srl">;
 defm BIT : BitOp8F  <         1, "bit">;
 defm RES : BitOp8R  <         2, "res">;
 defm SET : BitOp8R  <         3, "set">;
@@ -1136,9 +1136,9 @@ def : Pat<(addc A24:$imp, O24:$src), (ADD24ao A24:$imp, O24:$src)>;
 
 let Defs = [HL, F] in {
   let Uses = [HL, F] in {
-    def SBC16aa : I16<EDPre, 0x42, "sbc", "\thl, hl", "", (outs), (ins),
+    def SBC16aa : I16<EDPre, 0x62, "sbc", "\thl, hl", "", (outs), (ins),
                       [(set  HL, F, (Z80sbc_flag  HL, HL,       F))]>;
-    def ADC16aa : I16<EDPre, 0x4A, "adc", "\thl, hl", "", (outs), (ins),
+    def ADC16aa : I16<EDPre, 0x6A, "adc", "\thl, hl", "", (outs), (ins),
                       [(set  HL, F, (Z80adc_flag  HL, HL,       F))]>;
     def SBC16ao : I16<EDPre, 0x42, "sbc", "\thl, $src", "",
                       (outs), (ins O16:$src),
@@ -1156,9 +1156,9 @@ let Defs = [HL, F] in {
 }
 let Defs = [UHL, F] in {
   let Uses = [UHL, F] in {
-    def SBC24aa : I24<EDPre, 0x42, "sbc", "\thl, hl", "", (outs), (ins),
+    def SBC24aa : I24<EDPre, 0x62, "sbc", "\thl, hl", "", (outs), (ins),
                       [(set UHL, F, (Z80sbc_flag UHL, UHL, F))]>;
-    def ADC24aa : I24<EDPre, 0x4A, "adc", "\thl, hl", "", (outs), (ins),
+    def ADC24aa : I24<EDPre, 0x6A, "adc", "\thl, hl", "", (outs), (ins),
                       [(set UHL, F, (Z80adc_flag UHL, UHL, F))]>;
     def SBC24ao : I24<EDPre, 0x42, "sbc", "\thl, $src", "",
                       (outs), (ins O24:$src),

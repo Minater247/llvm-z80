@@ -23,7 +23,7 @@ class MCAsmBackend;
 class MCCodeEmitter;
 class MCContext;
 class MCInstrInfo;
-class MCObjectWriter;
+class MCObjectTargetWriter;
 class MCRegisterInfo;
 class MCSubtargetInfo;
 class MCTargetOptions;
@@ -38,26 +38,20 @@ Target &getTheEZ80Target();
 namespace Z80_MC {
 std::string ParseZ80Triple(const Triple &TT);
 
+/// Return ELF machine flags for the instruction set and default operand width.
+unsigned getELFFlags(const MCSubtargetInfo &STI);
+
 /// Create a Z80 MCSubtargetInfo instance.  This is exposed so Asm parser, etc.
 /// do not need to go through TargetRegistry.
 MCSubtargetInfo *createZ80MCSubtargetInfo(const Triple &TT, StringRef CPU,
                                           StringRef FS);
 }
 
-MCCodeEmitter *createZ80MCCodeEmitter(const MCInstrInfo &MCII,
-                                      const MCRegisterInfo &MRI,
-                                      MCContext &Ctx);
-
-MCAsmBackend *createZ80AsmBackend(const Target &T, const MCRegisterInfo &MRI,
-                                  const Triple &TT, StringRef CPU,
-                                  const MCTargetOptions &Options);
-MCAsmBackend *createEZ80AsmBackend(const Target &T, const MCRegisterInfo &MRI,
-                                   const Triple &TT, StringRef CPU,
-                                   const MCTargetOptions &Options);
-
-/// Construct a Z80 ELF object writer.
-std::unique_ptr<MCObjectWriter> createZ80ELFObjectWriter(raw_pwrite_stream &OS,
-                                                         uint8_t OSABI = 0);
+MCCodeEmitter *createZ80MCCodeEmitter(const MCInstrInfo &MCII, MCContext &Ctx);
+MCAsmBackend *createZ80AsmBackend(const Target &T, const MCSubtargetInfo &STI,
+                                 const MCRegisterInfo &MRI,
+                                 const MCTargetOptions &Options);
+std::unique_ptr<MCObjectTargetWriter> createZ80ELFObjectWriter(uint8_t OSABI);
 
 } // End llvm namespace
 

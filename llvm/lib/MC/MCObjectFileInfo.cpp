@@ -369,6 +369,11 @@ void MCObjectFileInfo::initELFMCObjectFileInfo(const Triple &T, bool Large) {
     FDECFIEncoding =
         PositionIndependent ? dwarf::DW_EH_PE_pcrel : dwarf::DW_EH_PE_absptr;
     break;
+  case Triple::z80:
+  case Triple::ez80:
+    // Z80 ELF has absolute data relocations, but no 32-bit PC-relative one.
+    FDECFIEncoding = dwarf::DW_EH_PE_udata4;
+    break;
   case Triple::xtensa:
     FDECFIEncoding = dwarf::DW_EH_PE_sdata4;
     break;

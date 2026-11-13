@@ -1,0 +1,80 @@
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+
+#include "Z80FixupKinds.h"
+#include "Z80MCTargetDesc.h"
+#include "llvm/ADT/StringSwitch.h"
+#include "llvm/MC/MCAsmBackend.h"
+#include "llvm/MC/MCAssembler.h"
+#include "llvm/MC/MCContext.h"
+#include "llvm/MC/MCELFObjectWriter.h"
+#include "llvm/MC/MCObjectWriter.h"
+#include "llvm/MC/MCSection.h"
+#include "llvm/MC/MCSubtargetInfo.h"
+#include "llvm/Support/MathExtras.h"
+#include "llvm/Support/raw_ostream.h"
+
+using namespace llvm;
+
+namespace {
+class Z80AsmBackend final : public MCAsmBackend {
+  uint8_t OSABI;
+
+public:
+  explicit Z80AsmBackend(uint8_t OSABI)
+      : MCAsmBackend(llvm::endianness::little), OSABI(OSABI) {}
+
+  std::unique_ptr<MCObjectTargetWriter>
+  createObjectTargetWriter() const override {
+    return createZ80ELFObjectWriter(OSABI);
+  }
+
+  MCFixupKindInfo getFixupKindInfo(MCFixupKind Kind) const override {
+    switch (Kind) {
+    case Z80::fixup_24:
+      return {"fixup_24", 0, 24, 0};
+    case Z80::fixup_8_pcrel:
+      return {"fixup_8_pcrel", 0, 8, 0};
+    case Z80::fixup_8_disp:
+      return {"fixup_8_disp", 0, 8, 0};
+    default:
+      return MCAsmBackend::getFixupKindInfo(Kind);
+    }
+  }
+
+  void applyFixup(const MCFragment &F, const MCFixup &Fixup,
+                  const MCValue &Target, uint8_t *Data, uint64_t Value,
+                  bool IsResolved) override {
+    maybeAddReloc(F, Fixup, Target, Value, IsResolved);
+    if (mc::isRelocation(Fixup.getKind()))
+      return;
+    unsigned Bits = getFixupKindInfo(Fixup.getKind()).TargetSize;
+    if (IsResolved &&
+        (Fixup.getKind() == Z80::fixup_8_pcrel ||
+         Fixup.getKind() == Z80::fixup_8_disp) &&
+        !isInt<8>(Value))
+      getContext().reportError(Fixup.getLoc(), "Z80 displacement out of range");
+    else if (IsResolved && !isIntN(Bits, Value) && !isUIntN(Bits, Value))
+      getContext().reportError(Fixup.getLoc(), "Z80 fixup value out of range");
+    for (unsigned I = 0; I != divideCeil(Bits, 8); ++I)
+      Data[I] = Value >> (I * 8);
+  }
+
+  bool writeNopData(raw_ostream &OS, uint64_t Count,
+                    const MCSubtargetInfo *) const override {
+    OS.write_zeros(Count);
+    return true;
+  }
+};
+} // namespace
+
+MCAsmBackend *llvm::createZ80AsmBackend(const Target &T,
+                                        const MCSubtargetInfo &STI,
+                                        const MCRegisterInfo &MRI,
+                                        const MCTargetOptions &Options) {
+  return new Z80AsmBackend(
+      STI.getTargetTriple().getOS() == Triple::UnknownOS
+          ? ELF::ELFOSABI_NONE
+          : MCELFObjectTargetWriter::getOSABI(STI.getTargetTriple().getOS()));
+}

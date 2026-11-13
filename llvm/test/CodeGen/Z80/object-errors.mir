@@ -1,0 +1,20 @@
+# RUN: not llc -mtriple=z80 -start-after=z80-branch-select -filetype=obj %s -o /dev/null 2>&1 | FileCheck %s
+# CHECK: error: Z80 immediate out of range
+# CHECK: error: Z80 displacement out of range
+# CHECK: error: Z80 bit number out of range
+# CHECK: error: invalid Z80 interrupt mode
+--- |
+  target triple = "z80"
+  define void @bad() { ret void }
+...
+---
+name: bad
+tracksRegLiveness: false
+body: |
+  bb.0:
+    $b = LD8ri 256
+    $a = LD8go $ix, -129
+    BIT8gb $a, 8, implicit-def $f
+    IM 3
+    RET16 implicit-def $sps, implicit $sps
+...

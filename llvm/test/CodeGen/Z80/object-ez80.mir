@@ -1,0 +1,71 @@
+# RUN: llc -mtriple=ez80 -start-after=z80-branch-select -filetype=obj %s -o %t.o
+# RUN: llvm-objcopy --dump-section .text=%t.bin %t.o
+# RUN: %python %S/Inputs/check-object-bytes.py %s %t.bin
+# RUN: llvm-readobj --file-headers %t.o | FileCheck %s
+# CHECK: Flags [ (0x84)
+--- |
+  target triple = "ez80"
+  define void @encoding() { ret void }
+...
+---
+name: encoding
+tracksRegLiveness: false
+body: |
+  bb.0:
+    ; BYTES: 01 56 34 12 fd 21 ef cd ab 31 03 02 01
+    $ubc = LD24ri 1193046
+    $uiy = LD24ri 11259375
+    LD24si 66051, implicit-def $spl
+    ; BYTES: 40 11 34 12 40 dd 21 78 56 ed 5b 56 34 12
+    $de = LD16ri 4660
+    $ix = LD16ri 22136
+    $ude = LD24gm 1193046
+    ; BYTES: 3a ef cd ab ed 73 03 02 01 cd 56 34 12
+    LD8am 11259375, implicit-def $a
+    LD24ms 66051, implicit $spl
+    CALL24 1193046, implicit $spl
+    ; Pair memory operations and index address generation.
+    ; BYTES: ed 07 ed 37 ed 31 dd 37 01 dd 31 ff fd 31 02 fd 37 03
+    $ubc = LD24rp $uhl
+    $uix = LD24rp $uhl
+    $uiy = LD24rp $uhl
+    $uix = LD24ro $uix, 1
+    $uiy = LD24ro $uix, -1
+    $uix = LD24ro $uiy, 2
+    $uiy = LD24ro $uiy, 3
+    ; BYTES: ed 0f ed 3f ed 3e fd 3e ff fd 3f fe
+    LD24pr $uhl, $ubc
+    LD24pr $uhl, $uix
+    LD24pr $uhl, $uiy
+    LD24or $uiy, -1, $uix
+    LD24or $uiy, -2, $uiy
+    ; BYTES: ed 02 02 ed 23 ff ed 32 01 ed 54 02 ed 55 fe ed 33 fd ed 65 00 ed 66 ff
+    $ubc = LEA24ro $uix, 2
+    $uhl = LEA24ro $uiy, -1
+    $uix = LEA24ro $uix, 1
+    $uix = LEA24ro $uiy, 2
+    $uiy = LEA24ro $uix, -2
+    $uiy = LEA24ro $uiy, -3
+    PEA24o $uix, 0, implicit-def $spl, implicit $spl
+    PEA24o $uiy, -1, implicit-def $spl, implicit $spl
+    ; A store preserves alternate flags unless their clobber is explicit.
+    ; BYTES: c5 47 08 78 08 c1 f5 08 f1 08
+    $a_alt = ALT_SAVE8 $a
+    $a_alt = ALT_SAVE8 $a, implicit-def dead $f_alt
+    ; Dead primary bytes bridge the banks without stack traffic.
+    ; BYTES: 08 57 08 7a 5f 08 7b 08
+    $a = ALT_LOAD8 $a_alt, implicit-def dead $d
+    $a_alt = ALT_SAVE8 $a, implicit-def dead $e
+    ; Alternate accumulator frame transfers preserve primary AF and both flags.
+    ; BYTES: 08 dd 77 fe 08 08 fd 7e 02 08 08 77 08 08 7e 08
+    ALT_SPILL8o $uix, -2, implicit $a_alt
+    ALT_RELOAD8o $uiy, 2, implicit-def $a_alt
+    ALT_SPILL8p $uhl, implicit $a_alt
+    ALT_RELOAD8p $uhl, implicit-def $a_alt
+    ; BYTES: dd e5 40 d5 fd e1 40 c1 40 c9
+    PUSH24r $uix, implicit-def $spl, implicit $spl
+    PUSH16r $de, implicit-def $sps, implicit $sps
+    $uiy = POP24r implicit-def $spl, implicit $spl
+    $bc = POP16r implicit-def $sps, implicit $sps
+    RET16 implicit-def $sps, implicit $sps
+...

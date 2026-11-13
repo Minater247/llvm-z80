@@ -2,6 +2,7 @@
 #define LLVM_LIB_TARGET_Z80_Z80INSTRINFO_H
 
 #include "Z80RegisterInfo.h"
+#include "MCTargetDesc/Z80BaseInfo.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/IR/InstrTypes.h"
@@ -54,29 +55,6 @@ bool splitReg(unsigned ByteSize, unsigned Opc8, unsigned Opc16, unsigned Opc24,
 							unsigned &HiIdx, unsigned &HiOff, bool Has16BitEZ80Ops);
 } // namespace Z80
 
-namespace Z80II {
-enum {
-	ModeShift = 0,
-	AnyMode = 0 << ModeShift,
-	CurMode = 1 << ModeShift,
-	Z80Mode = 2 << ModeShift,
-	EZ80Mode = 3 << ModeShift,
-	ModeMask = 3 << ModeShift,
-
-	PrefixShift = 2,
-	Idx0Pre = 1 << 0 << PrefixShift,
-	Idx1Pre = 1 << 1 << PrefixShift,
-	CBPre = 1 << 2 << PrefixShift,
-	EDPre = 1 << 3 << PrefixShift,
-	PrefixMask = ((1 << 4) - 1) << PrefixShift,
-
-	HasImm = 1 << 6,
-	HasOff = 1 << 7,
-
-	OpcodeShift = 8,
-	OpcodeMask = 0xFF << OpcodeShift
-};
-} // namespace Z80II
 
 class Z80InstrInfo final : public Z80GenInstrInfo {
 	Z80Subtarget &Subtarget;
