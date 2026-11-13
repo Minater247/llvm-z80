@@ -42,6 +42,11 @@ public:
   bool isBareMetal() const override { return true; }
   bool isCrossCompiling() const override { return true; }
   bool HasNativeLLVMSupport() const override { return true; }
+  const char *getDefaultLinker() const override {
+    if (getArch() == llvm::Triple::z80 || getArch() == llvm::Triple::ez80)
+      return "ld.lld";
+    return Generic_ELF::getDefaultLinker();
+  }
   bool isPICDefault() const override { return false; }
   bool isPIEDefault(const llvm::opt::ArgList &Args) const override {
     return false;

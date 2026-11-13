@@ -349,6 +349,10 @@ void BareMetal::findMultilibs(const Driver &D, const llvm::Triple &Triple,
 }
 
 bool BareMetal::handlesTarget(const llvm::Triple &Triple) {
+  if ((Triple.getArch() == llvm::Triple::z80 ||
+       Triple.getArch() == llvm::Triple::ez80) &&
+      Triple.getOS() == llvm::Triple::UnknownOS)
+    return true;
   return arm::isARMEABIBareMetal(Triple) ||
          aarch64::isAArch64BareMetal(Triple) || isRISCVBareMetal(Triple) ||
          isPPCBareMetal(Triple);

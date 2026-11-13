@@ -593,6 +593,9 @@ const char *tools::getLDMOption(const llvm::Triple &T, const ArgList &Args) {
   }
   case llvm::Triple::m68k:
     return "m68kelf";
+  case llvm::Triple::z80:
+  case llvm::Triple::ez80:
+    return "elf32z80";
   case llvm::Triple::ppc:
     if (T.isOSLinux())
       return "elf32ppclinux";
