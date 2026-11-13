@@ -1,0 +1,42 @@
+# RUN: llc -run-pass=z80-machine-prera-opt,z80-prepare-live-ranges -verify-machineinstrs %s -o - | FileCheck %s
+# RUN: llc -mattr=+alternate-regs -start-before=z80-machine-prera-opt -verify-machineinstrs %s -o %t.s
+# RUN: %python %S/Inputs/index-address-calls.py %t.s
+--- |
+  target triple = "z80"
+  declare void @opaque()
+  define void @indexed_writes() { ret void }
+...
+---
+name: indexed_writes
+tracksRegLiveness: true
+frameInfo:
+  hasCalls: true
+  adjustsStack: true
+# CHECK-LABEL: name: indexed_writes
+# CHECK: bb.1:
+# CHECK: CALL16 @opaque
+# CHECK: [[PAIR:%[0-9]+]].sub_low:i16 = COPY
+# CHECK-NEXT: [[PAIR]].sub_high:i16 = LD8ri 48
+# CHECK-NEXT: LD8og [[PAIR]], 1, $a
+# CHECK: CALL16 @opaque
+# CHECK: LD8og [[PAIR]], 2, $a
+# CHECK: $de = COPY [[PAIR]]
+body: |
+  bb.0:
+    successors: %bb.1(0x80000000)
+    liveins: $d
+    undef %0.sub_high:i16 = LD8ri 48
+    %0.sub_low:i16 = COPY $d
+    $a = LD8ri 17
+    LD8og %0, 0, $a :: (volatile store (s8))
+    JQ %bb.1
+  bb.1:
+    CALL16 @opaque, csr_z80_c, implicit $sps
+    $a = LD8ri 34
+    LD8og %0, 1, $a :: (volatile store (s8))
+    CALL16 @opaque, csr_z80_c, implicit $sps
+    $a = LD8ri 51
+    LD8og %0, 2, $a :: (volatile store (s8))
+    $de = COPY %0
+    RET16 implicit-def $sps, implicit $sps, implicit $de
+...

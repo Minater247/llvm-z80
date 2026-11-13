@@ -889,6 +889,7 @@ static bool separateStableLanes(MachineFunction &MF, unsigned StableSub) {
   }
   for (auto [R, StableValue] : Candidates) {
     const auto *RC = MRI.getRegClass(R);
+    bool IndexedAddress = StableValue && Z80::I16RegClass.hasSubClassEq(RC);
     /* Coalescing can tie one shared byte to unrelated variable-byte
        definitions. Rebuild only the pairs needed by word instructions, so
        the lanes can occupy or spill individual byte registers. */
@@ -902,10 +903,10 @@ static bool separateStableLanes(MachineFunction &MF, unsigned StableSub) {
     MRI.markUsesInDebugValueAsUndef(R);
     {
       /* Keep consecutive word accesses and byte updates in a local pair.
-         Splitting the lifetime across calls and blocks still releases its
-         stable lane, but rebuilding at every access would prevent an
-         address cursor from advancing in place. Limit each region's scan
-         and publish the changing byte at its end for subsequent regions. */
+         Indexed addresses can retain their pair across ordinary calls;
+         allocation can preserve the pair instead of repeatedly rebuilding
+         its lanes. Other pairs end at calls to release arithmetic registers.
+         Bound each region and publish its changing byte for later regions. */
       SmallVector<MachineBasicBlock *, 8> Blocks;
       for (auto *MO : Operands)
         Blocks.push_back(MO->getParent()->getParent());
@@ -921,13 +922,16 @@ static bool separateStableLanes(MachineFunction &MF, unsigned StableSub) {
           unsigned WholeUses = 0, Scanned = 0;
           bool Updated = false, UpdatedAtLast = false;
           bool Loaded = false, Stored = false;
-          for (; It != End && Scanned != 64; ++It, ++Scanned) {
+          unsigned ScanLimit = IndexedAddress ? 256 : 64;
+          for (; It != End && Scanned != ScanLimit; ++It, ++Scanned) {
             auto &MI = *It;
-            bool Boundary = MI.isCall() || MI.isInlineAsm() ||
+            bool AcrossCall = IndexedAddress && MI.isCall() &&
+                              !MBB->hasEHPadSuccessor();
+            bool Boundary = (MI.isCall() && !AcrossCall) || MI.isInlineAsm() ||
                             MI.isTerminator() || MI.isBundled();
             bool WholeUse = false, VariableDef = false, VariableUse = false;
             for (const auto &MO : MI.operands()) {
-              Boundary |= MO.isRegMask();
+              Boundary |= MO.isRegMask() && !AcrossCall;
               if (!MO.isReg() || MO.getReg() != R)
                 continue;
               Boundary |= MO.isDef() && !MO.getSubReg();
@@ -939,11 +943,10 @@ static bool separateStableLanes(MachineFunction &MF, unsigned StableSub) {
                              MO.getSubReg() == VariableSub;
             }
             Boundary |= VariableDef && !VariableUse;
-            /* Building another arithmetic address competes for HL or an
-               index pair. End the cached cursor before that computation;
-               its next memory region can reconstruct it after the temporary
-               address has been consumed. */
-            if (WholeUses && !Boundary &&
+            /* Arithmetic address temporaries compete for general pairs.
+               Release a general-pair cursor before that computation. An
+               index-only cursor can coexist with the arithmetic temporary. */
+            if (WholeUses && !Boundary && !IndexedAddress &&
                 MI.modifiesRegister(Z80::F,
                                     MF.getSubtarget().getRegisterInfo()))
               Boundary |=
@@ -956,8 +959,11 @@ static bool separateStableLanes(MachineFunction &MF, unsigned StableSub) {
             /* Arithmetic consumers benefit from independent byte lifetimes:
                retaining their zero-extended operand would occupy a pair
                across the other inputs and results. Group memory accesses,
-               where retaining the address directly replaces reconstruction. */
-            Boundary |= WholeUse && !MI.mayLoad() && !MI.mayStore();
+               where retaining the address directly replaces reconstruction.
+               Keep copies of indexed addresses in the region as well, so
+               call arguments can reuse the same reconstructed pair. */
+            Boundary |= WholeUse && !MI.mayLoad() && !MI.mayStore() &&
+                        !(IndexedAddress && MI.isCopy());
             if (Boundary) {
               ++It;
               break;
@@ -980,13 +986,12 @@ static bool separateStableLanes(MachineFunction &MF, unsigned StableSub) {
               UpdatedAtLast = true;
             }
           }
-          /* Repeated stores to independent fixed addresses can interleave.
-             Retaining all of those pairs increases pressure without saving
-             cursor updates or a read/modify/write address reconstruction.
-             Runtime read cursors also benefit from advancing in place.
-             Write-only destinations keep independent lanes: extending them
-             across other address computations can displace temporaries. */
-          if (WholeUses < 2 || (!UpdatedAtLast && !(Loaded && Stored)) ||
+          /* General-pair cursors pay for their longer lifetime through
+             updates or read/modify/write accesses. Indexed destinations
+             also benefit from sharing a fixed address between stores,
+             without occupying the general pairs used by arithmetic. */
+          if (WholeUses < 2 ||
+              (!IndexedAddress && !UpdatedAtLast && !(Loaded && Stored)) ||
               (!StableValue && !Loaded))
             continue;
           Register Pair = MRI.createVirtualRegister(RC);
