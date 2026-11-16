@@ -678,6 +678,8 @@ static Register previousCursor(MachineInstr &I, Register Base, int64_t Step,
   Register OriginalBase = Base;
   Base = Root(Base);
   bool AcrossCall = false;
+  bool IndexCallArgument = false;
+  SmallSet<Register, 16> UsedAfterCall;
   // Even keys identify register roots; odd keys identify constant pages.
   SmallSet<uint64_t, 4> OtherAddresses;
   unsigned Scanned = 0;
@@ -697,7 +699,19 @@ static Register previousCursor(MachineInstr &I, Register Base, int64_t Step,
     }
     ++Scanned;
     MachineInstr &Candidate = *--It;
+    if (!Byte && !AcrossCall)
+      for (const auto &MO : Candidate.explicit_uses())
+        if (MO.isReg() && MO.getReg().isVirtual() &&
+            MRI.getType(MO.getReg()).isValid() &&
+            MRI.getType(MO.getReg()).getSizeInBits() == 16)
+          UsedAfterCall.insert(MO.getReg());
     AcrossCall |= Candidate.isCall() || Candidate.isInlineAsm();
+    if (Candidate.isCall())
+      for (const auto &MO : Candidate.uses())
+        if (MO.isReg() && MO.getReg().isPhysical() &&
+            (Z80::I16RegClass.contains(MO.getReg()) ||
+             Z80::I8RegClass.contains(MO.getReg())))
+          IndexCallArgument = true;
     MachineInstr *Add = &Candidate;
     if (!Byte && OtherAddresses.size() < 2 &&
         (Candidate.getOpcode() == TargetOpcode::G_PTR_ADD ||
@@ -749,7 +763,13 @@ static Register previousCursor(MachineInstr &I, Register Base, int64_t Step,
        A folded address also has no materialized value to reuse. */
     bool Extended = Block != I.getParent() ||
                     Add->getOperand(1).getReg() != OriginalBase;
-    if (Extended && (AcrossCall || OtherAddresses.size() > 1 ||
+    /* A cursor already used after the latest call has paid for crossing
+       that call. Reuse it unless an index-register argument restricts placement:
+       such a call can split the advancing cursor into expensive bank copies. */
+    bool AlreadyCrossesCall = AcrossCall && !IndexCallArgument &&
+        UsedAfterCall.contains(Candidate.getOperand(0).getReg());
+    if (Extended && (((AcrossCall || OtherAddresses.size() > 1) &&
+                      !AlreadyCrossesCall) ||
                      MRI.use_nodbg_empty(Candidate.getOperand(0).getReg())))
       continue;
     auto Offset = getIConstantVRegVal(Add->getOperand(2).getReg(), MRI);
