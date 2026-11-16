@@ -1,0 +1,48 @@
+# RUN: llc -mattr=+alternate-regs -run-pass=z80-machine-prera-opt -verify-machineinstrs %s -o - | FileCheck %s
+--- |
+  target triple = "z80"
+  declare void @preserve()
+  declare void @clobber()
+  define void @retained() { ret void }
+  define void @clobbered() { ret void }
+...
+---
+name: retained
+tracksRegLiveness: true
+# Each preserved call supplies a new reaching definition of the same constant.
+# This includes later calls after the first one made the range non-SSA.
+# CHECK-LABEL: name: retained
+# CHECK: CALL16 @preserve
+# CHECK-NEXT: %0:b16 = COPY $de_alt
+# CHECK: CALL16 @preserve
+# CHECK-NEXT: %0:b16 = COPY $de_alt
+body: |
+  bb.0:
+    %0:b16 = BANK_LD16ri 8192
+    $de_alt = COPY %0
+    CALL16 @preserve, csr_z80_region, implicit $sps, implicit $de_alt
+    $a = LD8ri 7
+    BANK_LD8pa %0, killed $a :: (store (s8))
+    $de_alt = COPY %0
+    CALL16 @preserve, csr_z80_region, implicit $sps, implicit $de_alt
+    $a = LD8ri 9
+    BANK_LD8pa %0, killed $a :: (store (s8))
+    RET16 implicit-def $sps, implicit $sps
+...
+---
+name: clobbered
+tracksRegLiveness: true
+# A clobbered argument cannot replace the original constant's reaching value.
+# CHECK-LABEL: name: clobbered
+# CHECK: CALL16 @clobber
+# CHECK-NEXT: $a = LD8ri 7
+# CHECK-NEXT: BANK_LD8pa %0, killed $a
+body: |
+  bb.0:
+    %0:b16 = BANK_LD16ri 8192
+    $de_alt = COPY %0
+    CALL16 @clobber, csr_z80_c, implicit $sps, implicit $de_alt
+    $a = LD8ri 7
+    BANK_LD8pa %0, killed $a :: (store (s8))
+    RET16 implicit-def $sps, implicit $sps
+...

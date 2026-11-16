@@ -660,6 +660,72 @@ static bool selectBankInstructions(MachineFunction &MF) {
   return changed;
 }
 
+/// Reuse an invariant bank argument after a call that preserves its register.
+/// The returned reaching definition ends the fixed argument overlap while
+/// preserving the same constant on every path through the function.
+static bool retainBankConstants(MachineFunction &MF) {
+  const auto &ST = MF.getSubtarget<Z80Subtarget>();
+  if (!ST.useAlternateRegs() || !ST.is16Bit() || ST.hasEZ80Ops())
+    return false;
+  auto &MRI = MF.getRegInfo();
+  const auto &TRI = *ST.getRegisterInfo();
+  const auto &TII = *ST.getInstrInfo();
+  SmallDenseSet<Register, 16> Constants;
+  for (const auto &MBB : MF)
+    for (const auto &MI : MBB)
+      if ((MI.getOpcode() == Z80::BANK_LD16ri ||
+           MI.getOpcode() == Z80::BANK_KNOWN16) &&
+          MI.getOperand(0).getReg().isVirtual() &&
+          MRI.hasOneDef(MI.getOperand(0).getReg()))
+        Constants.insert(MI.getOperand(0).getReg());
+  if (Constants.empty())
+    return false;
+  bool Changed = false;
+  for (auto &MBB : MF)
+    for (auto &Call : MBB) {
+      if (!Call.isCall() || Call.isTerminator() || Call.isBundled() ||
+          MBB.hasEHPadSuccessor() ||
+          llvm::none_of(Call.operands(), [](const MachineOperand &MO) {
+            return MO.isRegMask();
+          }))
+        continue;
+      for (auto &Arg : Call.operands()) {
+        if (!Arg.isReg() || !Arg.isUse() || Arg.isUndef() ||
+            !Z80::ALT16RegClass.contains(Arg.getReg()) ||
+            Call.modifiesRegister(Arg.getReg(), &TRI))
+          continue;
+        Register P = Arg.getReg();
+        auto It = Call.getIterator();
+        unsigned Budget = 16;
+        SmallDenseSet<Register, 8> Modified;
+        while (It != MBB.begin() && Budget--) {
+          auto &MI = *--It;
+          if (MI.isFullCopy() && MI.getOperand(0).getReg() == P) {
+            Register R = MI.getOperand(1).getReg();
+            if (Constants.contains(R) && !MI.getOperand(1).isUndef() &&
+                !Modified.contains(R)) {
+              BuildMI(MBB, std::next(Call.getIterator()), Call.getDebugLoc(),
+                      TII.get(TargetOpcode::COPY), R)
+                  .addReg(P);
+              MRI.clearKillFlags(R);
+              Arg.setIsKill(false);
+              MRI.leaveSSA();
+              Changed = true;
+            }
+            break;
+          }
+          if (MI.isCall() || MI.isInlineAsm() || MI.isBundled() ||
+              MI.modifiesRegister(P, &TRI))
+            break;
+          for (const auto &Def : MI.defs())
+            if (Def.isReg())
+              Modified.insert(Def.getReg());
+        }
+      }
+    }
+  return Changed;
+}
+
 /// Price a leaf's bank operations as one activation across its control flow.
 /// Every word operand must admit alternate placement, and byte temporaries
 /// must be accumulator copies. Calls, stack accesses and primary operands
@@ -2764,6 +2830,7 @@ bool Z80MachinePreRAOptimization::runOnMachineFunction(MachineFunction &MF) {
   Changed |= isolateIndexedOperands(MF);
   Changed |= retainPreservedArguments(MF);
   Changed |= selectBankInstructions(MF);
+  Changed |= retainBankConstants(MF);
   identifySingleBankRegion(MF);
   Changed |= delayCopiedPairSteps(MF);
   return Changed;
