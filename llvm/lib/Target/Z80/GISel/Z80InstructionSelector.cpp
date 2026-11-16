@@ -1226,23 +1226,47 @@ bool Z80InstructionSelector::selectLoadStore(MachineInstr &I,
   // For 8-bit memory ops, if the vreg has multiple uses, keep it as a
   // register (aptr) instead of collapsing to absolute. Otherwise the reg allocator
   // can't do its job.
-  // Loading the low byte of a page address through HL competes with that
-  // address's high byte. Use A as the bridge so the source pointer may remain
-  // in BC/DE. This also makes a unit source step cheaper than forcing its
-  // entire live range into an index register for one displacement access.
+  // Loading a byte used to construct an address or add a pair through HL
+  // competes with the constructed value. Use A as the bridge so the source
+  // pointer may remain in BC/DE, including an advancing source cursor.
   bool AddressByte = false;
   if (IsLoad && Ty == LLT::scalar(8) && MRI.hasOneNonDBGUse(ValReg)) {
     const MachineInstr &Use = *MRI.use_nodbg_instructions(ValReg).begin();
     if (Use.isRegSequence() && Use.getNumOperands() == 5 &&
-        Use.getOperand(1).getReg() == ValReg &&
-        Use.getOperand(2).getImm() == Z80::sub_low &&
+        ((Use.getOperand(1).getReg() == ValReg &&
+          Use.getOperand(2).getImm() == Z80::sub_low) ||
+         (Use.getOperand(3).getReg() == ValReg &&
+          Use.getOperand(4).getImm() == Z80::sub_low)) &&
         MRI.hasOneNonDBGUse(Use.getOperand(0).getReg())) {
       const MachineInstr &Addr =
           *MRI.use_nodbg_instructions(Use.getOperand(0).getReg()).begin();
-      AddressByte = (Addr.isCopy() ||
-                     Addr.getOpcode() == TargetOpcode::G_INTTOPTR) &&
-                    MRI.getType(Addr.getOperand(0).getReg()).isPointer();
+      unsigned HighOp = Use.getOperand(2).getImm() == Z80::sub_high ? 1 : 3;
+      Register High = Use.getOperand(HighOp).getReg();
+      auto *HighDef = getDefIgnoringCopies(High, MRI);
+      bool ConstantHigh = getIConstantVRegVal(High, MRI).has_value() ||
+                          (HighDef && (HighDef->getOpcode() == Z80::LD8ri ||
+                                       HighDef->getOpcode() == Z80::LD8r0));
+      /* Constant-high arithmetic competes for the source pointer's pair.
+         A dying source can instead supply the ordinary addition's result
+         pair. Loads forming a word with another loaded byte retain their
+         independent byte destinations. */
+      AddressByte = ((Addr.isCopy() ||
+                      Addr.getOpcode() == TargetOpcode::G_INTTOPTR) &&
+                     MRI.getType(Addr.getOperand(0).getReg()).isPointer()) ||
+                    (ConstantHigh &&
+                     (Addr.getOpcode() == Z80::ADD16aa ||
+                      ((Addr.getOpcode() == Z80::ADD16ao ||
+                        Addr.getOpcode() == Z80::ADD16rr) &&
+                       !MRI.hasOneNonDBGUse(PtrReg))) &&
+                     Addr.getOperand(1).getReg() == Use.getOperand(0).getReg());
     }
+  }
+  /* An established indexed base already provides a displacement access;
+     keep that form instead of constructing a separate arithmetic address. */
+  if (AddressByte && PtrMI && PtrMI->getOpcode() == TargetOpcode::G_PTR_ADD) {
+    const auto *BaseRC = MRI.getRegClassOrNull(PtrMI->getOperand(1).getReg());
+    if (BaseRC && Z80::I16RegClass.hasSubClassEq(BaseRC))
+      AddressByte = false;
   }
   MachineInstr *ValMI = MRI.getVRegDef(ValReg);
   bool CopyByte = !IsLoad && Ty.getSizeInBits() == 8 && ValMI &&
@@ -1321,9 +1345,9 @@ bool Z80InstructionSelector::selectLoadStore(MachineInstr &I,
     }
     SharedAccumulatorByte = Compatible && AccumulatorUses > 1;
   }
-  /* Repeated adjacent accesses can share a primary pair through a temporary
-     increment and restore. Keep established indexed bases on their ordinary
-     displacement path; both forms preserve the base and flags. */
+  /* Adjacent accesses can share a pair through a temporary increment and
+     restore, or an index register through its displacement addressing mode.
+     Allocation chooses between them while preserving the base and flags. */
   if (!STI.hasEZ80Ops() && STI.is16Bit() && Ty == LLT::scalar(8) &&
       PtrMI && PtrMI->getOpcode() == TargetOpcode::G_PTR_ADD) {
     auto Offset = getIConstantVRegVal(PtrMI->getOperand(2).getReg(), MRI);
@@ -1335,10 +1359,14 @@ bool Z80InstructionSelector::selectLoadStore(MachineInstr &I,
       MemoryUses += Use.mayLoadOrStore();
     }
     bool Shared = MemoryUses > 1;
-    /* A constructed page address can profit from one neighboring access.
-       Ordinary pointer streams retain their advancing cursor form: restoring
-       their base after each access would add work inside the stream loop. */
+    /* A newly computed address can profit from one neighboring access.
+       Keeping its arithmetic in HL avoids index prefixes and pair transfers.
+       Ordinary pointer streams retain their advancing cursor form. */
     bool ConstantPage = false;
+    bool ComputedBase = false;
+    if (auto *Def = MRI.getVRegDef(Base))
+      ComputedBase = Def->getOpcode() == TargetOpcode::G_PTR_ADD &&
+                     !getIConstantVRegVal(Def->getOperand(2).getReg(), MRI);
     if (auto *Def = MRI.getVRegDef(Base))
       if (Def->getOpcode() == TargetOpcode::G_INTTOPTR)
         if (auto *Pair = MRI.getVRegDef(Def->getOperand(1).getReg()))
@@ -1353,7 +1381,7 @@ bool Z80InstructionSelector::selectLoadStore(MachineInstr &I,
           break;
         Shared |= Use.getOpcode() == Z80::LD8_ADJ ||
                   Use.getOpcode() == Z80::ST8_ADJ ||
-                  (ConstantPage && Use.hasOneMemOperand() &&
+                  ((ConstantPage || ComputedBase) && Use.hasOneMemOperand() &&
                    (*Use.memoperands_begin())->getSize() == 1 &&
                    (Use.getOpcode() == TargetOpcode::G_LOAD ||
                     Use.getOpcode() == TargetOpcode::G_STORE) &&
@@ -1947,6 +1975,25 @@ bool Z80InstructionSelector::selectFrameIndexOrGep(MachineInstr &I,
       }
       case 16: Opc = Z80::ADD16ao; break;
       case 24: Opc = Z80::ADD24ao; break;
+      }
+      /* A computed index can already occupy the adding pair. Reuse its
+         dying value as the destination and put a constant base in BC/DE,
+         instead of copying the index out and reloading the base into HL. */
+      if (!HasLEA && PtrSize == 16 && !OffConst &&
+          MRI.hasOneNonDBGUse(I.getOperand(2).getReg())) {
+        auto *Base = getDefIgnoringCopies(I.getOperand(1).getReg(), MRI);
+        Register Index = I.getOperand(2).getReg();
+        const auto *IndexRC = MRI.getRegClassOrNull(Index);
+        auto *IndexDef = getDefIgnoringCopies(Index, MRI);
+        bool AddingPair = IndexRC && Z80::A16RegClass.hasSubClassEq(IndexRC);
+        AddingPair |= IndexDef &&
+                      (IndexDef->getOpcode() == TargetOpcode::G_SHL ||
+                       IndexDef->getOpcode() == TargetOpcode::G_MUL);
+        if (AddingPair && Base &&
+            Base->getOpcode() == TargetOpcode::G_GLOBAL_VALUE) {
+          I.getOperand(2).setReg(I.getOperand(1).getReg());
+          I.getOperand(1).setReg(Index);
+        }
       }
       I.setDesc(TII.get(Opc));
       I.addImplicitDefUseOperands(MF);
