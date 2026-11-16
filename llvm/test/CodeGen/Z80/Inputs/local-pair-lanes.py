@@ -46,7 +46,7 @@ ret
         rng = random.Random(724)
         for name in ('low_cursor', 'high_cursor', 'fixed_ports',
                      'runtime_high', 'runtime_low', 'runtime_stores',
-                     'runtime_reads', 'immutable_index'):
+                     'runtime_reads', 'immutable_index', 'adjacent_calls'):
             for value in range(256):
                 cpu = execution.CPU(rng)
                 cpu.put('e', value)
@@ -62,6 +62,12 @@ ret
                     assert cpu.get('a') == before[result + 3] ^ before[result + 7]
                     assert cpu.reads.count(result + 3) == 1
                     assert cpu.reads.count(result + 7) == 1
+                elif name == 'adjacent_calls':
+                    result = 0x3100 | ((value + 1) & 255)
+                    for address, stored in ((result, 51), (result + 1, 68)):
+                        expected[address] = stored
+                        destinations.add(address)
+                    assert cpu.reads.count((0x3100 | value) - 1) == 1
                 elif name in ('low_cursor', 'runtime_stores'):
                     page = (value ^ 90) << 8 if name == 'runtime_stores' else 0x3100
                     for step in range(4):

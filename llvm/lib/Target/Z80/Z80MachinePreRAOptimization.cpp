@@ -1010,10 +1010,15 @@ static bool separateStableLanes(MachineFunction &MF, unsigned StableSub) {
           unsigned WholeUses = 0, Scanned = 0;
           bool Updated = false, UpdatedAtLast = false;
           bool Loaded = false, Stored = false;
+          bool IndexedUse = false, AdjacentUse = false;
           unsigned ScanLimit = IndexedAddress ? 256 : 64;
           for (; It != End && Scanned != ScanLimit; ++It, ++Scanned) {
             auto &MI = *It;
-            bool AcrossCall = IndexedAddress && MI.isCall() &&
+            /* Neighboring accesses can use primary pairs even when another
+               region requires an index register. Recreate their constant
+               lane after calls instead of carrying a whole word through. */
+            bool AcrossCall = IndexedAddress &&
+                              (IndexedUse || !AdjacentUse) && MI.isCall() &&
                               !MBB->hasEHPadSuccessor();
             bool Boundary = (MI.isCall() && !AcrossCall) || MI.isInlineAsm() ||
                             MI.isTerminator() || MI.isBundled();
@@ -1062,6 +1067,15 @@ static bool separateStableLanes(MachineFunction &MF, unsigned StableSub) {
               ++WholeUses;
               Last = It;
               UpdatedAtLast = Updated;
+              AdjacentUse |= MI.getOpcode() == Z80::LD8_ADJ ||
+                             MI.getOpcode() == Z80::ST8_ADJ;
+              for (unsigned Op = 0; Op != MI.getNumExplicitOperands(); ++Op) {
+                const auto &MO = MI.getOperand(Op);
+                if (!MO.isReg() || MO.getReg() != R || MO.getSubReg())
+                  continue;
+                const auto *UseRC = TII.getRegClass(MI.getDesc(), Op);
+                IndexedUse |= UseRC && Z80::I16RegClass.hasSubClassEq(UseRC);
+              }
               Loaded |= MI.mayLoad();
               Stored |= MI.mayStore();
             }

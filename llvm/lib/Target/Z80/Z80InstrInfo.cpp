@@ -1653,6 +1653,10 @@ bool Z80InstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
     Register Base = MI.getOperand(Op).getReg();
     int64_t Offset = MI.getOperand(Op + 1).getImm();
     assert((Offset == 1 || Offset == -1) && "expected adjacent byte");
+    if (Z80::I16RegClass.contains(Base)) {
+      MI.setDesc(get(Load ? Z80::LD8ro : Z80::LD8or));
+      return expandPostRAPseudo(MI);
+    }
     BuildMI(MBB, MI, DL, get(Offset > 0 ? Z80::INC16r : Z80::DEC16r), Base)
         .addReg(Base);
     auto Access = BuildMI(MBB, MI, DL, get(Load ? Z80::LD8ap : Z80::LD8pa));
@@ -1662,7 +1666,9 @@ bool Z80InstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
     if (!Load)
       Access.addReg(Z80::A);
     Access.cloneMemRefs(MI);
-    bool Restore = !MI.getOperand(Op).isKill();
+    bool Restore = !MI.getOperand(Op).isKill() &&
+                   MBB.computeRegisterLiveness(&TRI, Base, Next) !=
+                       MachineBasicBlock::LQR_Dead;
     /* Prologue insertion has already processed the pseudo's preserved base.
        Keep that contract for callee-saved pairs even when its local value dies. */
     for (const MCPhysReg *Saved = TRI.getCalleeSavedRegs(&MF);

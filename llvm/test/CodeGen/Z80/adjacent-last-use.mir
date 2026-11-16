@@ -3,6 +3,9 @@
   target triple = "z80"
   define void @temporary() { ret void }
   define preserve_allcc void @saved() { ret void }
+  define void @indexed() { ret void }
+  define void @unmarked_dead() { ret void }
+  define void @live_successor() { ret void }
 ...
 ---
 name: temporary
@@ -31,3 +34,50 @@ body: |
 # CHECK-NEXT: LD8pa $bc, $a
 # CHECK-NEXT: $bc = DEC16r $bc
 # CHECK-NEXT: RET16
+---
+name: indexed
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $ix, $iy, $a
+    ST8_ADJ $ix, -1, $a
+    $a = LD8_ADJ $iy, 1
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...
+# CHECK-LABEL: name: indexed
+# CHECK: LD8og $ix, -1, $a
+# CHECK-NEXT: $a = LD8go $iy, 1
+# CHECK-NEXT: RET16
+
+---
+name: unmarked_dead
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $bc, $a
+    ST8_ADJ $bc, -1, $a
+    RET16 implicit-def $sps, implicit $sps
+...
+# CHECK-LABEL: name: unmarked_dead
+# CHECK: $bc = DEC16r $bc
+# CHECK-NEXT: LD8pa $bc, $a
+# CHECK-NEXT: RET16
+---
+name: live_successor
+tracksRegLiveness: true
+body: |
+  bb.0:
+    successors: %bb.1
+    liveins: $bc, $a
+    ST8_ADJ $bc, 1, $a
+    JQ %bb.1
+  bb.1:
+    liveins: $bc
+    $a = LD8ap $bc
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...
+# CHECK-LABEL: name: live_successor
+# CHECK: $bc = INC16r $bc
+# CHECK-NEXT: LD8pa $bc, $a
+# CHECK-NEXT: $bc = DEC16r $bc
+# CHECK-NEXT: JQ
