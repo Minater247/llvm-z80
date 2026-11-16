@@ -23,6 +23,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/Sequence.h"
 #include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/SmallSet.h"
 #include "llvm/CodeGen/GlobalISel/GIMatchTableExecutorImpl.h"
 #include "llvm/CodeGen/GlobalISel/InstructionSelector.h"
 #include "llvm/CodeGen/GlobalISel/MIPatternMatch.h"
@@ -650,17 +651,85 @@ bool Z80InstructionSelector::selectPairLoad(MachineInstr &I,
   return false;
 }
 
-// Reuse an earlier adjacent cursor instead of keeping the original cursor
-// alive for a second independent increment. Selection walks backwards, so
-// earlier definitions still have their generic form. Bound the local search;
-// no CFG or alias analysis is needed for this arithmetic identity.
+/// Find an earlier adjacent sum of the same address, including equal-width
+/// pointer casts. Whole-word sums can reuse a single predecessor's cursor;
+/// byte sums remain local. Set Inc to select the wrapping unit update, or
+/// return an empty register when no profitable candidate is found.
+/// Bound the search to 64 instructions and four blocks.
 static Register previousCursor(MachineInstr &I, Register Base, int64_t Step,
                                bool Byte, MachineRegisterInfo &MRI, bool &Inc) {
+  auto Root = [&](Register R) {
+    for (unsigned Depth = 0; Depth != 4; ++Depth) {
+      auto *Def = MRI.getVRegDef(R);
+      if (!Def || (!Def->isCopy() &&
+                   Def->getOpcode() != TargetOpcode::G_INTTOPTR &&
+                   Def->getOpcode() != TargetOpcode::G_PTRTOINT) ||
+          Def->getOperand(1).getSubReg())
+        break;
+      Register Src = Def->getOperand(1).getReg();
+      if (!Src.isVirtual() || !MRI.getType(R).isValid() ||
+          !MRI.getType(Src).isValid() ||
+          MRI.getType(R).getSizeInBits() != MRI.getType(Src).getSizeInBits())
+        break;
+      R = Src;
+    }
+    return R;
+  };
+  Register OriginalBase = Base;
+  Base = Root(Base);
+  bool AcrossCall = false;
+  // Even keys identify register roots; odd keys identify constant pages.
+  SmallSet<uint64_t, 4> OtherAddresses;
   unsigned Scanned = 0;
-  for (auto It = I.getIterator(); It != I.getParent()->begin() && Scanned < 64;
-       ++Scanned) {
+  auto *Block = I.getParent();
+  auto It = I.getIterator();
+  SmallPtrSet<MachineBasicBlock *, 4> Visited;
+  Visited.insert(Block);
+  while (Scanned < 64) {
+    if (It == Block->begin()) {
+      if (Byte || Block->pred_size() != 1 || Visited.size() == 4)
+        break;
+      Block = *Block->pred_begin();
+      if (!Visited.insert(Block).second)
+        break;
+      It = Block->instr_end();
+      continue;
+    }
+    ++Scanned;
     MachineInstr &Candidate = *--It;
+    AcrossCall |= Candidate.isCall() || Candidate.isInlineAsm();
     MachineInstr *Add = &Candidate;
+    if (!Byte && OtherAddresses.size() < 2 &&
+        (Candidate.getOpcode() == TargetOpcode::G_PTR_ADD ||
+         Candidate.getOpcode() == TargetOpcode::G_ADD) &&
+        MRI.getType(Candidate.getOperand(0).getReg()).getSizeInBits() == 16) {
+      Register Other = Root(Candidate.getOperand(1).getReg());
+      if (Other != Base && OtherAddresses.size() < 2)
+        OtherAddresses.insert(uint64_t(Other.id()) << 1);
+    }
+    /* Page constructions also occupy address pairs. Identify repeated
+       constructions by their common high-byte source or constant page. */
+    if (!Byte && OtherAddresses.size() < 2 &&
+        Candidate.getOpcode() == TargetOpcode::G_MERGE_VALUES &&
+        Candidate.getNumOperands() == 3 &&
+        MRI.getType(Candidate.getOperand(0).getReg()) == LLT::scalar(16)) {
+      Register Page = Candidate.getOperand(2).getReg();
+      if (auto C = getIConstantVRegVal(Page, MRI)) {
+        OtherAddresses.insert((C->getZExtValue() << 1) | 1);
+      } else {
+        auto *Def = MRI.getVRegDef(Page);
+        if (Def && Def->getOpcode() == TargetOpcode::G_EXTRACT &&
+            Def->getOperand(2).getImm() == 8)
+          Page = Def->getOperand(1).getReg();
+        else if (Def && Def->getOpcode() == TargetOpcode::G_UNMERGE_VALUES &&
+                 Def->getNumExplicitDefs() == 2 &&
+                 Def->getOperand(1).getReg() == Page)
+          Page = Def->getOperand(2).getReg();
+        Register Other = Root(Page);
+        if (Other != Base)
+          OtherAddresses.insert(uint64_t(Other.id()) << 1);
+      }
+    }
     if (Byte) {
       if (Candidate.getOpcode() != TargetOpcode::G_TRUNC ||
           MRI.getType(Candidate.getOperand(0).getReg()) != LLT::scalar(8))
@@ -672,7 +741,16 @@ static Register previousCursor(MachineInstr &I, Register Base, int64_t Step,
     if (!Add ||
         (Add->getOpcode() != TargetOpcode::G_PTR_ADD &&
          Add->getOpcode() != TargetOpcode::G_ADD) ||
-        Add->getOperand(1).getReg() != Base)
+        (Add->getOperand(1).getReg() != OriginalBase &&
+         Root(Add->getOperand(1).getReg()) != Base))
+      continue;
+    /* Extending a cursor across calls or several independent address
+       computations can cost a word spill instead of saving an addition.
+       A folded address also has no materialized value to reuse. */
+    bool Extended = Block != I.getParent() ||
+                    Add->getOperand(1).getReg() != OriginalBase;
+    if (Extended && (AcrossCall || OtherAddresses.size() > 1 ||
+                     MRI.use_nodbg_empty(Candidate.getOperand(0).getReg())))
       continue;
     auto Offset = getIConstantVRegVal(Add->getOperand(2).getReg(), MRI);
     if (Offset && (Offset->getSExtValue() == Step - 1 ||
@@ -2462,11 +2540,13 @@ bool Z80InstructionSelector::selectMergeValues(MachineInstr &I,
       Register Previous = Step == Direction ? Original : Register();
       auto PageConstant = getIConstantVRegVal(Page, MRI);
       unsigned Scanned = 0;
+      bool CrossesCall = false;
       /* Reuse the whole preceding address so only its low byte changes. Equal
          page constants can have distinct registers after legalization. */
       for (auto It = I.getIterator(); !Previous && It != I.getParent()->begin() &&
                                     Scanned++ != 96;) {
         auto &Candidate = *--It;
+        CrossesCall |= Candidate.isCall() || Candidate.isInlineAsm();
         Register CandidateBase, CandidatePage, CandidateOriginal;
         int64_t CandidateStep;
         MachineInstr *CandidateAdd;
@@ -2484,6 +2564,45 @@ bool Z80InstructionSelector::selectMergeValues(MachineInstr &I,
             CandidateAdd->setFlags(0);
           Previous = Candidate.getOperand(0).getReg();
           break;
+        }
+      }
+      /* A fixed page can keep its changing byte through a short branch.
+         Follow only unique predecessors and stop at calls, where rebuilding
+         the page leaves the allocator a cheaper byte lifetime to preserve. */
+      if (!Previous && !CrossesCall && Scanned < 96 && PageConstant &&
+          !Original && std::abs(Step) <= 16) {
+        auto *Block = I.getParent();
+        SmallPtrSet<MachineBasicBlock *, 4> Seen;
+        Seen.insert(Block);
+        unsigned Budget = 96;
+        bool Boundary = false;
+        while (!Previous && !Boundary && Budget && Block->pred_size() == 1 &&
+               Seen.size() < 4) {
+          Block = *Block->pred_begin();
+          if (!Seen.insert(Block).second)
+            break;
+          for (auto &Candidate : llvm::reverse(*Block)) {
+            if (!Budget)
+              break;
+            --Budget;
+            if (Candidate.isCall() || Candidate.isInlineAsm()) {
+              Boundary = true;
+              break;
+            }
+            Register CandidateBase, CandidatePage, CandidateOriginal;
+            int64_t CandidateStep;
+            MachineInstr *CandidateAdd;
+            if (pageCursor(Candidate, MRI, CandidateBase, CandidatePage,
+                           CandidateOriginal, CandidateStep, CandidateAdd) &&
+                CandidateBase == Base &&
+                PageConstant == getIConstantVRegVal(CandidatePage, MRI) &&
+                CandidateStep == Step - Direction) {
+              if (CandidateAdd)
+                CandidateAdd->setFlags(0);
+              Previous = Candidate.getOperand(0).getReg();
+              break;
+            }
+          }
         }
       }
       /* The preceding cursor can dominate through conditionals or polling
