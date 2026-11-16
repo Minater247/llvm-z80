@@ -153,8 +153,8 @@ body: |
 name: live_old
 tracksRegLiveness: true
 # CHECK-LABEL: name: live_old
-# CHECK: %1:r16 = INC16r %1
 # CHECK: %2:g8 = LD8gp %0
+# CHECK: %1:r16 = INC16r %1
 body: |
   bb.0:
     liveins: $de

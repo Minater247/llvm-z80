@@ -663,6 +663,62 @@ static void identifySingleBankRegion(MachineFunction &MF) {
   MF.getInfo<Z80MachineFunctionInfo>()->setHasSingleBankRegion();
 }
 
+/// Shorten a copied cursor's lifetime by advancing it after nearby uses of
+/// the original address. Preserve the value across source definitions and
+/// calls, and keep its first consumer after the update. Return whether any
+/// flag-preserving word increments or decrements were moved.
+static bool delayCopiedPairSteps(MachineFunction &MF) {
+  const auto &ST = MF.getSubtarget<Z80Subtarget>();
+  if (!ST.is16Bit() || ST.hasEZ80Ops())
+    return false;
+  auto &MRI = MF.getRegInfo();
+  const auto &TRI = *ST.getRegisterInfo();
+  bool Changed = false;
+  SmallSet<Register, 16> ChangedRegisters;
+  for (auto &MBB : MF)
+    for (auto &MI : llvm::make_early_inc_range(MBB)) {
+      if (!MI.isFullCopy() || MI.getNumOperands() != 2 || MI.isBundled())
+        continue;
+      Register Dst = MI.getOperand(0).getReg(), Src = MI.getOperand(1).getReg();
+      if (!Dst.isVirtual() || !Src.isVirtual() || Dst == Src ||
+          MI.getOperand(1).isUndef() ||
+          !Z80::R16RegClass.hasSubClassEq(MRI.getRegClass(Dst)))
+        continue;
+      auto Step = std::next(MI.getIterator());
+      if (Step == MBB.end() || Step->getNumOperands() != 2 ||
+          Step->isBundled() ||
+          (Step->getOpcode() != Z80::INC16r &&
+           Step->getOpcode() != Z80::DEC16r) ||
+          Step->getOperand(0).getReg() != Dst ||
+          Step->getOperand(1).getReg() != Dst)
+        continue;
+      auto End = std::next(Step), Last = End;
+      bool Found = false;
+      unsigned Budget = 24;
+      for (; End != MBB.end() && Budget--; ++End) {
+        if (End->isCall() || End->isInlineAsm() || End->isBundled() ||
+            End->isTerminator() || End->readsRegister(Dst, &TRI) ||
+            End->modifiesRegister(Dst, &TRI) ||
+            End->modifiesRegister(Src, &TRI))
+          break;
+        if (End->readsRegister(Src, &TRI)) {
+          Last = End;
+          Found = true;
+        }
+      }
+      if (!Found)
+        continue;
+      auto Insert = std::next(Last);
+      MBB.splice(Insert, &MBB, MI.getIterator(), std::next(Step));
+      ChangedRegisters.insert(Src);
+      ChangedRegisters.insert(Dst);
+      Changed = true;
+    }
+  for (Register R : ChangedRegisters)
+    MRI.clearKillFlags(R);
+  return Changed;
+}
+
 /// Confine a few indexed memory operands to local copies when a cursor has
 /// broader uses in other blocks. Widen the original range only when every
 /// remaining operand permits a primary pair. Return whether any indexed
@@ -2659,6 +2715,7 @@ bool Z80MachinePreRAOptimization::runOnMachineFunction(MachineFunction &MF) {
   Changed |= retainPreservedArguments(MF);
   Changed |= selectBankInstructions(MF);
   identifySingleBankRegion(MF);
+  Changed |= delayCopiedPairSteps(MF);
   return Changed;
 }
 

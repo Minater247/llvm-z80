@@ -1,0 +1,52 @@
+# RUN: llc -run-pass=z80-machine-prera-opt -verify-machineinstrs %s -o - | FileCheck %s
+# RUN: %python %S/Inputs/cursor-placement.py llc %s %t.dir delayed_step changed_base
+--- |
+  target triple = "z80"
+  define i8 @delayed_step() { ret i8 0 }
+  define i8 @changed_base() { ret i8 0 }
+...
+---
+name: delayed_step
+tracksRegLiveness: true
+selected: true
+registers:
+  - { id: 0, class: a16 }
+  - { id: 1, class: a16 }
+body: |
+  bb.0:
+    liveins: $de
+    %0:a16 = COPY $de
+    %1:a16 = COPY %0
+    %1 = INC16r %1
+    $a = LD8ap %0
+    ADD8ap %1, implicit-def $a, implicit-def $f, implicit $a
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...
+# CHECK-LABEL: name: delayed_step
+# CHECK: %0:a16 = COPY $de
+# CHECK-NEXT: $a = LD8ap %0
+# CHECK-NEXT: %1:a16 = COPY %0
+# CHECK-NEXT: %1:a16 = INC16r %1
+---
+name: changed_base
+tracksRegLiveness: true
+selected: true
+registers:
+  - { id: 0, class: a16 }
+  - { id: 1, class: a16 }
+body: |
+  bb.0:
+    liveins: $de
+    %0:a16 = COPY $de
+    %1:a16 = COPY %0
+    %1 = INC16r %1
+    %0 = INC16r %0
+    %0 = INC16r %0
+    $a = LD8ap %0
+    ADD8ap %1, implicit-def $a, implicit-def $f, implicit $a
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...
+# CHECK-LABEL: name: changed_base
+# CHECK: %1:a16 = COPY %0
+# CHECK-NEXT: %1:a16 = INC16r %1
+# CHECK-NEXT: %0:a16 = INC16r %0
