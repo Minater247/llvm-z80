@@ -133,6 +133,13 @@ unsigned Z80RegisterInfo::getRegPressureLimit(const TargetRegisterClass *RC,
 
 const MCPhysReg *
 Z80RegisterInfo::getCalleeSavedRegs(const MachineFunction *MF) const {
+  if (!Is24Bit && MF->getFunction().hasFnAttribute("z80-address-arguments"))
+    return MF->getFunction()
+                   .getFnAttribute("z80-address-arguments")
+                   .getValueAsString()
+                   .contains(',')
+               ? CSR_Z80_Addresses_SaveList
+               : CSR_Z80_Address_SaveList;
   if (!Is24Bit && MF->getFunction().hasFnAttribute("z80-save-region-bank"))
     return CSR_Z80_Region_SaveList;
   switch (MF->getFunction().getCallingConv()) {

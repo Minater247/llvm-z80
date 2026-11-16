@@ -196,15 +196,20 @@ static bool retainPreservedArguments(MachineFunction &MF) {
 }
 
 /// Expose whole-pair bank choices after copy coalescing and before allocation.
-/// Byte accesses retain primary operands; completed pairs can move to a bank.
+/// Whole-pair cursors and accumulator accesses can execute in either bank;
+/// other byte operands retain their primary-register constraints.
 static bool selectBankInstructions(MachineFunction &MF) {
   bool changed = false;
   auto &MRI = MF.getRegInfo();
   const auto *TII = MF.getSubtarget().getInstrInfo();
   const auto &ST = MF.getSubtarget<Z80Subtarget>();
-  if (MF.getFunction().getCallingConv() == CallingConv::Z80_BankState) {
+  if (MF.getFunction().getCallingConv() == CallingConv::Z80_BankState ||
+      MF.getFunction().hasFnAttribute("z80-address-arguments")) {
     auto Text = MF.getFunction()
-                    .getFnAttribute("z80-bank-addresses")
+                    .getFnAttribute(
+                        MF.getFunction().hasFnAttribute("z80-address-arguments")
+                            ? "z80-address-arguments"
+                            : "z80-bank-addresses")
                     .getValueAsString();
     SmallVector<StringRef, 2> Addresses;
     Text.split(Addresses, ',');
@@ -219,6 +224,21 @@ static bool selectBankInstructions(MachineFunction &MF) {
           if (Src == (I ? Z80::DE_ALT : Z80::HL_ALT)) {
             MI.setDesc(TII->get(Z80::BANK_KNOWN16));
             MI.addOperand(MF, MachineOperand::CreateImm(Value));
+            /* Return the incoming addresses explicitly. This gives allocation
+               live ranges for preserving them rather than merely promising
+               preservation in a register mask. */
+            if (MF.getFunction().hasFnAttribute("z80-address-arguments")) {
+              Register Address = MI.getOperand(0).getReg();
+              for (auto &Block : MF)
+                for (auto &Ret : Block)
+                  if (Ret.isReturn()) {
+                    BuildMI(Block, Ret, Ret.getDebugLoc(),
+                            TII->get(TargetOpcode::COPY), Src)
+                        .addReg(Address);
+                    Ret.addOperand(MF,
+                                   MachineOperand::CreateReg(Src, false, true));
+                  }
+            }
             changed = true;
           }
         }
@@ -412,12 +432,14 @@ static bool selectBankInstructions(MachineFunction &MF) {
                           Opc == Z80::ADD16rr || Opc == Z80::INC16r ||
                           Opc == Z80::DEC16r || Opc == Z80::LD8ap ||
                           Opc == Z80::LD8pa || Opc == Z80::LD8A_POST16;
-      /* A fixed bank argument has already paid for residency. Expose its
-         page updates and memory boundaries without widening unrelated
-         cursors: their extra bank pressure needs a regional cost estimate. */
-      bool BankMemory = BankArguments.contains(R) &&
-                        (Opc == Z80::LD16rm || Opc == Z80::LD16mr ||
-                         Opc == Z80::BIT8pb || Opc == Z80::LD8pi);
+      /* Fixed bank arguments already pay for residency. Address-specialized
+         leaves also expose local memory cursors so the allocator can price
+         their placement together with the resident address accesses. */
+      bool BankMemory =
+          (BankArguments.contains(R) ||
+           MF.getFunction().hasFnAttribute("z80-address-arguments")) &&
+          (Opc == Z80::LD16rm || Opc == Z80::LD16mr || Opc == Z80::BIT8pb ||
+           Opc == Z80::LD8pi);
       if (BankMemory && (Opc == Z80::BIT8pb || Opc == Z80::LD8pi))
         BankAddresses.insert(R);
       if (Opc != TargetOpcode::COPY && Opc != Z80::BANK_KNOWN16 &&

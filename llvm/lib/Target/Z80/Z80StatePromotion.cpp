@@ -30,6 +30,10 @@ static cl::opt<bool> EnableStatePromotion(
     "z80-promote-private-state", cl::Hidden, cl::init(true),
     cl::desc("Retain private word state across internal calls"));
 
+static cl::opt<bool> PassConstantAddresses(
+    "z80-pass-constant-addresses", cl::Hidden, cl::init(true),
+    cl::desc("Pass repeated leaf addresses in alternate registers"));
+
 static cl::opt<bool> CacheBankAddresses(
     "z80-cache-bank-addresses", cl::Hidden, cl::init(true),
     cl::desc("Carry repeated constant byte addresses with private state"));
@@ -262,6 +266,144 @@ static bool specializeAddressRegions(Module &M) {
   return !Regions.empty();
 }
 
+/// Pass repeated constant addresses to local leaves in alternate registers.
+/// Direct callers establish each address explicitly; ordinary call liveness
+/// determines whether it can remain resident across intervening operations.
+static bool specializeAddressArguments(Module &M, const Z80TargetMachine &TM) {
+  auto Eligible = [&](const Function &F) {
+    const auto &ST = *TM.getSubtargetImpl(F);
+    return ST.useAlternateRegs() && ST.is16Bit() && !ST.hasEZ80Ops() &&
+           !F.hasOptNone() && !F.hasFnAttribute(Attribute::Naked) &&
+           !F.hasFnAttribute("interrupt");
+  };
+  /* Expose a small forwarding wrapper's own address uses alongside its
+     leaf's accesses. The next specialization round can then carry both
+     through the wrapper instead of rematerializing them on every call. */
+  SmallVector<CallInst *, 8> Wrappers;
+  for (Function &F : M) {
+    if (!F.hasLocalLinkage() || F.getCallingConv() != CallingConv::Fast ||
+        !Eligible(F) || F.hasOptNone() || F.getInstructionCount() > 12 ||
+        F.hasFnAttribute("z80-address-arguments"))
+      continue;
+    CallInst *Only = nullptr;
+    bool Valid = true;
+    for (Instruction &I : instructions(F))
+      if (auto *C = dyn_cast<CallBase>(&I)) {
+        if (Only || !isa<CallInst>(C) || C->isMustTailCall() ||
+            C->hasOperandBundles() || C->hasFnAttr(Attribute::NoInline)) {
+          Valid = false;
+          break;
+        }
+        Only = cast<CallInst>(C);
+      }
+    Function *Callee = Only ? Only->getCalledFunction() : nullptr;
+    if (Valid && Callee && Callee->hasFnAttribute("z80-address-arguments") &&
+        !Callee->hasFnAttribute(Attribute::NoInline) &&
+        Callee->getInstructionCount() <= 32)
+      Wrappers.push_back(Only);
+  }
+  bool Inlined = false;
+  for (auto *Call : Wrappers) {
+    InlineFunctionInfo IFI;
+    Inlined |= InlineFunction(*Call, IFI).isSuccess();
+  }
+  SmallVector<Function *, 8> Leaves;
+  for (Function &F : M) {
+    if (!F.hasLocalLinkage() || F.isDeclaration() || F.isVarArg() ||
+        F.getCallingConv() != CallingConv::Fast || !Eligible(F) ||
+        F.hasFnAttribute("z80-state-bank") ||
+        F.hasFnAttribute("z80-preserve-state-bank") ||
+        F.hasFnAttribute("z80-address-arguments") || F.hasPersonalityFn() ||
+        F.getInstructionCount() > 64 || F.getNumUses() < 3 ||
+        F.getAttributes().hasRetAttr(Attribute::InReg) ||
+        llvm::any_of(F.args(), [](Argument &A) { return A.hasInRegAttr(); }))
+      continue;
+    bool Safe = llvm::all_of(F.users(), [&](User *U) {
+      auto *C = dyn_cast<CallInst>(U);
+      return C && C->getCalledFunction() == &F && !C->isMustTailCall() &&
+             !C->hasOperandBundles() && Eligible(*C->getFunction());
+    });
+    for (Instruction &I : instructions(F))
+      if (auto *C = dyn_cast<CallBase>(&I))
+        Safe &= C->isInlineAsm();
+    if (Safe)
+      Leaves.push_back(&F);
+    if (Leaves.size() == 8)
+      break;
+  }
+  bool Changed = Inlined;
+  for (Function *F : Leaves) {
+    MapVector<ConstantInt *, unsigned> Counts;
+    for (Instruction &I : instructions(F))
+      if (auto *A = absoluteByteAddress(I))
+        ++Counts[A];
+    SmallVector<ConstantInt *, 2> Addresses;
+    for (auto [A, Count] : Counts)
+      if (Count >= 2 && Addresses.size() < 2)
+        Addresses.push_back(A);
+    if (Addresses.empty())
+      continue;
+    SmallVector<Type *> Params(F->getFunctionType()->params());
+    Params.append(Addresses.size(), Type::getInt16Ty(M.getContext()));
+    Function *N = Function::Create(
+        FunctionType::get(F->getReturnType(), Params, false), F->getLinkage(),
+        F->getAddressSpace(), F->getName() + ".addresses", &M);
+    N->copyAttributesFrom(F);
+    ValueToValueMapTy Map;
+    auto Dest = N->arg_begin();
+    for (Argument &A : F->args()) {
+      Dest->setName(A.getName());
+      Map[&A] = &*Dest++;
+    }
+    SmallVector<ReturnInst *, 4> Returns;
+    CloneFunctionInto(N, F, Map, CloneFunctionChangeType::LocalChangesOnly,
+                      Returns);
+    IRBuilder<> Entry(&*N->getEntryBlock().getFirstInsertionPt());
+    SmallVector<Value *, 2> Pointers;
+    std::string Text;
+    for (unsigned I = 0; I != Addresses.size(); ++I) {
+      Argument *A = N->getArg(F->arg_size() + I);
+      A->setName("constant.address");
+      N->addParamAttr(A->getArgNo(), Attribute::InReg);
+      Pointers.push_back(
+          Entry.CreateIntToPtr(A, PointerType::getUnqual(M.getContext())));
+      if (!Text.empty())
+        Text += ',';
+      Text += std::to_string(Addresses[I]->getZExtValue());
+    }
+    /* This private contract supplies HL'/DE' and restores them on every
+       return. All callers pass the recorded constants explicitly. Keeping
+       the constants known also permits rematerialization under pressure. */
+    N->addFnAttr("z80-address-arguments", Text);
+    for (Instruction &I : instructions(N))
+      if (auto *A = absoluteByteAddress(I)) {
+        auto Found = llvm::find(Addresses, A);
+        if (Found != Addresses.end())
+          I.setOperand(isa<LoadInst>(I) ? 0 : 1,
+                       Pointers[Found - Addresses.begin()]);
+      }
+    while (!F->use_empty()) {
+      auto *C = cast<CallInst>(*F->user_begin());
+      SmallVector<Value *> Args(C->args());
+      Args.append(Addresses.begin(), Addresses.end());
+      IRBuilder<> B(C);
+      auto *Call = B.CreateCall(N, Args);
+      Call->setCallingConv(N->getCallingConv());
+      Call->setAttributes(C->getAttributes());
+      for (unsigned I = F->arg_size(); I != Args.size(); ++I)
+        Call->addParamAttr(I, Attribute::InReg);
+      Call->setTailCallKind(C->getTailCallKind());
+      Call->setDebugLoc(C->getDebugLoc());
+      C->replaceAllUsesWith(Call);
+      C->eraseFromParent();
+    }
+    N->takeName(F);
+    F->eraseFromParent();
+    Changed = true;
+  }
+  return Changed;
+}
+
 class Z80StatePromotion : public ModulePass {
   const Z80TargetMachine &TM;
 
@@ -283,16 +425,30 @@ public:
     return "Z80 Private State Promotion";
   }
   bool runOnModule(Module &M) override;
+  bool promoteState(Module &M);
 };
 } // namespace
 
 char Z80StatePromotion::ID;
 
+/// Promote private state and repeated leaf addresses across local calls.
+/// Memory barriers synchronize mutable state; address arguments remain
+/// immutable and follow ordinary call liveness.
+bool Z80StatePromotion::runOnModule(Module &M) {
+  bool Changed = promoteState(M);
+  if (PassConstantAddresses) {
+    // The second bounded round includes wrappers exposed by the first.
+    Changed |= specializeAddressArguments(M, TM);
+    Changed |= specializeAddressArguments(M, TM);
+  }
+  return Changed;
+}
+
 /// Carry a private word and frequent constant addresses through internal calls.
 /// Calls that may observe memory synchronize the word with its original global.
 /// Escaping addresses, atomic accesses and unsupported call sites retain
 /// memory.
-bool Z80StatePromotion::runOnModule(Module &M) {
+bool Z80StatePromotion::promoteState(Module &M) {
   if (!EnableStatePromotion ||
       llvm::none_of(M, [&](Function &F) { return eligible(F); }))
     return false;

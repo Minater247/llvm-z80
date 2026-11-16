@@ -48,10 +48,11 @@ def CC_Z80_C : CallingConv<[
   CCIfByVal<CCPassByVal<1, 1>>,
   CCIfCC<"CallingConv::Z80_BankState", CCIfInReg<
       CCIfType<[ i16 ], CCAssignToReg<[ BC_ALT, HL_ALT, DE_ALT ]>>>>,
-  // Internal fast calls can carry a private state word in the alternate bank.
+  // Internal fast calls can carry private state or invariant addresses in
+  // alternate pairs. Address-specialized leaves preserve their incoming pairs.
   CCIfCC<"CallingConv::Fast", CCIfSubtarget<"useAlternateRegs()",
       CCIfSubtarget<"is16Bit()", CCIfSubtarget<"hasEZ80Ops() == false",
-      CCIfInReg<CCIfType<[ i16 ], CCAssignToReg<[ HL_ALT ]>>>>>>>,
+      CCIfInReg<CCIfType<[ i16 ], CCAssignToReg<[ HL_ALT, DE_ALT ]>>>>>>>,
   CCIfCC<"CallingConv::Fast", CCIf<"ArgFlags.isPointer()",
       CCIfType<[ i16 ], CCAssignToReg<[ IY, DE, BC, HL ]>>>>,
   CCIfCC<"CallingConv::Z80_BankState", CCIf<"ArgFlags.isPointer()",
@@ -157,6 +158,8 @@ def RetCC_Z80 : CallingConv<[
 
 def CSR_NoRegs : CalleeSavedRegs<(add)>;
 def CSR_Z80_C : CalleeSavedRegs<(add IX)>;
+def CSR_Z80_Address : CalleeSavedRegs<(add IX, HL_ALT)>;
+def CSR_Z80_Addresses : CalleeSavedRegs<(add IX, HL_ALT, DE_ALT)>;
 def CSR_Z80_Region : CalleeSavedRegs<(add IX, DE_ALT)>;
 def CSR_EZ80_C : CalleeSavedRegs<(add UIX)>;
 def CSR_Z80_AllRegs : CalleeSavedRegs<(add R16, A)>;
