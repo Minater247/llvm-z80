@@ -2207,6 +2207,28 @@ bool Z80InstructionSelector::selectALU8(MachineInstr &I,
       I.getOperand(2).setReg(RHSReg);
     }
 
+  /* Keep a prior arithmetic result on the accumulator side of a chain.
+     The loaded operand can then fold into the ALU instruction. An unrelated
+     argument has no such placement advantage and retains its operand order. */
+  if (!RHSConst && IsCommutative) {
+    auto *LHS = MRI.getVRegDef(LHSReg);
+    auto *RHS = MRI.getVRegDef(RHSReg);
+    if (LHS && RHS && LHS->getOpcode() == TargetOpcode::G_LOAD &&
+        (RHS->getOpcode() == TargetOpcode::G_ADD ||
+         RHS->getOpcode() == TargetOpcode::G_SUB ||
+         RHS->getOpcode() == TargetOpcode::G_AND ||
+         RHS->getOpcode() == TargetOpcode::G_OR ||
+         RHS->getOpcode() == TargetOpcode::G_XOR ||
+         RHS->getOpcode() == TargetOpcode::G_SADDSAT) &&
+        LHS->getParent() == I.getParent() &&
+        MRI.hasOneNonDBGUse(LHSReg) &&
+        !LHS->hasOrderedMemoryRef()) {
+      std::swap(LHSReg, RHSReg);
+      I.getOperand(1).setReg(LHSReg);
+      I.getOperand(2).setReg(RHSReg);
+    }
+  }
+
   /* Unit byte steps have register forms. Keep them out of the accumulator
      path so surrounding values can retain A and the result can stay in its
      own byte register. Overflow-producing operations use separate lowering. */
@@ -2280,12 +2302,69 @@ bool Z80InstructionSelector::selectALU8(MachineInstr &I,
     }
   }
 
+  /* A neighboring byte can share an address without first clobbering A.
+     Delay the HL-versus-index choice until allocation. Only move an unordered
+     read across nearby computations, retaining every memory boundary. */
+  MachineInstr *FoldedLoad = nullptr;
+  Register AdjacentBase;
+  int64_t AdjacentOffset = 0;
+  unsigned MemoryOpc = 0;
+  if (!RHSConst && STI.is16Bit() && !STI.hasEZ80Ops()) {
+    auto *Load = MRI.getVRegDef(RHSReg);
+    if (Load && Load->getOpcode() == TargetOpcode::G_LOAD &&
+        Load->getParent() == I.getParent() &&
+        MRI.hasOneNonDBGUse(RHSReg) && !Load->hasOrderedMemoryRef()) {
+      auto *Ptr = MRI.getVRegDef(Load->getOperand(1).getReg());
+      if (Ptr && Ptr->getOpcode() == TargetOpcode::G_PTR_ADD &&
+          !MRI.hasOneNonDBGUse(Ptr->getOperand(1).getReg())) {
+        auto Offset = getIConstantVRegVal(Ptr->getOperand(2).getReg(), MRI);
+        if (Offset && (Offset->isOne() || Offset->isAllOnes())) {
+          unsigned Budget = 16;
+          for (auto It = std::next(Load->getIterator());
+               It != I.getParent()->end() && Budget--; ++It) {
+            if (&*It == &I) {
+              FoldedLoad = Load;
+              AdjacentBase = Ptr->getOperand(1).getReg();
+              AdjacentOffset = Offset->getSExtValue();
+              break;
+            }
+            if (It->mayLoadOrStore() || It->isCall() || It->isInlineAsm() ||
+                It->hasUnmodeledSideEffects())
+              break;
+          }
+        }
+      }
+    }
+    switch (OpcReg) {
+    case Z80::ADD8ar: MemoryOpc = Z80::ADD8ap; break;
+    case Z80::SUB8ar: MemoryOpc = Z80::SUB8ap; break;
+    case Z80::AND8ar: MemoryOpc = Z80::AND8ap; break;
+    case Z80::OR8ar: MemoryOpc = Z80::OR8ap; break;
+    case Z80::XOR8ar: MemoryOpc = Z80::XOR8ap; break;
+    default: FoldedLoad = nullptr; break;
+    }
+  }
+
   MachineIRBuilder Builder(I);
   if (!selectCopy(*Builder.buildCopy(Z80::A, LHSReg), MRI))
     return false;
 
   for (unsigned N = 0; N != RotateCount; ++N)
     Builder.buildInstr(RotateOpc);
+
+  if (FoldedLoad) {
+    auto ALU = Builder.buildInstr(Z80::ALU8_ADJ)
+                   .addUse(AdjacentBase)
+                   .addImm(AdjacentOffset)
+                   .addImm(MemoryOpc);
+    ALU->cloneMemRefs(*I.getMF(), *FoldedLoad);
+    bool Selected = constrainSelectedInstRegOperands(*ALU, TII, TRI, RBI) &&
+                    selectCopy(*Builder.buildCopy(DstReg, Register(Z80::A)), MRI);
+    FoldedLoad->eraseFromParent();
+    MRI.markUsesInDebugValueAsUndef(RHSReg);
+    I.eraseFromParent();
+    return Selected;
+  }
 
   bool UseImm = RHSConst.has_value() && OpcImm;
   if (UseImm)

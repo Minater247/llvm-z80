@@ -10,7 +10,7 @@
 ; CHECK: [[SCALED:%[0-9]+]]:a16 = ADD16aa
 ; CHECK: [[ADDR:%[0-9]+]]:a16 = ADD16ao [[SCALED]], [[BASE]]
 ; CHECK: $a = LD8ap [[ADDR]]
-; CHECK: $a = LD8_ADJ [[ADDR]], 1
+; CHECK: ALU8_ADJ [[ADDR]], 1
 target triple = "z80"
 @table = external global [512 x i8]
 

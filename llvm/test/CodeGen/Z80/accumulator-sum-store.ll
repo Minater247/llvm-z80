@@ -8,7 +8,7 @@ target triple = "z80"
 
 define i8 @run(ptr %source, ptr %output) nounwind {
 ; CHECK-LABEL: name: run
-; CHECK: ADD8ar
+; CHECK: ALU8_ADJ
 ; CHECK: LD8pa
 ; CHECK: LD8pa
   %x = load i8, ptr %source

@@ -1490,6 +1490,12 @@ let hasSideEffects = 1 in {
   def ALT_LOAD24 : Pseudo<"", "", "", (outs R24:$dst), (ins ALT24:$src)>;
 }
 
+// Adjacent ALU accesses retain their shared base until allocation chooses
+// between an index displacement and a temporary HL increment/decrement.
+let Defs = [A, F], Uses = [A], hasSideEffects = 0, mayLoad = 1 in
+def ALU8_ADJ : Pseudo<"", "", "", (outs),
+                      (ins A16:$base, i8imm:$offset, i16imm:$opcode)>;
+
 // Signed byte saturation uses ADD's overflow/carry flags. Keep the short
 // internal branch atomic until emission, with an exact size for relaxation.
 let Defs = [A, F], Uses = [A], hasSideEffects = 0 in {

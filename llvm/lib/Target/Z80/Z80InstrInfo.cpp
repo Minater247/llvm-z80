@@ -1646,6 +1646,42 @@ bool Z80InstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
       return expandPostRAPseudo(MI);
     break;
   }
+  case Z80::ALU8_ADJ: {
+    Register Base = MI.getOperand(0).getReg();
+    int64_t Offset = MI.getOperand(1).getImm();
+    unsigned MemoryOpc = MI.getOperand(2).getImm();
+    assert((Offset == 1 || Offset == -1) && "expected adjacent byte");
+    if (Z80::I16RegClass.contains(Base)) {
+      unsigned IndexedOpc = 0;
+      switch (MemoryOpc) {
+      case Z80::ADD8ap: IndexedOpc = Z80::ADD8ao; break;
+      case Z80::SUB8ap: IndexedOpc = Z80::SUB8ao; break;
+      case Z80::AND8ap: IndexedOpc = Z80::AND8ao; break;
+      case Z80::OR8ap: IndexedOpc = Z80::OR8ao; break;
+      case Z80::XOR8ap: IndexedOpc = Z80::XOR8ao; break;
+      default: llvm_unreachable("unexpected adjacent ALU operation");
+      }
+      MI.removeOperand(2);
+      MI.setDesc(get(IndexedOpc));
+      return true;
+    }
+    BuildMI(MBB, MI, DL, get(Offset > 0 ? Z80::INC16r : Z80::DEC16r), Base)
+        .addReg(Base);
+    BuildMI(MBB, MI, DL, get(MemoryOpc)).addReg(Base).cloneMemRefs(MI);
+    bool Restore = !MI.getOperand(0).isKill() &&
+                   MBB.computeRegisterLiveness(&TRI, Base, Next) !=
+                       MachineBasicBlock::LQR_Dead;
+    /* The pseudo preserves its base, including any callee-saved value that
+       prologue insertion has already decided needs no save. */
+    for (const MCPhysReg *Saved = TRI.getCalleeSavedRegs(&MF);
+         !Restore && Saved && *Saved; ++Saved)
+      Restore = TRI.regsOverlap(Base, *Saved);
+    if (Restore)
+      BuildMI(MBB, MI, DL, get(Offset > 0 ? Z80::DEC16r : Z80::INC16r), Base)
+          .addReg(Base);
+    MI.eraseFromParent();
+    return true;
+  }
   case Z80::LD8_ADJ:
   case Z80::ST8_ADJ: {
     bool Load = Opc == Z80::LD8_ADJ;

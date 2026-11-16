@@ -174,7 +174,7 @@ unsigned extraAccessCost(const MachineInstr &MI, unsigned Operand, MCRegister P,
     }
   }
   if ((Opc == Z80::LD8_ADJ && Operand == 1) ||
-      (Opc == Z80::ST8_ADJ && Operand == 0))
+      ((Opc == Z80::ST8_ADJ || Opc == Z80::ALU8_ADJ) && Operand == 0))
     return isIndex(P) ? (Bytes ? 1 : 8) : (Bytes ? 2 : 12);
   if ((Opc == Z80::BANK_LD16rm && Operand == 0) ||
       (Opc == Z80::BANK_LD16mr && Operand == 1)) {
