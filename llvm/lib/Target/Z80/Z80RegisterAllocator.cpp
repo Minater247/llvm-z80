@@ -57,6 +57,10 @@
 
 using namespace llvm;
 
+static cl::opt<bool> IndexLoopRegions(
+    "z80-index-loop-regions", cl::Hidden, cl::init(true),
+    cl::desc("Use primary pairs in profitable index-cursor loops"));
+
 #define DEBUG_TYPE "z80-regalloc"
 STATISTIC(NumReassigned, "Number of Z80 virtual registers reassigned");
 STATISTIC(NumExactRegions, "Number of Z80 allocation regions solved exactly");
@@ -376,7 +380,7 @@ class Z80RegisterAllocator final : public MachineFunctionPass,
   bool search(SmallVector<Register, 8> Regs, unsigned Budget,
               Register Pending = Register());
   bool split(const LiveInterval &LI, SmallVectorImpl<Register> &NewRegs,
-             bool MainBank = false);
+             bool MainBank = false, MCRegister IndexCandidate = MCRegister());
   bool splitAroundCalls(const LiveInterval &LI,
                         SmallVectorImpl<Register> &NewRegs);
   void refine();
@@ -959,7 +963,7 @@ bool Z80RegisterAllocator::splitAroundCalls(
 
 bool Z80RegisterAllocator::split(const LiveInterval &LI,
                                  SmallVectorImpl<Register> &NewRegs,
-                                 bool MainBank) {
+                                 bool MainBank, MCRegister IndexCandidate) {
   unsigned S = Stage.lookup(LI.reg());
   if (S >= 2 || !LI.isSpillable())
     return false;
@@ -1006,6 +1010,10 @@ bool Z80RegisterAllocator::split(const LiveInterval &LI,
       if (!LoopRC)
         continue;
       auto Choices = domain(LI.reg(), LoopRC);
+      if (IndexCandidate)
+        llvm::erase_if(Choices, [](MCRegister P) {
+          return isIndex(P) || Z80::ALT16RegClass.contains(P);
+        });
       unsigned Scanned = 0;
       for (auto *MBB : Loop->blocks()) {
         SlotIndex Begin = LIS->getMBBStartIdx(MBB);
@@ -1077,10 +1085,44 @@ bool Z80RegisterAllocator::split(const LiveInterval &LI,
             }
           }
       }
+      /* A legal index placement can still lose to a primary pair in an
+         individual loop. Charge entry and live-exit transfers before taking
+         that option; leave the rest of the interval available for allocation. */
+      if (!Choices.empty() && IndexCandidate) {
+        SmallVector<std::pair<double, MCRegister>, 12> Costs;
+        Costs.emplace_back(0, IndexCandidate);
+        for (MCRegister P : Choices)
+          Costs.emplace_back(0, P);
+        accessCosts(LI.reg(), Costs, Loop);
+        double Keep = Costs.front().first;
+        auto Weight = [&](const MachineBasicBlock *MBB) {
+          return OptSize ? 1.0 : MBFI->getBlockFreqRelativeToEntryBlock(MBB);
+        };
+        double EntryWeight = Weight(Entry), ExitWeight = 0;
+        SmallPtrSet<MachineBasicBlock *, 8> ExitBlocks;
+        for (auto *MBB : Loop->blocks()) {
+          if (!LI.liveAt(LIS->getMBBEndIdx(MBB).getPrevSlot()))
+            continue;
+          for (auto *Succ : MBB->successors())
+            if (!Loop->contains(Succ) && LI.liveAt(LIS->getMBBStartIdx(Succ)))
+              ExitBlocks.insert(Succ->pred_size() == 1 ? Succ : MBB);
+        }
+        for (auto *MBB : ExitBlocks)
+          ExitWeight += Weight(MBB);
+        llvm::erase_if(Choices, [&](MCRegister P) {
+          auto At = llvm::find_if(Costs, [&](auto C) { return C.second == P; });
+          double Transfers =
+              EntryWeight * transferCost(P, IndexCandidate, false) +
+              ExitWeight * transferCost(IndexCandidate, P, false);
+          return At->first + Transfers >= Keep;
+        });
+      }
       if (!Choices.empty())
         LoopGroups.push_back(Loop);
     }
   }
+  if (IndexCandidate && LoopGroups.empty())
+    return false;
   // Keep groups of accesses in a register on each side of a call. Splitting
   // every index-constrained access separately would reload an expensive pair
   // for every field of a state object, rather than just once after the call.
@@ -1222,7 +1264,7 @@ bool Z80RegisterAllocator::split(const LiveInterval &LI,
       }
     }
     for (const auto &BI : SA->getUseBlocks())
-      if (!LoopBlocks.contains(BI.MBB) &&
+      if (!IndexCandidate && !LoopBlocks.contains(BI.MBB) &&
           SA->shouldSplitSingleBlock(BI, true))
         SE->splitSingleBlock(BI);
   } else if (AcrossCall && !MainBank) {
@@ -1390,7 +1432,9 @@ bool Z80RegisterAllocator::split(const LiveInterval &LI,
     auto &Region = LIS->getInterval(R);
     SmallVector<std::pair<double, MCRegister>, 12> Choices;
     for (MCRegister P : domain(R))
-      if (Matrix->checkInterference(Region, P) == LiveRegMatrix::IK_Free)
+      if ((!IndexCandidate ||
+           (!isIndex(P) && !Z80::ALT16RegClass.contains(P))) &&
+          Matrix->checkInterference(Region, P) == LiveRegMatrix::IK_Free)
         Choices.emplace_back(0, P);
     if (Choices.empty())
       continue;
@@ -1546,6 +1590,21 @@ Z80RegisterAllocator::selectOrSplit(const LiveInterval &LI,
       }
     }
   }
+  /* Calls can rule out HL for the whole cursor while a loop admits BC/DE.
+     Consider those regions before accepting repeated indexed accesses. */
+  if (IndexLoopRegions && Free && isIndex(Free) &&
+      Stage.lookup(LI.reg()) == 0 && LI.isSpillable() &&
+      Z80::A16RegClass.hasSubClassEq(MRI->getRegClass(LI.reg())) &&
+      MRI->getRegClass(LI.reg())->contains(Z80::HL) &&
+      (Matrix->checkRegMaskInterference(LI, Z80::HL) ||
+       llvm::any_of(LIS->getRegMaskSlots(),
+                    [&](SlotIndex At) {
+                      auto *Call = LIS->getInstructionFromIndex(At);
+                      return LI.liveAt(At) && Call && Call->isCall() &&
+                             Call->modifiesRegister(Z80::HL, TRI);
+                    })) &&
+      split(LI, NewRegs, false, Free))
+    return MCRegister();
   if (Free)
     return Free;
   /* Let the remaining original ranges expose their constraints before

@@ -1,0 +1,56 @@
+# RUN: llc -start-before=z80-regalloc -regalloc=z80 -verify-machineinstrs %s -o %t.s
+# RUN: FileCheck %s < %t.s
+# RUN: llc -start-before=z80-regalloc -regalloc=z80 -z80-index-loop-regions=false -verify-machineinstrs %s -o - | FileCheck %s --check-prefix=WHOLE
+# RUN: %python %S/Inputs/index-cursor-regions.py %t.s
+--- |
+  target triple = "z80"
+  declare void @address_scratch()
+  define i16 @cursor_regions(i16 %p) optsize minsize { ret i16 %p }
+...
+---
+name: cursor_regions
+tracksRegLiveness: true
+frameInfo:
+  adjustsStack: true
+  hasCalls: true
+body: |
+  bb.0:
+    successors: %bb.1
+    liveins: $de
+    %0:a16 = COPY $de
+    BIT8pb %0, 0, implicit-def $f :: (load (s8))
+    %1:g8 = LD8ri 8
+    JQ %bb.1
+  bb.1:
+    successors: %bb.1, %bb.2
+    CALL16 @address_scratch, csr_z80_allregs, implicit $sps, implicit-def $hl, implicit-def $a, implicit-def $f
+    $a = LD8ap %0 :: (load (s8))
+    LD8ma 16384, implicit $a :: (store (s8))
+    %0 = INC16r %0
+    $a = LD8ap %0 :: (load (s8))
+    LD8ma 16384, implicit $a :: (store (s8))
+    %0 = INC16r %0
+    $a = LD8ap %0 :: (load (s8))
+    LD8ma 16384, implicit $a :: (store (s8))
+    %0 = INC16r %0
+    $a = LD8ap %0 :: (load (s8))
+    LD8ma 16384, implicit $a :: (store (s8))
+    %0 = INC16r %0
+    %1 = DEC8r %1, implicit-def $f
+    JQCC %bb.1, 0, implicit $f
+    JQ %bb.2
+  bb.2:
+    BIT8pb %0, 0, implicit-def $f :: (load (s8))
+    $hl = COPY %0
+    RET16 implicit-def $sps, implicit $sps, implicit $hl
+...
+# CHECK-LABEL: cursor_regions:
+# CHECK: [[LOOP:.LBB[0-9]+_[0-9]+]]:
+# CHECK: call address_scratch
+# CHECK-NEXT: ld a, ([[PAIR:bc|de]])
+# CHECK: inc [[PAIR]]
+# CHECK: jr nz, [[LOOP]]
+
+# WHOLE-LABEL: cursor_regions:
+# WHOLE: call address_scratch
+# WHOLE-NEXT: ld a, (iy)
