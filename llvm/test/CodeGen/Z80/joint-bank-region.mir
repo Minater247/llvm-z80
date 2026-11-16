@@ -1,0 +1,47 @@
+# RUN: llc -mattr=+alternate-regs -start-before=z80-machine-prera-opt -verify-machineinstrs %s -o %t.s
+# RUN: FileCheck %s < %t.s
+# RUN: %python %S/Inputs/joint-bank-region.py %t.s
+--- |
+  target triple = "z80"
+  define void @region() "z80-bank-addresses"="8192,8193" { ret void }
+...
+---
+name: region
+tracksRegLiveness: true
+# Resident addresses and the local cursor share one activation over the CFG.
+# Loading the cursor in a primary pair would introduce additional exchanges.
+# CHECK-LABEL: region:
+# CHECK-NOT: push
+# CHECK: exx
+# CHECK: bit 0, (hl)
+# CHECK: ld (hl), 7
+# CHECK: ld bc, (49152)
+# CHECK: ld a, (bc)
+# CHECK: ld (de), a
+# CHECK: inc c
+# CHECK: ld (49152), bc
+# CHECK-NEXT: exx
+# CHECK-NEXT: ret
+body: |
+  bb.0:
+    successors: %bb.1
+    liveins: $hl_alt, $de_alt
+    %0:ba16 = COPY $hl_alt
+    %1:b16 = COPY $de_alt
+    JQ %bb.1
+  bb.1:
+    successors: %bb.1, %bb.2
+    BANK_BIT8pb %0, 0, implicit-def $f :: (volatile load (s8))
+    JQCC %bb.1, 1, implicit killed $f
+    JQ %bb.2
+  bb.2:
+    BANK_LD8pi %0, 7 :: (volatile store (s8))
+    %2:b16 = BANK_LD16rm 49152 :: (load (s16))
+    $a = BANK_LD8ap %2 :: (load (s8))
+    BANK_LD8pa %1, killed $a :: (volatile store (s8))
+    %2:b16 = BANK_INCL16 %2, implicit-def dead $f
+    BANK_LD16mr 49152, %2 :: (store (s16))
+    $hl_alt = COPY %0
+    $de_alt = COPY %1
+    RET16 implicit-def $sps, implicit $sps, implicit $hl_alt, implicit $de_alt
+...

@@ -164,8 +164,11 @@ unsigned extraAccessCost(const MachineInstr &MI, unsigned Operand, MCRegister P,
       return Bytes ? 1 : 4;
   }
   if (Z80::ALT16RegClass.contains(P) &&
-      MI.getMF()->getInfo<Z80MachineFunctionInfo>()->hasSingleBankRegion())
+      MI.getMF()->getInfo<Z80MachineFunctionInfo>()->hasSingleBankRegion()) {
+    if (Opc == Z80::BANK_LD16rm || Opc == Z80::BANK_LD16mr)
+      return P == Z80::HL_ALT ? 0 : (Bytes ? 1 : 4);
     return 0;
+  }
   if (Opc == Z80::LD8_POST16 || Opc == Z80::LD8A_POST16 ||
       Opc == Z80::BANK_LD8A_POST16) {
     if (Operand == 1)
@@ -777,6 +780,42 @@ bool Z80RegisterAllocator::search(SmallVector<Register, 8> Regs,
     if (!F.Terms.empty())
       Accesses.push_back(std::move(F));
   }
+  /* Resident leaves can share one bank activation across their CFG. Price
+     the whole assignment together: choosing a primary cursor independently
+     would miss exchanges around otherwise resident accesses. A mixed choice
+     closes each block's bank region. Unknown choices retain a lower bound. */
+  struct BankStep {
+    int Node;
+    SmallVector<unsigned, 12> Modes;
+  };
+  SmallVector<BankStep, 16> BankSteps;
+  if (MF->size() <= 4 &&
+      MF->getInfo<Z80MachineFunctionInfo>()->hasSingleBankRegion())
+    for (const auto &MBB : *MF) {
+      BankSteps.push_back({-1, {3}});
+      for (const auto &MI : MBB) {
+        if (MI.isCopy() || MI.getOpcode() == Z80::BANK_KNOWN16 ||
+            MI.isDebugInstr())
+          continue;
+        for (const auto &MO : MI.operands()) {
+          if (!MO.isReg() || !MO.getReg() || MO.getSubReg())
+            continue;
+          Register R = MO.getReg();
+          if (R.isPhysical() ? !Z80::B16RegClass.contains(R)
+                             : !TRI->getCommonSubClass(MRI->getRegClass(R),
+                                                       &Z80::B16RegClass))
+            continue;
+          auto O = Choices(MO);
+          BankStep Step{O.NodeIndex, {0}};
+          for (MCRegister P : O.Resolved)
+            Step.Modes.push_back(Z80::ALT16RegClass.contains(P) ? 2 : 1);
+          if (O.NodeIndex < 0 && O.Resolved.size() == 1)
+            Step.Modes[0] = Step.Modes[1];
+          BankSteps.push_back(std::move(Step));
+          break;
+        }
+      }
+    }
   // Index zero represents an unassigned operand's admissible lower bound.
   // At a leaf each term is exact, and prefixes/saves are charged only once.
   auto Cost = [&]() {
@@ -796,6 +835,31 @@ bool Z80RegisterAllocator::search(SmallVector<Register, 8> Regs,
       }
       Total += F.Weight * (C + (IndexPrefix ? (Bytes ? 1 : 4) : 0));
     }
+    bool Primary = false, Alternate = false;
+    for (const auto &Step : BankSteps) {
+      unsigned Mode = Step.Modes[Step.Node < 0 ? 0 : TrialChoice[Step.Node]];
+      Primary |= Mode == 1;
+      Alternate |= Mode == 2;
+    }
+    if (!Primary && Alternate) {
+      Total += Bytes ? 2 : 8;
+    } else {
+      unsigned Bank = 1;
+      for (const auto &Step : BankSteps) {
+        unsigned Next = Step.Modes[Step.Node < 0 ? 0 : TrialChoice[Step.Node]];
+        if (Next == 3)
+          Next = 1;
+        if (Bank && Next && Bank != Next)
+          Total += Bytes ? 1 : 4;
+        Bank = Next;
+      }
+      if (Bank == 2)
+        Total += Bytes ? 1 : 4;
+    }
+    /* On an instruction-cost tie, leave primary pairs available to callers.
+       The preference stays below the cost of any encoded instruction. */
+    if (Primary)
+      Total += 0.001;
     for (MCRegister CSR : NewCSRs)
       if (llvm::any_of(Trial, [&](MCRegister P) {
             return P && TRI->regsOverlap(P, CSR);
@@ -1935,6 +1999,13 @@ void Z80RegisterAllocator::refine() {
       Sizes.push_back(1);
       Regs.push_back(R);
     }
+  }
+  /* Bank transitions couple otherwise independent interference components.
+     Search the complete small leaf before splitting it into components. */
+  if (MF->size() <= 4 && Regs.size() <= 8 &&
+      MF->getInfo<Z80MachineFunctionInfo>()->hasSingleBankRegion()) {
+    search(std::move(Regs), 16384);
+    return;
   }
   auto Root = [&](unsigned N) {
     while (Parent[N] != N) {

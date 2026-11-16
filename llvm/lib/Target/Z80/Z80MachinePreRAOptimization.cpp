@@ -728,10 +728,12 @@ static bool retainBankConstants(MachineFunction &MF) {
 
 /// Price a leaf's bank operations as one activation across its control flow.
 /// Every word operand must admit alternate placement, and byte temporaries
-/// must be accumulator copies. Calls, stack accesses and primary operands
+/// must be accumulator copies. Interrupt-control instructions and empty memory
+/// barriers retain their positions. Calls, stack accesses and primary operands
 /// retain the ordinary regional allocation costs.
 static void identifySingleBankRegion(MachineFunction &MF) {
-  if (!MF.getFunction().hasFnAttribute("z80-bank-addresses"))
+  if (!MF.getFunction().hasFnAttribute("z80-bank-addresses") &&
+      !MF.getFunction().hasFnAttribute("z80-address-arguments"))
     return;
   auto &MRI = MF.getRegInfo();
   const auto &TRI = *MF.getSubtarget().getRegisterInfo();
@@ -745,11 +747,15 @@ static void identifySingleBankRegion(MachineFunction &MF) {
                   Opc == Z80::BANK_INCL16 || Opc == Z80::BANK_DECL16 ||
                   Opc == Z80::BANK_INC16 || Opc == Z80::BANK_DEC16 ||
                   Opc == Z80::BANK_LD16ri || Opc == Z80::BANK_KNOWN16 ||
-                  Opc == Z80::BANK_LD8A_POST16;
+                  Opc == Z80::BANK_LD8A_POST16 || Opc == Z80::BANK_LD16rm ||
+                  Opc == Z80::BANK_LD16mr;
+      bool Boundary =
+          Opc == Z80::DI || Opc == Z80::EI ||
+          (MI.isInlineAsm() && !MI.getOperand(0).getSymbolName()[0]);
       HasBank |= Bank;
-      if (!Bank && !MI.isCopy() && Opc != Z80::LD8am && Opc != Z80::LD8ma &&
-          Opc != Z80::JQ && Opc != Z80::JQCC && Opc != Z80::RET16 &&
-          !MI.isDebugInstr())
+      if (!Bank && !Boundary && !MI.isCopy() && Opc != Z80::LD8am &&
+          Opc != Z80::LD8ma && Opc != Z80::JQ && Opc != Z80::JQCC &&
+          Opc != Z80::RET16 && !MI.isDebugInstr())
         return;
       for (const auto &MO : MI.operands()) {
         if (!MO.isReg() || !MO.getReg())

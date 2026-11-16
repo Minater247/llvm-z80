@@ -212,8 +212,11 @@ bool Z80BankRegionAllocator::runOnMachineFunction(MachineFunction &MF) {
           HasBank = true;
           continue;
         }
-        if (MI.isCall() || MI.isInlineAsm() || MI.isBundled() ||
-            (MI.hasUnmodeledSideEffects() && !MI.isReturn())) {
+        bool Boundary =
+            MI.getOpcode() == Z80::DI || MI.getOpcode() == Z80::EI ||
+            (MI.isInlineAsm() && !MI.getOperand(0).getSymbolName()[0]);
+        if (MI.isCall() || (MI.isInlineAsm() && !Boundary) || MI.isBundled() ||
+            (MI.hasUnmodeledSideEffects() && !MI.isReturn() && !Boundary)) {
           Legal = false;
           break;
         }
