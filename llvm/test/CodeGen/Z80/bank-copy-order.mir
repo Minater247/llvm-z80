@@ -1,0 +1,50 @@
+# RUN: llc -mtriple=z80 -mattr=+alternate-regs -run-pass=z80-post-rewrite -verify-machineinstrs %s -o - | FileCheck %s
+# RUN: %python %S/Inputs/bank-copy-order.py llc %s %t.dir
+--- |
+  target triple = "z80"
+  define void @to_hl() naked { ret void }
+  define void @to_bc() naked { ret void }
+  define void @to_de() naked { ret void }
+...
+---
+name: to_hl
+tracksRegLiveness: true
+selected: true
+body: |
+  bb.0:
+    liveins: $de_alt, $f
+    $iy = ALT_LOAD16 $de_alt
+    $hl = COPY $iy
+    RET16 implicit-def $sps, implicit $sps, implicit $hl, implicit $iy, implicit $de_alt, implicit $f
+...
+# CHECK-LABEL: name: to_hl
+# CHECK: $hl = ALT_LOAD16 $de_alt
+# CHECK-NEXT: $iy = COPY $hl
+---
+name: to_bc
+tracksRegLiveness: true
+selected: true
+body: |
+  bb.0:
+    liveins: $bc_alt, $f
+    $iy = ALT_LOAD16 $bc_alt
+    $bc = COPY $iy
+    RET16 implicit-def $sps, implicit $sps, implicit $bc, implicit $iy, implicit $bc_alt, implicit $f
+...
+# CHECK-LABEL: name: to_bc
+# CHECK: $bc = ALT_LOAD16 $bc_alt
+# CHECK-NEXT: $iy = COPY $bc
+---
+name: to_de
+tracksRegLiveness: true
+selected: true
+body: |
+  bb.0:
+    liveins: $hl_alt, $f
+    $ix = ALT_LOAD16 $hl_alt
+    $de = COPY $ix
+    RET16 implicit-def $sps, implicit $sps, implicit $de, implicit $ix, implicit $hl_alt, implicit $f
+...
+# CHECK-LABEL: name: to_de
+# CHECK: $de = ALT_LOAD16 $hl_alt
+# CHECK-NEXT: $ix = COPY $de

@@ -343,6 +343,32 @@ bool Z80PostRewritePass::runOnMachineFunction(MachineFunction &MF) {
           MI.getOpcode() == Z80::BANK_LD16or)
         changed |= TII.expandPostRAPseudo(MI);
   changed |= reuseZ80SpillLoads(MF);
+  /* When both a primary pair and an index need the same bank value, load the
+     primary pair first. The bank transfer then saves an index prefix, while
+     the remaining primary-to-index copy has the same cost as the reverse. */
+  if (MF.getSubtarget<Z80Subtarget>().is16Bit() &&
+      !MF.getSubtarget<Z80Subtarget>().hasEZ80Ops())
+    for (auto &MBB : MF)
+      for (auto &MI : MBB) {
+        if (MI.getOpcode() != Z80::ALT_LOAD16 || MI.isBundled() ||
+            !Z80::I16RegClass.contains(MI.getOperand(0).getReg()))
+          continue;
+        auto Next = std::next(MI.getIterator());
+        if (Next == MBB.end() || !Next->isCopy() || Next->isBundled() ||
+            Next->getOperand(0).getSubReg() ||
+            Next->getOperand(1).getSubReg() ||
+            Next->getOperand(1).getReg() != MI.getOperand(0).getReg() ||
+            !Z80::G16RegClass.contains(Next->getOperand(0).getReg()))
+          continue;
+        Register Index = MI.getOperand(0).getReg();
+        Register Main = Next->getOperand(0).getReg();
+        MI.getOperand(0).setReg(Main);
+        Next->getOperand(0).setReg(Index);
+        Next->getOperand(0).setIsDead(false);
+        Next->getOperand(1).setReg(Main);
+        Next->getOperand(1).setIsKill(false);
+        changed = true;
+      }
   // Splitting can also reload a private byte spill into two registers at a
   // loop edge. A byte copy is cheaper than the second stack load.
   for (auto &MBB : MF) {
