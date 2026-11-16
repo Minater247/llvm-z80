@@ -102,6 +102,94 @@ static bool shareAbsoluteByteAddresses(MachineFunction &MF) {
   return Changed;
 }
 
+/// Retain invariant index arguments through calls in a single-block loop.
+/// Accept a nearby whole-pair copy whose source is invariant in a loop with
+/// one entry edge. Both the argument setup and the call must preserve its
+/// value. Returns true when loop-local copies were introduced; exceptional
+/// exits keep their original lifetimes.
+static bool retainPreservedArguments(MachineFunction &MF) {
+  const auto &ST = MF.getSubtarget<Z80Subtarget>();
+  if (!ST.is16Bit() || ST.hasEZ80Ops())
+    return false;
+  const auto &TRI = *ST.getRegisterInfo();
+  const auto &TII = *ST.getInstrInfo();
+  auto &MRI = MF.getRegInfo();
+  bool Changed = false;
+  for (auto &MBB : MF)
+    for (auto &Call : MBB) {
+      if (!Call.isCall() || Call.isTerminator() || Call.isBundled() ||
+          !llvm::is_contained(MBB.successors(), &MBB) ||
+          MBB.hasEHPadSuccessor() ||
+          llvm::none_of(Call.operands(), [](const MachineOperand &MO) {
+            return MO.isRegMask();
+          }))
+        continue;
+      MachineBasicBlock *Entry = nullptr;
+      bool SingleEntry = true;
+      for (auto *Pred : MBB.predecessors())
+        if (Pred != &MBB) {
+          SingleEntry &= !Entry || Entry == Pred;
+          Entry = Pred;
+        }
+      if (!SingleEntry || !Entry || Entry->succ_size() != 1)
+        continue;
+      SmallSet<Register, 4> Retained;
+      for (const auto &Arg : Call.operands()) {
+        if (!Arg.isReg() || !Arg.isUse() || Arg.isUndef() ||
+            !Z80::R16RegClass.contains(Arg.getReg()) ||
+            Call.modifiesRegister(Arg.getReg(), &TRI))
+          continue;
+        Register P = Arg.getReg();
+        auto It = Call.getIterator();
+        unsigned Budget = 16;
+        SmallSet<Register, 8> Modified;
+        while (It != MBB.begin() && Budget--) {
+          auto &MI = *--It;
+          if (MI.isCopy() && MI.getOperand(0).getReg() == P &&
+              !MI.getOperand(0).getSubReg() &&
+              !MI.getOperand(1).getSubReg()) {
+            const auto &Src = MI.getOperand(1);
+            Register R = Src.getReg();
+            if (R.isVirtual() && !Src.isUndef() && !Src.isKill() &&
+                Z80::I16RegClass.hasSubClassEq(MRI.getRegClass(R)) &&
+                MRI.getRegClass(R)->contains(P) &&
+                llvm::none_of(MRI.def_operands(R), [&](const auto &Def) {
+                  return Def.getParent()->getParent() == &MBB;
+                }) &&
+                !Modified.contains(R) && Retained.insert(R).second) {
+              Register Local = MRI.createVirtualRegister(MRI.getRegClass(R));
+              for (auto &Use : llvm::make_early_inc_range(MRI.use_operands(R)))
+                if (Use.getParent()->getParent() == &MBB)
+                  Use.setReg(Local);
+              /* A copy after the call ends the fixed argument overlap, so
+                 allocation can retain the value in its argument register.
+                 Keep that reaching value local to the loop: extending it to
+                 other blocks can worsen unrelated splits. */
+              BuildMI(*Entry, Entry->getFirstTerminator(), Call.getDebugLoc(),
+                      TII.get(TargetOpcode::COPY), Local).addReg(R);
+              BuildMI(MBB, std::next(Call.getIterator()), Call.getDebugLoc(),
+                      TII.get(TargetOpcode::COPY), Local).addReg(P);
+              MRI.clearKillFlags(R);
+              for (auto &MO : Call.operands())
+                if (MO.isReg() && MO.isUse() && TRI.regsOverlap(MO.getReg(), P))
+                  MO.setIsKill(false);
+              MRI.leaveSSA();
+              Changed = true;
+            }
+            break;
+          }
+          if (MI.isCall() || MI.isInlineAsm() || MI.isBundled() ||
+              MI.modifiesRegister(P, &TRI))
+            break;
+          for (const auto &Def : MI.defs())
+            if (Def.isReg() && Def.getReg().isVirtual())
+              Modified.insert(Def.getReg());
+        }
+      }
+    }
+  return Changed;
+}
+
 /// Expose whole-pair bank choices after copy coalescing and before allocation.
 /// Byte accesses retain primary operands; completed pairs can move to a bank.
 static bool selectBankInstructions(MachineFunction &MF) {
@@ -2484,6 +2572,7 @@ bool Z80MachinePreRAOptimization::runOnMachineFunction(MachineFunction &MF) {
   Changed |= sinkIncomingCopies(MF);
   Changed |= sinkAccumulatorCaptures(MF);
   Changed |= shareAbsoluteByteAddresses(MF);
+  Changed |= retainPreservedArguments(MF);
   Changed |= selectBankInstructions(MF);
   identifySingleBankRegion(MF);
   return Changed;

@@ -1,0 +1,82 @@
+# RUN: llc -run-pass=z80-machine-prera-opt -verify-machineinstrs %s -o - | FileCheck %s
+# RUN: llc -start-before=z80-machine-prera-opt -verify-machineinstrs %s -o /dev/null
+#
+# A preserved argument is still the virtual pointer's value after the call.
+# Expose that value before allocation so the fixed argument lifetime does
+# not force the pointer to spill across every call in a polling loop.
+--- |
+  target triple = "z80"
+  declare void @helper()
+  define void @poll() { ret void }
+  define void @clobbered() { ret void }
+  define void @changed_source() { ret void }
+...
+---
+name: poll
+tracksRegLiveness: true
+body: |
+  bb.0:
+    successors: %bb.1
+    liveins: $de
+    %0:i16 = COPY $de
+  bb.1:
+    successors: %bb.1, %bb.2
+    $iy = COPY %0
+    CALL16 @helper, csr_z80_allregs, implicit $sps, implicit killed $iy
+    $a = LD8go %0, 23 :: (load (s8))
+    OR8aa implicit-def $f, implicit $a
+    JQCC %bb.1, 1, implicit killed $f
+    JQ %bb.2
+  bb.2:
+    RET16 implicit-def $sps, implicit $sps
+...
+# CHECK-LABEL: name: poll
+# CHECK: [[LOCAL:%[0-9]+]]:i16 = COPY %0
+# CHECK: CALL16 @helper
+# CHECK-NEXT: [[LOCAL]]:i16 = COPY $iy
+# CHECK-NEXT: $a = LD8go [[LOCAL]], 23
+---
+name: clobbered
+tracksRegLiveness: true
+body: |
+  bb.0:
+    successors: %bb.1
+    liveins: $de
+    %0:i16 = COPY $de
+  bb.1:
+    successors: %bb.1, %bb.2
+    $iy = COPY %0
+    CALL16 @helper, csr_z80_c, implicit $sps, implicit killed $iy
+    $a = LD8go %0, 23 :: (load (s8))
+    OR8aa implicit-def $f, implicit $a
+    JQCC %bb.1, 1, implicit killed $f
+    JQ %bb.2
+  bb.2:
+    RET16 implicit-def $sps, implicit $sps
+...
+# CHECK-LABEL: name: clobbered
+# CHECK: CALL16 @helper
+# CHECK-NEXT: $a = LD8go %0, 23
+---
+name: changed_source
+tracksRegLiveness: true
+body: |
+  bb.0:
+    successors: %bb.1
+    liveins: $de
+    %0:i16 = COPY $de
+  bb.1:
+    successors: %bb.1, %bb.2
+    $iy = COPY %0
+    %0.sub_low:i16 = LD8ri 42
+    CALL16 @helper, csr_z80_allregs, implicit $sps, implicit killed $iy
+    $a = LD8go %0, 23 :: (load (s8))
+    OR8aa implicit-def $f, implicit $a
+    JQCC %bb.1, 1, implicit killed $f
+    JQ %bb.2
+  bb.2:
+    RET16 implicit-def $sps, implicit $sps
+...
+# CHECK-LABEL: name: changed_source
+# CHECK: CALL16 @helper
+# CHECK-NEXT: $a = LD8go %0, 23
