@@ -31,7 +31,8 @@ for allocator in ('z80', 'greedy'):
     for bank in (False, True):
         for variant in ('ordinary', 'backward', 'word', 'disabled', 'volatile',
                         'escaped', 'unsupported', 'inline-leaf', 'barriers',
-                        'noinline-call', 'multiple-callers', 'optnone-caller'):
+                        'noinline-call', 'multiple-callers', 'optnone-caller',
+                        'root-barrier', 'root-clobber'):
             text = Path(source).read_text()
             if variant in ('inline-leaf', 'barriers', 'noinline-call',
                            'multiple-callers', 'optnone-caller'):
@@ -50,6 +51,17 @@ for allocator in ('z80', 'greedy'):
                 elif variant == 'optnone-caller':
                     outside = ' noinline optnone' + outside
                 text = prefix + 'define i16 @outside()' + outside
+            elif variant in ('root-barrier', 'root-clobber'):
+                text = text.replace('define void @run() minsize optsize {',
+                    'define void @run() minsize optsize {\n  call fastcc void @group()')
+                asm = 'ld hl, (8192)\\0Ald (8196), hl\\0Ainc l\\0Ald (8192), hl'
+                clobbers = '~{hl},~{memory}'
+                if variant == 'root-clobber':
+                    asm += '\\0Aexx\\0Ald hl, 1234\\0Ald de, 5678\\0Ald bc, 9012\\0Aexx'
+                    clobbers += ',~{hl_alt},~{de_alt},~{bc_alt}'
+                text = text.replace('  call fastcc void @observe_nested()',
+                    f'  call void asm sideeffect "{asm}", "{clobbers}"()\n'
+                    '  call fastcc void @observe_nested()')
             elif variant == 'backward':
                 text = text.replace('add i16 %p, 1', 'add i16 %p, -1')
             elif variant == 'word':
@@ -74,6 +86,14 @@ for allocator in ('z80', 'greedy'):
                             '-regalloc='+allocator, '-verify-machineinstrs',
                             str(ir), '-o', str(path)], check=True)
             assembly = path.read_text()
+            if bank and variant in ('root-barrier', 'root-clobber'):
+                prepared = subprocess.check_output(
+                    [llc, '-z80-promote-private-state', '-mattr=+alternate-regs',
+                     '-stop-before=irtranslator', str(ir), '-o', '-'], text=True)
+                root = prepared.split('define void @run()', 1)[1]
+                calls = list(re.finditer(r'call fastcc inreg i16 @group', root))
+                between = root[calls[0].end():calls[1].start()]
+                assert '@private_word' not in between, between
             promoted = bank and variant not in ('disabled', 'volatile', 'escaped', 'unsupported', 'optnone-caller')
             assert ('advance.state:' in assembly) == promoted
             inlined = bank and variant in ('inline-leaf', 'barriers')
@@ -127,8 +147,11 @@ ret
                               else (cursor+1) & 16383 if variant == 'unsupported'
                               else (cursor & 0xff00) | ((cursor+delta) & 255))
 
-                for _ in range(4):
+                for _ in range(8 if variant in ('root-barrier', 'root-clobber') else 4):
                     step()
+                barrier_observed = cursor
+                if variant in ('root-barrier', 'root-clobber'):
+                    cursor = (cursor & 0xff00) | ((cursor+1) & 255)
                 observed = cursor
                 cursor = (cursor & 0xff00) | ((cursor+1) & 255)
                 signed = lambda n: (n ^ 128) - 128
@@ -140,6 +163,8 @@ ret
                 assert cpu.samples == samples, (ir, start, cpu.samples, samples)
                 assert int.from_bytes(cpu.mem[8192:8194], 'little') == cursor
                 assert int.from_bytes(cpu.mem[8194:8196], 'little') == observed
+                if variant in ('root-barrier', 'root-clobber'):
+                    assert int.from_bytes(cpu.mem[8196:8198], 'little') == barrier_observed
                 assert cpu.sp == 0xf002 and cpu.get('ix') == ix
                 cpu.sp = 0xf000
                 step()

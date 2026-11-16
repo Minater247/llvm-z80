@@ -382,9 +382,13 @@ bool Z80StatePromotion::runOnModule(Module &M) {
   for (Function *F : SelectedTouched) {
     bool Safe = eligible(*F) && !Unsupported.contains(F) &&
                 F->getReturnType()->isVoidTy();
-    for (Instruction &I : instructions(F))
-      if (auto *CB = dyn_cast<CallBase>(&I))
-        Safe &= !CB->isInlineAsm();
+    /* Root callers keep their ordinary interface and synchronize memory
+       around opaque calls, including inline assembly barriers. Specialized
+       internal callees retain the stricter bank-state interface. */
+    if (F->hasLocalLinkage() && F->getCallingConv() == CallingConv::Fast)
+      for (Instruction &I : instructions(F))
+        if (auto *CB = dyn_cast<CallBase>(&I))
+          Safe &= !CB->isInlineAsm();
     if (!Safe)
       continue;
     if (F->hasLocalLinkage() && F->getCallingConv() == CallingConv::Fast) {
