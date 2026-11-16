@@ -68,7 +68,7 @@ static bool rebaseForwardCursors(LoopInfo &LI, DominatorTree &DT) {
         continue;
       SmallVector<BinaryOperator *, 16> Offsets;
       SmallVector<IntToPtrInst *, 4> LastPointers;
-      SmallVector<LoadInst *, 32> Loads(Stride, nullptr);
+      SmallVector<LoadInst *, 64> Loads(2 * Stride - 1, nullptr);
       SmallPtrSet<IntToPtrInst *, 16> SeenPointers;
       bool Legal = true;
       unsigned Uses = 0;
@@ -84,7 +84,7 @@ static bool rebaseForwardCursors(LoopInfo &LI, DominatorTree &DT) {
         if (auto *Add = dyn_cast<BinaryOperator>(U)) {
           auto *C = dyn_cast<ConstantInt>(Add->getOperand(1));
           if (Add->getOpcode() != Instruction::Add ||
-              Add->getOperand(0) != &Phi || !C || C->getSExtValue() > 0 ||
+              Add->getOperand(0) != &Phi || !C || C->getSExtValue() >= Stride ||
               C->getSExtValue() <= -Stride) {
             Legal = false;
             break;
@@ -133,7 +133,7 @@ static bool rebaseForwardCursors(LoopInfo &LI, DominatorTree &DT) {
           for (auto [PU, At] : MemoryUsers) {
             auto *Load = dyn_cast<LoadInst>(PU);
             if (!Load || !Load->getType()->isIntegerTy(8) ||
-                !L->contains(Load) || P->getAddressSpace() || At > 0 ||
+                !L->contains(Load) || P->getAddressSpace() || At >= Stride ||
                 At <= -Stride ||
                 (Loads[At + Stride - 1] && Loads[At + Stride - 1] != Load)) {
               Legal = false;
@@ -145,9 +145,18 @@ static bool rebaseForwardCursors(LoopInfo &LI, DominatorTree &DT) {
         if (!Legal)
           break;
       }
-      if (!Legal || LastPointers.empty() ||
-          llvm::any_of(Loads, [](auto *Load) { return !Load; }))
+      if (!Legal)
         continue;
+      auto First = llvm::find_if(Loads, [](auto *Load) { return Load; });
+      int64_t FirstOffset = First - Loads.begin() - (Stride - 1);
+      Loads.erase(Loads.begin(), First);
+      if (Loads.size() < unsigned(Stride) ||
+          llvm::any_of(ArrayRef(Loads).take_front(Stride),
+                       [](auto *Load) { return !Load; }) ||
+          llvm::any_of(ArrayRef(Loads).drop_front(Stride),
+                       [](auto *Load) { return Load; }))
+        continue;
+      Loads.resize(Stride);
       for (unsigned I = 1; I < Loads.size(); ++I)
         Legal &= DT.dominates(Loads[I - 1], Loads[I]);
       if (!Legal || !DT.dominates(Loads.back(), Latch->getTerminator()))
@@ -158,7 +167,7 @@ static bool rebaseForwardCursors(LoopInfo &LI, DominatorTree &DT) {
       IRBuilder<> AtEntry(Entry->getTerminator());
       Value *Initial = Phi.getIncomingValueForBlock(Entry);
       Phi.setIncomingValueForBlock(
-          Entry, AtEntry.CreateAdd(Initial, AtEntry.getInt16(1 - Stride),
+          Entry, AtEntry.CreateAdd(Initial, AtEntry.getInt16(FirstOffset),
                                    "stream.start"));
       SmallVector<Value *, 33> Addresses;
       Addresses.push_back(&Phi);
@@ -174,10 +183,12 @@ static bool rebaseForwardCursors(LoopInfo &LI, DominatorTree &DT) {
       Step->eraseFromParent();
       for (auto *Add : Offsets) {
         int64_t Offset = cast<ConstantInt>(Add->getOperand(1))->getSExtValue();
-        Value *Address = Addresses[Offset + Stride - 1];
-        if (!DT.dominates(cast<Instruction>(Address), Add)) {
+        int64_t Index = Offset - FirstOffset;
+        Value *Address =
+            Index >= 0 && Index <= Stride ? Addresses[Index] : nullptr;
+        if (!Address || !DT.dominates(cast<Instruction>(Address), Add)) {
           IRBuilder<> At(Add);
-          Address = At.CreateAdd(&Phi, At.getInt16(Offset + Stride - 1),
+          Address = At.CreateAdd(&Phi, At.getInt16(Offset - FirstOffset),
                                  "stream.address");
         }
         Add->replaceAllUsesWith(Address);
@@ -185,8 +196,8 @@ static bool rebaseForwardCursors(LoopInfo &LI, DominatorTree &DT) {
       }
       for (auto *P : LastPointers) {
         IRBuilder<> At(P);
-        P->setOperand(
-            0, At.CreateAdd(&Phi, At.getInt16(Stride - 1), "stream.last"));
+        P->setOperand(0, At.CreateAdd(&Phi, At.getInt16(-FirstOffset),
+                                      "stream.original"));
       }
       Changed = true;
     }
