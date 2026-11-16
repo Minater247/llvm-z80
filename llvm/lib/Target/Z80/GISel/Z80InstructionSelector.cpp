@@ -1248,6 +1248,38 @@ bool Z80InstructionSelector::selectLoadStore(MachineInstr &I,
   bool CopyByte = !IsLoad && Ty.getSizeInBits() == 8 && ValMI &&
                   ValMI->getOpcode() == TargetOpcode::G_LOAD &&
                   MRI.hasOneNonDBGUse(ValReg);
+  bool ArithmeticByte = false;
+  if (!IsLoad && Ty == LLT::scalar(8) && ValMI &&
+      !MRI.hasOneNonDBGUse(ValReg) &&
+      ValMI->getOpcode() == TargetOpcode::G_ADD &&
+      ValMI->getParent() == I.getParent() &&
+      !getIConstantVRegVal(ValMI->getOperand(1).getReg(), MRI) &&
+      !getIConstantVRegVal(ValMI->getOperand(2).getReg(), MRI)) {
+    /* Byte sums are produced in A. Keep a nearby store on that accumulator
+       path so its address can use BC/DE while HL serves another access. */
+    unsigned Budget = 8;
+    for (auto It = std::next(ValMI->getIterator());
+         It != I.getParent()->end() && Budget--; ++It) {
+      if (&*It == &I) {
+        ArithmeticByte = true;
+        break;
+      }
+      unsigned Opc = It->getOpcode();
+      bool UnitUpdate = Opc == Z80::INC8r || Opc == Z80::DEC8r ||
+                        Opc == Z80::INC16r || Opc == Z80::DEC16r;
+      if (Opc == TargetOpcode::G_ADD || Opc == TargetOpcode::G_PTR_ADD)
+        if (auto C = getIConstantVRegVal(It->getOperand(2).getReg(), MRI))
+          UnitUpdate = C->isOne() || C->isAllOnes();
+      if (!UnitUpdate && !It->isCopy() && !It->isRegSequence() &&
+          Opc != TargetOpcode::G_CONSTANT &&
+          Opc != TargetOpcode::G_INTTOPTR &&
+          Opc != TargetOpcode::G_PTRTOINT &&
+          Opc != TargetOpcode::G_TRUNC &&
+          Opc != TargetOpcode::G_MERGE_VALUES &&
+          Opc != TargetOpcode::G_UNMERGE_VALUES)
+        break;
+    }
+  }
   bool CopySourceByte = false;
   if (IsLoad && Ty == LLT::scalar(8) && MRI.hasOneNonDBGUse(ValReg)) {
     const MachineInstr &Use = *MRI.use_nodbg_instructions(ValReg).begin();
@@ -1647,7 +1679,7 @@ bool Z80InstructionSelector::selectLoadStore(MachineInstr &I,
       MOs.push_back(MachineOperand::CreateReg(PtrReg, false));
   }
   bool IsOff = MOs.size() == 2;
-  if (CopyByte && !IsOff && RMWOps.empty()) {
+  if ((CopyByte || ArithmeticByte) && !IsOff && RMWOps.empty()) {
     /* Transferring the byte through A lets the destination use BC or DE while
        the source uses HL. Both memory operations retain their positions. */
     MachineIRBuilder Builder(I);
