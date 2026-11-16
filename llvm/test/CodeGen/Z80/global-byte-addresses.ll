@@ -123,3 +123,36 @@ define i8 @arithmetic_between_accesses(i16 %step) {
   %result = load volatile i8, ptr inttoptr (i16 356 to ptr)
   ret i8 %result
 }
+
+; Two single-use constants repay the address setup by avoiding both byte
+; materializations. An intervening data access retains its original position.
+; CHECK-LABEL: two_immediate_stores:
+; CHECK: ld hl, state
+; CHECK-NEXT: ld (hl), 39
+; CHECK: ld (8193), a
+; CHECK: ld (hl), 42
+; CHECK: ret
+define void @two_immediate_stores(i8 %value) {
+  store volatile i8 39, ptr @state
+  store volatile i8 %value, ptr inttoptr (i16 8193 to ptr)
+  store volatile i8 42, ptr @state
+  ret void
+}
+
+; A barrier separates the two address regions even for immediate stores.
+; CHECK-LABEL: separated_immediate_stores:
+; CHECK-NOT: ld hl, state
+; CHECK: ld a, 39
+; CHECK: ld (state), a
+; CHECK: ;APP
+; CHECK: ;NO_APP
+; CHECK-NOT: ld hl, state
+; CHECK: ld a, 42
+; CHECK: ld (state), a
+; CHECK: ret
+define void @separated_immediate_stores() {
+  store volatile i8 39, ptr @state
+  call void asm sideeffect "", "~{memory}"()
+  store volatile i8 42, ptr @state
+  ret void
+}

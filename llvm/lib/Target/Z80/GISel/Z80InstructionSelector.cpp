@@ -1143,14 +1143,15 @@ bool Z80InstructionSelector::selectInOut(MachineInstr &I,
 }
 
 /// Share a constant byte address across a short region of memory accesses.
-/// Three accesses amortize materializing a primary pair. Calls and assembly
-/// boundaries retain absolute addressing so the address need not survive them.
+/// Three byte accesses or two immediate stores amortize a primary pair. Calls
+/// and assembly boundaries retain absolute addressing so the address need not
+/// survive them.
 static bool reuseConstantByteAddress(Register Ptr, MachineInstr &Access,
                                      MachineRegisterInfo &MRI) {
   /* A symbol may also be accessed elsewhere in the function. Count the
      local region independently so those distant uses do not hide a group
      that can share one address, including read-modify-write instructions. */
-  unsigned LocalAccesses = 0, LocalBudget = 96;
+  unsigned LocalAccesses = 0, ImmediateStores = 0, LocalBudget = 96;
   auto Count = [&](const MachineInstr &MI) {
     if (!LocalBudget || MI.isCall() || MI.isInlineAsm())
       return false;
@@ -1173,22 +1174,31 @@ static bool reuseConstantByteAddress(Register Ptr, MachineInstr &Access,
       return false;
     }
     if (!MI.memoperands_empty() &&
-        llvm::all_of(MI.memoperands(), [](const MachineMemOperand *MMO) {
-          return MMO->getSize() == 1;
-        }) && MI.readsRegister(Ptr, nullptr))
+        llvm::all_of(
+            MI.memoperands(),
+            [](const MachineMemOperand *MMO) { return MMO->getSize() == 1; }) &&
+        MI.readsRegister(Ptr, nullptr)) {
       LocalAccesses += unsigned(MI.mayLoad()) + unsigned(MI.mayStore());
+      /* An absolute immediate store also materializes A. Two distinct
+         single-use constants repay a shared address without extending
+         either byte value's lifetime. */
+      ImmediateStores += MI.getOpcode() == Z80::LD8pi ||
+                         (MI.getOpcode() == TargetOpcode::G_STORE &&
+                          MRI.hasOneNonDBGUse(MI.getOperand(0).getReg()) &&
+                          getIConstantVRegVal(MI.getOperand(0).getReg(), MRI));
+    }
     return true;
   };
   for (auto It = Access.getIterator(); It != Access.getParent()->end(); ++It) {
     if (!Count(*It))
       break;
-    if (LocalAccesses >= 3)
+    if (LocalAccesses >= 3 || ImmediateStores >= 2)
       return true;
   }
   for (auto It = Access.getIterator(); It != Access.getParent()->begin();) {
     if (!Count(*--It))
       break;
-    if (LocalAccesses >= 3)
+    if (LocalAccesses >= 3 || ImmediateStores >= 2)
       return true;
   }
   SmallPtrSet<MachineBasicBlock *, 2> Blocks;
