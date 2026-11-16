@@ -663,6 +663,75 @@ static void identifySingleBankRegion(MachineFunction &MF) {
   MF.getInfo<Z80MachineFunctionInfo>()->setHasSingleBankRegion();
 }
 
+/// Confine a few indexed memory operands to local copies when a cursor has
+/// broader uses in other blocks. Widen the original range only when every
+/// remaining operand permits a primary pair. Return whether any indexed
+/// constraints were separated; tied accesses retain their original ranges.
+static bool isolateIndexedOperands(MachineFunction &MF) {
+  const auto &ST = MF.getSubtarget<Z80Subtarget>();
+  if (!ST.is16Bit() || ST.hasEZ80Ops())
+    return false;
+  auto &MRI = MF.getRegInfo();
+  const auto &TRI = *ST.getRegisterInfo();
+  const auto &TII = *ST.getInstrInfo();
+  bool Changed = false;
+  for (unsigned N = 0, E = MRI.getNumVirtRegs(); N != E; ++N) {
+    Register R = Register::index2VirtReg(N);
+    if (MRI.getRegClass(R) != &Z80::I16RegClass || MRI.reg_nodbg_empty(R))
+      continue;
+    SmallVector<MachineOperand *, 4> Indexed;
+    const TargetRegisterClass *Wider = &Z80::R16RegClass;
+    SmallPtrSet<MachineBasicBlock *, 4> Blocks;
+    unsigned Other = 0, PrimaryAccesses = 0, FixedIndexCopies = 0, Budget = 128;
+    bool Legal = true;
+    for (auto &MO : MRI.reg_nodbg_operands(R)) {
+      auto &MI = *MO.getParent();
+      if (!Budget-- || MI.isBundled()) {
+        Legal = false;
+        break;
+      }
+      unsigned Op = &MO - &MI.getOperand(0);
+      auto *Constraint =
+          MI.getRegClassConstraintEffect(Op, &Z80::R16RegClass, &TII, &TRI);
+      if (Constraint && Z80::I16RegClass.hasSubClassEq(Constraint) &&
+          MO.isUse() && !MO.isTied() && !MO.getSubReg() &&
+          MI.mayLoadOrStore()) {
+        Indexed.push_back(&MO);
+        continue;
+      }
+      Wider = MI.getRegClassConstraintEffect(Op, Wider, &TII, &TRI);
+      if (!Wider || !TRI.getCommonSubClass(Wider, &Z80::G16RegClass)) {
+        Legal = false;
+        break;
+      }
+      Other += MO.isUse();
+      PrimaryAccesses += MO.isUse() && MI.mayLoadOrStore();
+      FixedIndexCopies += MO.isUse() && MI.isFullCopy() &&
+                          Z80::I16RegClass.contains(MI.getOperand(0).getReg());
+      Blocks.insert(MI.getParent());
+    }
+    /* Primary memory accesses can repay the local index transfers. Copies
+       into fixed index arguments consume that saving: treating them as
+       ordinary wide uses can add a transfer on every call in a hot loop. */
+    if (!Legal || Indexed.empty() || Indexed.size() > 4 || Other < 4 ||
+        Blocks.size() < 2 ||
+        PrimaryAccesses <= Indexed.size() + FixedIndexCopies)
+      continue;
+    for (auto *MO : Indexed) {
+      auto &MI = *MO->getParent();
+      Register Local = MRI.createVirtualRegister(&Z80::I16RegClass);
+      BuildMI(*MI.getParent(), MI, MI.getDebugLoc(),
+              TII.get(TargetOpcode::COPY), Local)
+          .addReg(R);
+      MO->setReg(Local);
+    }
+    MRI.setRegClass(R, Wider);
+    MRI.clearKillFlags(R);
+    Changed = true;
+  }
+  return Changed;
+}
+
 /// Update copied byte cursors in their address-pair lane within a local group.
 /// The final byte is published before a call, another definition or an escaping
 /// use. Complete chains keep just their initial byte-to-pair copy.
@@ -2586,6 +2655,7 @@ bool Z80MachinePreRAOptimization::runOnMachineFunction(MachineFunction &MF) {
   Changed |= sinkIncomingCopies(MF);
   Changed |= sinkAccumulatorCaptures(MF);
   Changed |= shareAbsoluteByteAddresses(MF);
+  Changed |= isolateIndexedOperands(MF);
   Changed |= retainPreservedArguments(MF);
   Changed |= selectBankInstructions(MF);
   identifySingleBankRegion(MF);
