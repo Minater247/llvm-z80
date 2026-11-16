@@ -1,0 +1,82 @@
+# RUN: %python %S/Inputs/scalar-stream-loads.py llc %s
+# RUN: llc -mattr=+alternate-regs -run-pass=z80-machine-prera-opt -verify-machineinstrs %s -o - | FileCheck %s
+# RUN: llc -mattr=-alternate-regs -run-pass=z80-machine-prera-opt -verify-machineinstrs %s -o - | FileCheck %s --check-prefix=RESERVED
+--- |
+  target triple = "z80"
+  define void @scalar_stream() { ret void }
+  define void @live_accumulator() { ret void }
+  define void @word_assembly() { ret void }
+...
+---
+name: scalar_stream
+tracksRegLiveness: true
+selected: true
+body: |
+  bb.0:
+    liveins: $de, $bc
+    %0:a16 = COPY $de
+    %1:a16 = COPY $bc
+    %2:g8 = LD8gp %0 :: (load (s8))
+    LD8pg %1, %2 :: (store (s8))
+    %0 = INC16r %0
+    %3:g8 = LD8gp %0 :: (load (s8))
+    LD8pg %1, %3 :: (store (s8))
+    %0 = INC16r %0
+    %4:g8 = LD8gp %0 :: (load (s8))
+    LD8pg %1, %4 :: (store (s8))
+    RET16 implicit-def $sps, implicit $sps
+...
+# CHECK-LABEL: name: scalar_stream
+# CHECK-NOT: LD8gp
+# CHECK: $a = BANK_LD8ap %0
+# CHECK-NEXT: %2:g8 = COPY killed $a
+# CHECK: $a = BANK_LD8ap %0
+# CHECK: $a = BANK_LD8ap %0
+# RESERVED-LABEL: name: scalar_stream
+# RESERVED: %2:g8 = LD8gp
+# RESERVED: %3:g8 = LD8gp
+# RESERVED: %4:g8 = LD8gp
+---
+name: live_accumulator
+tracksRegLiveness: true
+selected: true
+body: |
+  bb.0:
+    liveins: $de, $a
+    %0:a16 = COPY $de
+    %1:g8 = LD8gp %0 :: (load (s8))
+    ADD8ar %1, implicit-def $a, implicit-def $f, implicit $a
+    %0 = INC16r %0
+    %2:g8 = LD8gp %0 :: (load (s8))
+    ADD8ar %2, implicit-def $a, implicit-def $f, implicit $a
+    %0 = INC16r %0
+    %3:g8 = LD8gp %0 :: (load (s8))
+    ADD8ar %3, implicit-def $a, implicit-def $f, implicit $a
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...
+# CHECK-LABEL: name: live_accumulator
+# CHECK-COUNT-3: ADD8ap %0
+---
+name: word_assembly
+tracksRegLiveness: true
+selected: true
+body: |
+  bb.0:
+    liveins: $de
+    %0:a16 = COPY $de
+    undef %1.sub_low:g16 = LD8gp %0 :: (load (s8))
+    %0 = INC16r %0
+    %1.sub_high = LD8gp %0 :: (load (s8))
+    %0 = INC16r %0
+    undef %2.sub_low:g16 = LD8gp %0 :: (load (s8))
+    %0 = INC16r %0
+    %2.sub_high = LD8gp %0 :: (load (s8))
+    $de = COPY %1
+    $hl = COPY %2
+    RET16 implicit-def $sps, implicit $sps, implicit $de, implicit $hl
+...
+# CHECK-LABEL: name: word_assembly
+# CHECK: %1.sub_low:g16 = LD8gp
+# CHECK: %1.sub_high:g16 = LD8gp
+# CHECK: %2.sub_low:g16 = LD8gp
+# CHECK: %2.sub_high:g16 = LD8gp

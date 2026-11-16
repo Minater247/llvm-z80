@@ -24,8 +24,8 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/CodeGen/LiveRegUnits.h"
 #include "llvm/CodeGen/LiveIntervals.h"
+#include "llvm/CodeGen/LiveRegUnits.h"
 #include "llvm/CodeGen/MachineDominators.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
@@ -33,11 +33,16 @@
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 
 #define DEBUG_TYPE "z80-machine-prera-opt"
 
 using namespace llvm;
+
+static cl::opt<bool> ScalarStreamLoads(
+    "z80-scalar-stream-loads", cl::Hidden, cl::init(true),
+    cl::desc("Use free accumulators for repeated scalar byte loads"));
 
 namespace {
 /// Offer a shared pointer for repeated absolute accumulator accesses.
@@ -289,6 +294,51 @@ static bool selectBankInstructions(MachineFunction &MF) {
       Live.stepBackward(MI);
     }
   }
+  /* Repeated scalar loads can consume the free accumulator and then copy
+     their result, allowing BC/DE addresses instead of requiring HL or an
+     index pair. Word assembly retains its direct byte loads: routing each
+     constituent byte through A adds transfers without freeing the cursor. */
+  DenseMap<Register, unsigned> LoadCounts;
+  SmallDenseSet<Register, 16> Advanced;
+  SmallVector<MachineInstr *, 32> Loads;
+  for (auto &MBB : MF) {
+    LiveRegUnits Live(*ST.getRegisterInfo());
+    Live.addLiveOuts(MBB);
+    for (auto &MI : llvm::reverse(MBB)) {
+      Live.stepBackward(MI);
+      if (MI.getOpcode() == Z80::INC16r)
+        Advanced.insert(MI.getOperand(0).getReg());
+      if (MI.getOpcode() == Z80::LD8gp && !MI.isBundled() &&
+          Live.available(Z80::A) && MI.getOperand(1).getReg().isVirtual() &&
+          !MI.getOperand(1).getSubReg() &&
+          MI.getOperand(0).getReg().isVirtual() &&
+          !MI.getOperand(0).getSubReg()) {
+        Loads.push_back(&MI);
+        ++LoadCounts[MI.getOperand(1).getReg()];
+      }
+    }
+  }
+  SmallDenseSet<Register, 16> Widened;
+  for (auto *MI : Loads) {
+    Register Pointer = MI->getOperand(1).getReg();
+    if (!ScalarStreamLoads || !Advanced.contains(Pointer) ||
+        LoadCounts.lookup(Pointer) < 3)
+      continue;
+    auto &MBB = *MI->getParent();
+    BuildMI(MBB, MI, MI->getDebugLoc(), TII->get(Z80::LD8ap), Z80::A)
+        .add(MI->getOperand(1))
+        .cloneMemRefs(*MI)
+        .setMIFlags(MI->getFlags());
+    BuildMI(MBB, MI, MI->getDebugLoc(), TII->get(TargetOpcode::COPY))
+        .add(MI->getOperand(0))
+        .addReg(Z80::A, RegState::Kill);
+    MI->eraseFromParent();
+    if (Pointer.isVirtual())
+      Widened.insert(Pointer);
+    changed = true;
+  }
+  for (Register Pointer : Widened)
+    MRI.recomputeRegClass(Pointer);
   std::optional<MachineDominatorTree> Dominators;
   for (unsigned I = 0, E = MRI.getNumVirtRegs(); I != E; ++I) {
     Register R = Register::index2VirtReg(I);
