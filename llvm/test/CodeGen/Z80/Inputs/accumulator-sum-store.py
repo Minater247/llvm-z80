@@ -36,13 +36,17 @@ for allocator in ('z80', 'greedy'):
                     b = (a + expected[source_address+1]) & 255
                     dest = (output & 0xff00) | ((output+1) & 255)
                     expected[dest] = b
+                    c = (b + expected[source_address+1]) & 255
+                    lastdest = (output & 0xff00) | ((output+2) & 255)
+                    expected[lastdest] = c
                     cpu.put('de', source_address)
                     cpu.put('bc', output)
                     sp, ix = cpu.sp, cpu.get('ix')
                     cpu.run(program, entry='run')
-                    assert cpu.get('a') == b, (ir, start, output)
+                    assert cpu.get('a') == c, (ir, start, output)
                     assert cpu.mem[output] == expected[output]
                     assert cpu.mem[dest] == expected[dest]
+                    assert cpu.mem[lastdest] == expected[lastdest]
                     assert cpu.sp == sp + 2 and cpu.get('ix') == ix
                     checks += 1
 print(f'{checks} accumulator-store executions passed')

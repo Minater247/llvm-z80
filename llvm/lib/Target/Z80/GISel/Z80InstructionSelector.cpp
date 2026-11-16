@@ -1372,7 +1372,23 @@ bool Z80InstructionSelector::selectLoadStore(MachineInstr &I,
       if (Opc == TargetOpcode::G_ADD || Opc == TargetOpcode::G_PTR_ADD)
         if (auto C = getIConstantVRegVal(It->getOperand(2).getReg(), MRI))
           UnitUpdate = C->isOne() || C->isAllOnes();
-      if (!UnitUpdate && !It->isCopy() && !It->isRegSequence() &&
+      bool PageOffset = false;
+      /* Page construction may still contain a constant byte sum here.
+         Cursor selection later reduces consecutive offsets to increments.
+         Keep the stored sum on A's path while those addresses are selected. */
+      if (Opc == TargetOpcode::G_ADD &&
+          MRI.getType(It->getOperand(0).getReg()) == LLT::scalar(8) &&
+          getIConstantVRegVal(It->getOperand(2).getReg(), MRI) &&
+          MRI.hasOneNonDBGUse(It->getOperand(0).getReg())) {
+        const auto &Use = *MRI.use_nodbg_instructions(
+            It->getOperand(0).getReg()).begin();
+        PageOffset = Use.getOpcode() == TargetOpcode::G_MERGE_VALUES &&
+                     Use.getNumOperands() == 3 &&
+                     Use.getOperand(1).getReg() == It->getOperand(0).getReg();
+      }
+      if (!UnitUpdate && !PageOffset && !It->isCopy() && !It->isRegSequence() &&
+          Opc != TargetOpcode::INSERT_SUBREG &&
+          Opc != TargetOpcode::EXTRACT_SUBREG &&
           Opc != TargetOpcode::G_CONSTANT &&
           Opc != TargetOpcode::G_INTTOPTR &&
           Opc != TargetOpcode::G_PTRTOINT &&

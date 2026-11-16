@@ -11,6 +11,7 @@ define i8 @run(ptr %source, ptr %output) nounwind {
 ; CHECK: ALU8_ADJ
 ; CHECK: LD8pa
 ; CHECK: LD8pa
+; CHECK: LD8pa
   %x = load i8, ptr %source
   %next = getelementptr i8, ptr %source, i16 1
   %y = load i8, ptr %next
@@ -26,5 +27,12 @@ define i8 @run(ptr %source, ptr %output) nounwind {
   %newaddress = or i16 %page, %wide
   %dest = inttoptr i16 %newaddress to ptr
   store volatile i8 %again, ptr %dest
-  ret i8 %again
+  %last = load i8, ptr %next
+  %final = add i8 %again, %last
+  %lastlow = add i8 %low, 2
+  %lastwide = zext i8 %lastlow to i16
+  %lastaddress = or i16 %page, %lastwide
+  %lastdest = inttoptr i16 %lastaddress to ptr
+  store volatile i8 %final, ptr %lastdest
+  ret i8 %final
 }
