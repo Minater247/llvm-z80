@@ -1,0 +1,120 @@
+# RUN: llc -mtriple=z80 -mattr=+alternate-regs -run-pass=z80-post-rewrite -verify-machineinstrs %s -o - | FileCheck %s
+# RUN: %python %S/Inputs/bank-reload-edge.py llc %s %t.dir
+--- |
+  target triple = "z80"
+  define i8 @run() { ret i8 0 }
+  define i8 @source_changed() { ret i8 0 }
+  define i8 @used_here() { ret i8 0 }
+  define i8 @both_paths() { ret i8 0 }
+...
+---
+name: run
+tracksRegLiveness: true
+selected: true
+body: |
+  bb.0:
+    successors: %bb.1, %bb.2
+    liveins: $a, $b, $de_alt
+    $iy = ALT_LOAD16 $de_alt
+    OR8aa implicit-def $f, implicit $a
+    JQCC %bb.2, 0, implicit $f
+    JQ %bb.1
+  bb.1:
+    successors: %bb.1, %bb.3
+    liveins: $b, $iy
+    $a = LD8go $iy, 0
+    $b = DEC8r $b, implicit-def $f
+    JQCC %bb.1, 0, implicit $f
+    JQ %bb.3
+  bb.2:
+    $a = LD8ri 77
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+  bb.3:
+    liveins: $a
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...
+# CHECK-LABEL: name: run
+# CHECK: bb.0:
+# CHECK-NOT: ALT_LOAD16
+# CHECK: OR8aa
+# CHECK: bb.{{[0-9]+}}:
+# CHECK: liveins: {{.*}}$de_alt
+# CHECK: $iy = ALT_LOAD16 $de_alt
+# CHECK: bb.1:
+# CHECK-NOT: ALT_LOAD16
+# CHECK: $a = LD8go $iy, 0
+---
+name: source_changed
+tracksRegLiveness: true
+selected: true
+body: |
+  bb.0:
+    successors: %bb.1, %bb.2
+    liveins: $a, $de_alt
+    $iy = ALT_LOAD16 $de_alt
+    $de_alt = BANK_INC16 $de_alt
+    OR8aa implicit-def $f, implicit $a
+    JQCC %bb.2, 0, implicit $f
+    JQ %bb.1
+  bb.1:
+    liveins: $iy
+    $a = LD8go $iy, 0
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+  bb.2:
+    $a = LD8ri 77
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...
+# CHECK-LABEL: name: source_changed
+# CHECK: bb.0:
+# CHECK: $iy = ALT_LOAD16 $de_alt
+# CHECK: $de_alt = BANK_INC16 $de_alt
+---
+name: used_here
+tracksRegLiveness: true
+selected: true
+body: |
+  bb.0:
+    successors: %bb.1, %bb.2
+    liveins: $de_alt
+    $iy = ALT_LOAD16 $de_alt
+    $a = COPY $iyl
+    OR8aa implicit-def $f, implicit $a
+    JQCC %bb.2, 0, implicit $f
+    JQ %bb.1
+  bb.1:
+    liveins: $iy
+    $a = LD8go $iy, 0
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+  bb.2:
+    $a = LD8ri 77
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...
+# CHECK-LABEL: name: used_here
+# CHECK: bb.0:
+# CHECK: $iy = ALT_LOAD16 $de_alt
+# CHECK-NEXT: $a = COPY $iyl
+---
+name: both_paths
+tracksRegLiveness: true
+selected: true
+body: |
+  bb.0:
+    successors: %bb.1, %bb.2
+    liveins: $a, $de_alt
+    $iy = ALT_LOAD16 $de_alt
+    OR8aa implicit-def $f, implicit $a
+    JQCC %bb.2, 0, implicit $f
+    JQ %bb.1
+  bb.1:
+    liveins: $iy
+    $a = LD8go $iy, 0
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+  bb.2:
+    liveins: $iy
+    $a = LD8go $iy, 1
+    RET16 implicit-def $sps, implicit $sps, implicit $a
+...
+# CHECK-LABEL: name: both_paths
+# CHECK: bb.0:
+# CHECK: $iy = ALT_LOAD16 $de_alt
+# CHECK-NEXT: OR8aa

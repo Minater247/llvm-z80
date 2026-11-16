@@ -2,6 +2,7 @@
 #include "MCTargetDesc/Z80MCTargetDesc.h"
 #include "Z80.h"
 #include "Z80InstrInfo.h"
+#include "Z80Subtarget.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/CodeGen/LiveRegUnits.h"
@@ -259,6 +260,76 @@ bool llvm::reuseZ80SpillLoads(MachineFunction &MF, SlotIndexes *Indexes) {
 
 Z80PostRewritePass::Z80PostRewritePass() : MachineFunctionPass(ID) {}
 
+/// Place bank reloads on the edge that consumes their destination. A transfer
+/// with one live successor can bypass other paths when its source and
+/// destination remain unchanged through the predecessor's terminators.
+static bool sinkBankReloads(MachineFunction &MF) {
+  const auto &ST = MF.getSubtarget<Z80Subtarget>();
+  if (!ST.is16Bit() || ST.hasEZ80Ops() ||
+      !MF.getProperties().hasTracksLiveness())
+    return false;
+  const auto &TRI = *ST.getRegisterInfo();
+  bool Changed = false;
+  for (auto &MBB : llvm::make_early_inc_range(MF)) {
+    if (MBB.succ_size() != 2)
+      continue;
+    for (auto &MI : llvm::make_early_inc_range(MBB)) {
+      if (MI.getOpcode() != Z80::ALT_LOAD16 || MI.isBundled())
+        continue;
+      Register Dst = MI.getOperand(0).getReg();
+      Register Src = MI.getOperand(1).getReg();
+      bool Safe = true;
+      unsigned Budget = 32;
+      for (auto It = std::next(MI.getIterator()); It != MBB.end(); ++It)
+        if (!Budget-- || It->isCall() || It->isInlineAsm() || It->isBundled() ||
+            It->readsRegister(Dst, &TRI) || It->modifiesRegister(Dst, &TRI) ||
+            It->modifiesRegister(Src, &TRI)) {
+          Safe = false;
+          break;
+        }
+      if (!Safe)
+        continue;
+      MachineBasicBlock *Target = nullptr;
+      for (auto *Succ : MBB.successors()) {
+        LiveRegUnits Live(TRI);
+        Live.addLiveIns(*Succ);
+        if (!Live.available(Dst)) {
+          if (Target) {
+            Safe = false;
+            break;
+          }
+          Target = Succ;
+        }
+      }
+      if (!Safe || !Target || Target == &MBB)
+        continue;
+      /* A loop header can have a backedge as well as this incoming edge.
+         Splitting the entry keeps the transfer outside the loop, unlike
+         sinking it directly into the header on every iteration. */
+      auto *Edge = MBB.SplitCriticalEdge(
+          Target, MachineBasicBlock::SplitCriticalEdgeAnalyses{}, nullptr,
+          nullptr);
+      if (!Edge)
+        continue;
+      SmallVector<MCPhysReg, 4> Replaced;
+      for (const auto &LI : Edge->liveins())
+        if (TRI.regsOverlap(LI.PhysReg, Dst))
+          Replaced.push_back(LI.PhysReg);
+      for (MCPhysReg R : Replaced)
+        Edge->removeLiveIn(R);
+      Edge->addLiveIn(Src);
+      Edge->sortUniqueLiveIns();
+      for (auto It = std::next(MI.getIterator()); It != MBB.end(); ++It)
+        It->clearRegisterKills(Src, &TRI);
+      MI.getOperand(1).setIsKill(false);
+      Edge->splice(Edge->begin(), &MBB, MI.getIterator());
+      Changed = true;
+      break;
+    }
+  }
+  return Changed;
+}
+
 bool Z80PostRewritePass::runOnMachineFunction(MachineFunction &MF) {
   bool changed = false;
 
@@ -360,6 +431,7 @@ bool Z80PostRewritePass::runOnMachineFunction(MachineFunction &MF) {
     }
   }
 
+  changed |= sinkBankReloads(MF);
   return changed;
 }
 
