@@ -336,11 +336,14 @@ bool Z80PostRewritePass::runOnMachineFunction(MachineFunction &MF) {
   const auto &TII = *MF.getSubtarget().getInstrInfo();
   const auto &TRI = *MF.getSubtarget().getRegisterInfo();
   const auto &MFI = MF.getFrameInfo();
+  /* Resolve transfers before frame lowering counts physical definitions.
+     A coalesced known-value copy emits nothing and needs no callee save. */
   for (auto &MBB : MF)
     for (auto &MI : llvm::make_early_inc_range(MBB))
       if (MI.getOpcode() == Z80::ADD16rr || MI.getOpcode() == Z80::BANK_ADD16 ||
           MI.getOpcode() == Z80::BANK_LD16ro ||
-          MI.getOpcode() == Z80::BANK_LD16or)
+          MI.getOpcode() == Z80::BANK_LD16or ||
+          MI.getOpcode() == Z80::BANK_KNOWN16)
         changed |= TII.expandPostRAPseudo(MI);
   changed |= reuseZ80SpillLoads(MF);
   /* When both a primary pair and an index need the same bank value, load the

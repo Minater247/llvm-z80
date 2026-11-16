@@ -1,0 +1,21 @@
+# RUN: llc -mattr=+alternate-regs -start-before=z80-post-rewrite -verify-machineinstrs %s -o - | FileCheck %s
+--- |
+  target triple = "z80"
+  define void @preserve_known() "z80-save-region-bank" { ret void }
+...
+---
+name: preserve_known
+tracksRegLiveness: true
+# A coalesced known-value copy preserves DE'. Remove its apparent definition
+# before deciding which callee-saved registers require frame storage.
+# CHECK-LABEL: preserve_known:
+# CHECK-NOT: push
+# CHECK-NOT: pop
+# CHECK-NOT: exx
+# CHECK: ret
+body: |
+  bb.0:
+    liveins: $de_alt
+    $de_alt = BANK_KNOWN16 $de_alt, 8192
+    RET16 implicit-def $sps, implicit $sps, implicit $de_alt
+...
